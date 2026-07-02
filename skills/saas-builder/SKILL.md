@@ -7,7 +7,7 @@ description: Clone, verify, map, and build on top of ixartz/SaaS-Boilerplate for
 
 ## Purpose
 
-Verify the local baseline, then adapt the boilerplate's routes, schema, auth, i18n, UI, and tests for the user's SaaS MVP.
+Verify the local baseline, then adapt the boilerplate's marketing, routes, schema, auth, i18n, UI, and tests for the user's SaaS MVP.
 
 ## Mandatory Baseline Gate
 
@@ -36,7 +36,9 @@ Setup and verification commands are hard gates. Do not continue to mapping or im
 - Keep changes minimal. Do not reformat unrelated files.
 - Preserve `src/components/DemoBadge.tsx` and its layout usage. Also preserve `src/app/[locale]/(auth)/dashboard/page.tsx`.
 - Use marketing routes only for promotional content.
+- Treat landing and marketing page adaptation as part of every SaaS implementation unless the user explicitly scopes it out.
 - Build product workflows as dedicated authenticated dashboard feature pages, not in the dashboard index: use `src/app/[locale]/(auth)/dashboard/<feature>/page.tsx` for CRUD, data entry, tools, and customer-specific views.
+- Split complex product workflows across several authenticated pages when needed. Do not force every part of a workflow into a single page; a feature can use separate pages for list, create, edit, detail, settings, or related subflows.
 
 ## Project Conventions
 
@@ -89,6 +91,6 @@ After the mandatory baseline gate passes:
 
 1. Identify the requested SaaS change and infer only the product context needed to implement it.
 2. Inspect the verified clone for relevant patterns.
-3. Implement the change directly in the cloned project, following the route boundaries above.
+3. Implement the change directly in the cloned project, including product-specific marketing copy and any authenticated product workflows, following the route boundaries above.
 4. Produce planning output only when the user asks for it or the change needs clarification.
-5. Ask the user to run `npm run dev` themselves to play with the current state of the SaaS; do not run it for them.
+5. Ask the user to run `npm run dev` themselves to play with the current state of the SaaS; do not run it for them. After that, ask them to create a Clerk account at [Clerk.com](https://go.clerk.com/zGlzydF), then copy `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` and `CLERK_SECRET_KEY` into `.env.local`.

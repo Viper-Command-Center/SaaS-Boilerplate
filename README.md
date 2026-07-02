@@ -318,14 +318,14 @@ In Codex, run:
 
 ```text
 codex
-$saas-builder Build a SaaS for <your idea>.
+$saas-builder <your idea>.
 ```
 
 In Claude Code, run:
 
 ```text
 claude
-/saas-builder Build a SaaS for <your idea>.
+/saas-builder <your idea>.
 ```
 
 ### Customization
