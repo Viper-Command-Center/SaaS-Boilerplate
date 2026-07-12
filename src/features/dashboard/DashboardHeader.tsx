@@ -1,15 +1,10 @@
-import { UserButton } from '@clerk/nextjs';
-import { useLocale } from 'next-intl';
 import Link from 'next/link';
 import { ActiveLink } from '@/components/ActiveLink';
 import { LocaleSwitcher } from '@/components/LocaleSwitcher';
 
 import { Separator } from '@/components/ui/separator';
 import { Logo } from '@/templates/Logo';
-import { getI18nPath } from '@/utils/Helpers';
 import { MobileNavigation } from './MobileNavigation';
-import { OrganizationMenu } from './OrganizationMenu';
-import { SlashIcon } from './SlashIcon';
 
 export const DashboardHeader = (props: {
   menu: {
@@ -17,18 +12,12 @@ export const DashboardHeader = (props: {
     label: string;
   }[];
 }) => {
-  const locale = useLocale();
-
   return (
     <>
       <div className="flex items-center">
         <Link href="/dashboard" className="max-sm:hidden">
           <Logo />
         </Link>
-
-        <SlashIcon />
-
-        <OrganizationMenu />
 
         <nav className="
           ml-3
@@ -65,16 +54,15 @@ export const DashboardHeader = (props: {
           </li>
 
           <li>
-            <UserButton
-              userProfileMode="navigation"
-              userProfileUrl={getI18nPath('/dashboard/user-profile', locale)}
-              afterSwitchSessionUrl="/dashboard"
-              appearance={{
-                elements: {
-                  rootBox: 'px-2 py-1.5',
-                },
-              }}
-            />
+            <a
+              href="/api/auth/logout"
+              className="
+                px-2 py-1.5 text-sm font-medium opacity-75
+                hover:opacity-100
+              "
+            >
+              Sign out
+            </a>
           </li>
         </ul>
       </div>

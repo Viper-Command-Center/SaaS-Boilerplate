@@ -1,5 +1,7 @@
 import type { Metadata } from 'next';
 import { getTranslations, setRequestLocale } from 'next-intl/server';
+import { redirect } from 'next/navigation';
+import { getCurrentUser } from '@/libs/auth/session';
 import { DashboardHeader } from '@/features/dashboard/DashboardHeader';
 
 type DashboardLayoutProps = {
@@ -24,6 +26,13 @@ export default async function DashboardLayout(props: DashboardLayoutProps) {
   const { locale } = await props.params;
   setRequestLocale(locale);
 
+  // Authoritative auth check (the edge middleware only verifies the JWT
+  // signature; this hits the DB and honors revocation/expiry).
+  const user = await getCurrentUser();
+  if (!user) {
+    redirect('/sign-in');
+  }
+
   const t = await getTranslations({
     locale,
     namespace: 'DashboardLayout',
@@ -41,14 +50,6 @@ export default async function DashboardLayout(props: DashboardLayoutProps) {
               {
                 href: '/dashboard',
                 label: t('home'),
-              },
-              {
-                href: '/dashboard/organization-profile/organization-members',
-                label: t('members'),
-              },
-              {
-                href: '/dashboard/organization-profile',
-                label: t('settings'),
               },
             ]}
           />

@@ -1,18 +1,96 @@
-import { pgTable, serial, text, timestamp } from 'drizzle-orm/pg-core';
+import { boolean, index, jsonb, pgTable, serial, text, timestamp, uniqueIndex, uuid, varchar } from 'drizzle-orm/pg-core';
 
 // This file defines the structure of your database tables using the Drizzle ORM.
-
 // To modify the database schema:
 // 1. Update this file with your desired changes.
 // 2. Generate a new migration by running: `npm run db:generate`
+// Migrations run on Railway via the pre-deploy command (`npm run db:migrate`).
 
-// The generated migration file will reflect your schema changes.
-// It automatically run the command `db-server:file`, which apply the migration before Next.js starts in development mode,
-// Alternatively, if your database is running, you can run `npm run db:migrate` and there is no need to restart the server.
+// ─── Auth (ported from the proven BudgetSmart pattern) ──────────────────────
+// Session strategy: on login we create a row in `sessions` with a random
+// tokenId; the browser cookie holds an HS256 JWT { sid, uid } signed with
+// SESSION_SECRET. Edge middleware verifies the signature cheaply; the DB row
+// is the authoritative check (revocation, expiry).
 
-// Need a database for production? Check out https://get.neon.com/BMFYNtx
-// Tested and compatible with SaaS Boilerplate
+export const users = pgTable(
+  'users',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    email: varchar('email', { length: 254 }).notNull(),
+    emailNormalized: varchar('email_normalized', { length: 254 }).notNull(),
+    passwordHash: text('password_hash').notNull(),
+    firstName: varchar('first_name', { length: 80 }),
+    lastName: varchar('last_name', { length: 80 }),
+    // Platform admin — full access to every tenant and platform settings.
+    // The first user ever created is automatically the platform admin.
+    isAdmin: boolean('is_admin').notNull().default(false),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    deletedAt: timestamp('deleted_at', { withTimezone: true }),
+  },
+  t => [uniqueIndex('users_email_normalized_uq').on(t.emailNormalized)],
+);
 
+export const sessions = pgTable(
+  'sessions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    // Opaque token id carried inside the signed cookie JWT.
+    tokenId: varchar('token_id', { length: 64 }).notNull(),
+    userAgent: text('user_agent'),
+    ipAddress: varchar('ip_address', { length: 64 }),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  t => [
+    uniqueIndex('sessions_token_id_uq').on(t.tokenId),
+    index('sessions_user_id_idx').on(t.userId),
+  ],
+);
+
+// ─── Tenancy ─────────────────────────────────────────────────────────────────
+// A tenant is a client business (BudgetSmart, True Therapy, BargainBalloons…).
+// Users get access to tenants through memberships with a role.
+
+export const tenants = pgTable(
+  'tenants',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    name: text('name').notNull(),
+    slug: varchar('slug', { length: 80 }).notNull(), // used in URLs: /t/true-therapy
+    vertical: varchar('vertical', { length: 40 }), // health | finance | ecommerce…
+    brandVoice: jsonb('brand_voice'),
+    settings: jsonb('settings'), // guardrails, intensity, spend caps…
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  t => [uniqueIndex('tenants_slug_uq').on(t.slug)],
+);
+
+export const memberships = pgTable(
+  'memberships',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+    // owner: full control · admin: manage tenant + approve · editor: draft +
+    // approve content · viewer: read-only dashboards
+    role: varchar('role', { length: 20 }).notNull().default('viewer'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  t => [
+    uniqueIndex('memberships_user_tenant_uq').on(t.userId, t.tenantId),
+    index('memberships_user_idx').on(t.userId),
+  ],
+);
+
+// ─── Boilerplate demo table (kept because migration 0000 already created it) ─
 export const todoSchema = pgTable('todo', {
   id: serial('id').primaryKey(),
   ownerId: text('owner_id').notNull(),
