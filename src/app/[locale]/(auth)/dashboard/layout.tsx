@@ -1,8 +1,8 @@
 import type { Metadata } from 'next';
 import { getTranslations, setRequestLocale } from 'next-intl/server';
 import { redirect } from 'next/navigation';
-import { getCurrentUser } from '@/libs/auth/session';
 import { DashboardHeader } from '@/features/dashboard/DashboardHeader';
+import { getCurrentUser } from '@/libs/auth/session';
 
 type DashboardLayoutProps = {
   params: Promise<{ locale: string }>;
