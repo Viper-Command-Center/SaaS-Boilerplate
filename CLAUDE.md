@@ -45,8 +45,25 @@ Gotchas hit: (1) deploy.bat commits were silently rejected by lefthook/commitlin
 2. Run `deploy.bat` (commits --no-verify + pushes; Railway builds + runs migration 0003 pre-deploy).
 3. Smoke test: dashboard → Tools panel → "Add MCP server" with any hosted MCP URL (e.g. a public test MCP server, or the Zernio/DataForSEO MCP endpoints when ready) → ask the agent to list what it can do → try a tool → watch it land in Approvals → Approve & run.
 
-## Phase 3 — next
-- Dynamic dashboard: `datasets` + `dashboard_panels` tables + agent panel-editing tools (create_panel/write_dataset), per Claude Plan v1. Then Phase 4: BullMQ worker service (scheduled agent tasks, stdio MCP servers).
+## Phase 3 — dynamic dashboard + multi-client (built 2026-07-12 midday, pending push+verify)
+- Schema: `datasets` (tenant time-series/jsonb rows) + `dashboard_panels` (kpi|timeseries|table|markdown, config jsonb, position). Migration `0004_dashboard-datasets`.
+- `src/libs/agent/platformTools.ts` — ALWAYS-available auto tools: list/create/update/delete_panel, write/query_dataset. Merged with MCP tools in `/api/agent/chat` (loop now runs every turn). This is how the agent reshapes the dashboard on request.
+- `GET /api/panels?tenant=` resolves panel data server-side; `PanelsGrid.tsx` renders (dep-free SVG timeseries), polls 30s, hidden until panels exist.
+- Multi-client: `GET/POST /api/tenants` (create = platform admin), `GET/POST/DELETE /api/tenants/[slug]/members` — adding an unknown email CREATES the account and returns a one-time generated password for the admin to share. `WorkspacePanel.tsx` (members+roles+new-workspace) on dashboard.
+- Tenant switcher chips on /dashboard (?t=slug). Role gating: viewer=chat+panels · editor=+approvals · owner/admin=+tools+members · platform admin=everything. (Server APIs were already role-gated; UI now matches.)
+- Ryan set Windows Task Scheduler to run all 3 repos' deploy.bat every 30 min — local changes auto-push; expect auto-deploys.
+
+### Ship checklist (nothing new needed)
+- deploy.bat (or wait for the 30-min scheduler). Migration 0004 runs pre-deploy. No new env vars, no new npm deps.
+- Smoke: dashboard → ask the agent "create a markdown panel titled Hello saying hi" → panel appears within 30s. Create a test workspace + add a viewer member → log in as them → confirm they see chat+panels only.
+
+## SAVED FOR LATER (Ryan's asks, do in coming phases)
+1. **Website-update MCPs** (BudgetSmart, WellnessTrove, ChurchWebGlobal…): build one small MCP server per site exposing safe page-edit tools. For Railway-hosted Next.js sites: tools commit to the site's GitHub repo via GitHub API (contents API) → push to main triggers Railway auto-deploy (that's the deploy mechanism — no Railway API needed). For WordPress sites: use the existing WordPress MCP. Replaces the OpenClaw agent's job. Host these MCPs as tiny Railway services (or one multi-site MCP with per-site tokens in the vault).
+2. Phase 4: BullMQ worker service (scheduled agent tasks, stdio MCP servers, nightly dataset snapshots).
+3. Password change/reset flow for client accounts (currently one-time generated password only).
+4. Approval → notify agent/conversation on execution (currently result lives in the inbox).
+5. Strip boilerplate marketing landing page + real Artivio branding; retire legacy artivio.ai Railway service.
+6. Streaming polish: token streaming when ANTHROPIC_API_KEY present; Bedrock invoke-with-response-stream parsing.
 
 ## Gotchas
 - Railway dashboard SPA: screenshots often hang; use get_page_text / find refs. Settings inputs need the expand button clicked first; changes stage into an "Apply N changes" → Details → Deploy Changes flow (discard stray empty staged changes).

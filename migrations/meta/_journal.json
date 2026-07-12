@@ -29,6 +29,13 @@
       "when": 1783866348044,
       "tag": "0003_mcp-approvals",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1783868463388,
+      "tag": "0004_dashboard-datasets",
+      "breakpoints": true
     }
   ]
 }

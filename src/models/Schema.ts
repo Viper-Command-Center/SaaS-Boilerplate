@@ -1,4 +1,4 @@
-import { boolean, index, jsonb, pgTable, serial, text, timestamp, uniqueIndex, uuid, varchar } from 'drizzle-orm/pg-core';
+import { boolean, index, integer, jsonb, pgTable, serial, text, timestamp, uniqueIndex, uuid, varchar } from 'drizzle-orm/pg-core';
 
 // This file defines the structure of your database tables using the Drizzle ORM.
 // To modify the database schema:
@@ -203,6 +203,44 @@ export const messages = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   t => [index('messages_conversation_idx').on(t.conversationId, t.createdAt)],
+);
+
+// ─── Phase 3: datasets + dynamic dashboard panels ────────────────────────────
+// Generic per-tenant data store the agent (and later scheduled jobs) writes
+// to, and the panels that visualize it. The agent edits panels itself via
+// platform tools — this is how the dashboard adapts to whatever MCPs are in
+// play and what the user asks for.
+
+export const datasets = pgTable(
+  'datasets',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+    key: varchar('key', { length: 80 }).notNull(), // e.g. organic_traffic, shopify_image_jobs
+    row: jsonb('row').notNull(),
+    capturedAt: timestamp('captured_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  t => [index('datasets_tenant_key_at_idx').on(t.tenantId, t.key, t.capturedAt)],
+);
+
+export const dashboardPanels = pgTable(
+  'dashboard_panels',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+    type: varchar('type', { length: 20 }).notNull(), // kpi | timeseries | table | markdown
+    title: text('title').notNull(),
+    // kpi: { datasetKey, valueField, label? } · timeseries: { datasetKey, valueField }
+    // table: { datasetKey, columns?, limit? } · markdown: { text }
+    config: jsonb('config').notNull(),
+    position: integer('position').notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  t => [index('dashboard_panels_tenant_idx').on(t.tenantId, t.position)],
 );
 
 // ─── Boilerplate demo table (kept because migration 0000 already created it) ─

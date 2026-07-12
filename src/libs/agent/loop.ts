@@ -78,7 +78,7 @@ export async function runToolLoop(a: {
           .values({
             tenantId: a.tenantId,
             conversationId: a.conversationId,
-            connectionId: resolved.connectionId,
+            connectionId: resolved.connectionId || null,
             toolName: name,
             args,
           })

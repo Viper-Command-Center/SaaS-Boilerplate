@@ -10,8 +10,8 @@
 import { and, asc, eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { streamClaude } from '@/libs/agent/anthropic';
 import { runToolLoop } from '@/libs/agent/loop';
+import { buildPlatformTools } from '@/libs/agent/platformTools';
 import { buildSystemPrompt } from '@/libs/agent/prompt';
 import { getCurrentUser } from '@/libs/auth/session';
 import { db } from '@/libs/DB';
@@ -82,14 +82,27 @@ export async function POST(request: Request) {
     { role: 'user' as const, content: body.message },
   ];
 
-  // Assemble the tenant's live toolset from its enabled MCP connections.
-  // Failures are tolerated — the agent still chats, just without those tools.
-  let toolset: Awaited<ReturnType<typeof buildTenantToolset>>;
+  // Assemble the tenant's live toolset: platform tools (always available —
+  // dashboard panels + datasets) merged with the tenant's enabled MCP
+  // connections. MCP failures are tolerated — the agent still works.
+  let mcpToolset: Awaited<ReturnType<typeof buildTenantToolset>>;
   try {
-    toolset = await buildTenantToolset(tenant.id);
+    mcpToolset = await buildTenantToolset(tenant.id);
   } catch {
-    toolset = { anthropicTools: [], failedConnections: [], resolve: () => null };
+    mcpToolset = { anthropicTools: [], failedConnections: [], resolve: () => null };
   }
+  const platform = buildPlatformTools(tenant.id);
+  const toolset = {
+    anthropicTools: [...platform.anthropicTools, ...mcpToolset.anthropicTools],
+    failedConnections: mcpToolset.failedConnections,
+    resolve: (name: string) => {
+      const p = platform.executors.get(name);
+      if (p) {
+        return { connectionId: '', connectionName: 'platform', toolName: name, policy: p.policy, call: p.call };
+      }
+      return mcpToolset.resolve(name);
+    },
+  };
 
   let system = buildSystemPrompt({ tenant, userFirstName: user.firstName });
   if (toolset.failedConnections.length > 0) {
@@ -105,21 +118,15 @@ export async function POST(request: Request) {
         controller.enqueue(encoder.encode(delta));
       };
       try {
-        if (toolset.anthropicTools.length > 0) {
-          await runToolLoop({
-            tenantId: tenant.id,
-            conversationId,
-            system,
-            history: chatMessages.slice(0, -1),
-            userText: body.message,
-            toolset,
-            onDelta,
-          });
-        } else {
-          for await (const delta of streamClaude({ system, messages: chatMessages })) {
-            onDelta(delta);
-          }
-        }
+        await runToolLoop({
+          tenantId: tenant.id,
+          conversationId,
+          system,
+          history: chatMessages.slice(0, -1),
+          userText: body.message,
+          toolset,
+          onDelta,
+        });
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'Agent error';
         controller.enqueue(encoder.encode(`\n\n[error] ${msg}`));
