@@ -20,7 +20,7 @@ Multi-tenant AI agent platform on this SaaS-Boilerplate fork (Next.js 16 + Clerk
 - Gotcha hit: SESSION_SECRET initially too short/late → signup 500 AFTER user insert (user existed, session signing threw). Deploy Logs showed "SESSION_SECRET must be set to a 32+ character random string". Fixed by updating the Railway variable + redeploy, then SIGN IN (not sign-up).
 
 ## Phase 1 — agent core (built 2026-07-11 late, pending push+verify)
-- `src/libs/agent/anthropic.ts` — direct Anthropic Messages API via fetch (NO sdk dep), streaming generator. Env: ANTHROPIC_API_KEY (+ optional ANTHROPIC_MODEL, default claude-sonnet-4-5).
+- `src/libs/agent/anthropic.ts` — multi-provider Claude transport via fetch (NO sdk deps), first configured wins: BEDROCK_API_KEY bearer invoke (non-streaming, single-chunk yield; BEDROCK_MODEL_ID default us.anthropic.claude-sonnet-4-6, BEDROCK_REGION/AWS_REGION default us-east-1) → ANTHROPIC_API_KEY streaming (ANTHROPIC_MODEL default claude-sonnet-4-5). Ryan runs Bedrock keys (same as BudgetSmart), no Anthropic key.
 - `src/libs/agent/prompt.ts` — tenant-scoped system prompt (Bud pattern; honest about Phase 2 tools not existing yet).
 - `src/libs/tenants.ts` — getUserTenants + ensureDefaultTenant (admin's first dashboard visit auto-creates tenant 'artivio' + owner membership).
 - API: POST `/api/agent/chat` {tenantSlug, message} → plain-text stream, history loaded server-side, one rolling conversation per tenant+user; GET `/api/agent/history?tenant=slug`.
