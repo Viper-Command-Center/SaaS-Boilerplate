@@ -11,9 +11,11 @@ import { and, asc, eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { streamClaude } from '@/libs/agent/anthropic';
+import { runToolLoop } from '@/libs/agent/loop';
 import { buildSystemPrompt } from '@/libs/agent/prompt';
 import { getCurrentUser } from '@/libs/auth/session';
 import { db } from '@/libs/DB';
+import { buildTenantToolset } from '@/libs/mcp/registry';
 import { getUserTenants } from '@/libs/tenants';
 import { conversations, messages } from '@/models/Schema';
 
@@ -80,16 +82,43 @@ export async function POST(request: Request) {
     { role: 'user' as const, content: body.message },
   ];
 
-  const system = buildSystemPrompt({ tenant, userFirstName: user.firstName });
+  // Assemble the tenant's live toolset from its enabled MCP connections.
+  // Failures are tolerated — the agent still chats, just without those tools.
+  let toolset: Awaited<ReturnType<typeof buildTenantToolset>>;
+  try {
+    toolset = await buildTenantToolset(tenant.id);
+  } catch {
+    toolset = { anthropicTools: [], failedConnections: [], resolve: () => null };
+  }
+
+  let system = buildSystemPrompt({ tenant, userFirstName: user.firstName });
+  if (toolset.failedConnections.length > 0) {
+    system += `\n\nNote: these configured tool servers are currently unavailable: ${toolset.failedConnections.join('; ')}.`;
+  }
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       let full = '';
+      const onDelta = (delta: string) => {
+        full += delta;
+        controller.enqueue(encoder.encode(delta));
+      };
       try {
-        for await (const delta of streamClaude({ system, messages: chatMessages })) {
-          full += delta;
-          controller.enqueue(encoder.encode(delta));
+        if (toolset.anthropicTools.length > 0) {
+          await runToolLoop({
+            tenantId: tenant.id,
+            conversationId,
+            system,
+            history: chatMessages.slice(0, -1),
+            userText: body.message,
+            toolset,
+            onDelta,
+          });
+        } else {
+          for await (const delta of streamClaude({ system, messages: chatMessages })) {
+            onDelta(delta);
+          }
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'Agent error';

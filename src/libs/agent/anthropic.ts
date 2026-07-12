@@ -9,6 +9,14 @@
 
 export type ChatMessage = { role: 'user' | 'assistant'; content: string };
 
+/** Content-block message shape for tool-use turns. */
+export type BlockMessage = { role: 'user' | 'assistant'; content: unknown };
+
+export type RawModelResponse = {
+  content: Array<{ type: string; text?: string; id?: string; name?: string; input?: Record<string, unknown> }>;
+  stop_reason: string;
+};
+
 const BEDROCK_MODEL = process.env.BEDROCK_MODEL_ID || 'us.anthropic.claude-sonnet-4-6';
 const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-5';
 
@@ -107,6 +115,76 @@ async function* streamAnthropicDirect(a: {
       }
     }
   }
+}
+
+/**
+ * Tool-capable single model call (non-streaming) via the Bedrock bearer
+ * endpoint — used by the agent tool loop. Falls back to api.anthropic.com
+ * when only an Anthropic key is configured.
+ */
+export async function callClaudeWithTools(a: {
+  system: string;
+  messages: BlockMessage[];
+  tools: Array<{ name: string; description: string; input_schema: Record<string, unknown> }>;
+  maxTokens?: number;
+}): Promise<RawModelResponse> {
+  const maxTokens = a.maxTokens ?? 4096;
+  const wantsBedrockBearer = Boolean(process.env.BEDROCK_API_KEY || process.env.AWS_BEARER_TOKEN_BEDROCK);
+  const wantsAnthropic = Boolean(process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_API_KEY);
+
+  if (wantsBedrockBearer) {
+    const key = process.env.BEDROCK_API_KEY || process.env.AWS_BEARER_TOKEN_BEDROCK;
+    const url = `https://bedrock-runtime.${bedrockRegion()}.amazonaws.com/model/${encodeURIComponent(BEDROCK_MODEL)}/invoke`;
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${key}`,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+      body: JSON.stringify({
+        anthropic_version: 'bedrock-2023-05-31',
+        max_tokens: maxTokens,
+        system: a.system,
+        messages: a.messages,
+        ...(a.tools.length > 0 ? { tools: a.tools } : {}),
+      }),
+    });
+    if (!resp.ok) {
+      const detail = (await resp.text().catch(() => '')).slice(0, 300);
+      throw new Error(`Bedrock ${resp.status}: ${detail}`);
+    }
+    return await resp.json() as RawModelResponse;
+  }
+
+  if (wantsAnthropic) {
+    const key = process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_API_KEY;
+    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': key || '',
+        'anthropic-version': '2023-06-01',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: ANTHROPIC_MODEL,
+        max_tokens: maxTokens,
+        system: a.system,
+        messages: a.messages,
+        ...(a.tools.length > 0 ? { tools: a.tools } : {}),
+      }),
+    });
+    if (!resp.ok) {
+      const detail = (await resp.text().catch(() => '')).slice(0, 300);
+      throw new Error(`Anthropic ${resp.status}: ${detail}`);
+    }
+    return await resp.json() as RawModelResponse;
+  }
+
+  throw new Error(
+    'No AI credentials configured. Add ONE of these to the Railway variables: '
+    + 'BEDROCK_API_KEY (+ optional BEDROCK_REGION/BEDROCK_MODEL_ID) or ANTHROPIC_API_KEY.',
+  );
 }
 
 export async function* streamClaude(a: {

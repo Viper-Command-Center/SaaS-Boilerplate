@@ -90,6 +90,88 @@ export const memberships = pgTable(
   ],
 );
 
+// ─── Phase 2: credential vault + MCP registry + approvals + audit ────────────
+// Credentials are AES-256-GCM sealed (src/libs/vault.ts, key = VAULT_MASTER_KEY
+// in Railway variables). MCP connections define which tool servers a tenant's
+// agent can reach; toolPolicy gates each tool: 'auto' | 'approval' | 'deny'.
+
+export const credentials = pgTable(
+  'credentials',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+    provider: varchar('provider', { length: 80 }).notNull(), // dataforseo | zernio | shopify | custom…
+    label: varchar('label', { length: 120 }),
+    cipher: text('cipher').notNull(), // vault-sealed, never plaintext
+    meta: jsonb('meta'), // non-secret: account ids, scopes
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  t => [index('credentials_tenant_idx').on(t.tenantId)],
+);
+
+export const mcpConnections = pgTable(
+  'mcp_connections',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+    name: varchar('name', { length: 80 }).notNull(), // used in tool namespace mcp__<name>__<tool>
+    transport: varchar('transport', { length: 10 }).notNull().default('http'), // http | stdio (stdio = Phase 4 worker)
+    url: text('url'), // http transport: the MCP endpoint
+    // Header name → credential id; resolved+decrypted at call time and sent as
+    // HTTP headers (e.g. { "Authorization": "<credId>" } where the credential
+    // holds "Bearer sk_…"). Never stored plaintext.
+    headerCredentials: jsonb('header_credentials'),
+    // Tool name → 'auto' | 'approval' | 'deny'. Tools absent from the map
+    // default to 'approval' (safe by default).
+    toolPolicy: jsonb('tool_policy'),
+    enabled: boolean('enabled').notNull().default(true),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  t => [
+    index('mcp_connections_tenant_idx').on(t.tenantId),
+    uniqueIndex('mcp_connections_tenant_name_uq').on(t.tenantId, t.name),
+  ],
+);
+
+export const approvals = pgTable(
+  'approvals',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+    conversationId: uuid('conversation_id'),
+    connectionId: uuid('connection_id'),
+    toolName: text('tool_name').notNull(), // namespaced mcp__<connection>__<tool>
+    args: jsonb('args').notNull(),
+    status: varchar('status', { length: 20 }).notNull().default('pending'), // pending|approved|rejected|executed|failed
+    requestedBy: varchar('requested_by', { length: 40 }).notNull().default('agent'),
+    requestedAt: timestamp('requested_at', { withTimezone: true }).notNull().defaultNow(),
+    decidedBy: uuid('decided_by'),
+    decidedAt: timestamp('decided_at', { withTimezone: true }),
+    result: jsonb('result'),
+  },
+  t => [index('approvals_tenant_status_idx').on(t.tenantId, t.status)],
+);
+
+export const auditLog = pgTable(
+  'audit_log',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenantId: uuid('tenant_id'),
+    actor: varchar('actor', { length: 120 }).notNull(), // userId | agent
+    action: varchar('action', { length: 80 }).notNull(), // tool.call | tool.approved | connection.create…
+    target: text('target'),
+    detail: jsonb('detail'),
+    at: timestamp('at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  t => [index('audit_log_tenant_at_idx').on(t.tenantId, t.at)],
+);
+
 // ─── Agent conversations (ported Bud pattern, tenant-scoped) ─────────────────
 
 export const conversations = pgTable(
