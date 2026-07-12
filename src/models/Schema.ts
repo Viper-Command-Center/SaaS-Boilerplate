@@ -90,6 +90,39 @@ export const memberships = pgTable(
   ],
 );
 
+// ─── Agent conversations (ported Bud pattern, tenant-scoped) ─────────────────
+
+export const conversations = pgTable(
+  'conversations',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    title: text('title'),
+    channel: varchar('channel', { length: 20 }).notNull().default('web'), // web | whatsapp (later)
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  t => [index('conversations_tenant_idx').on(t.tenantId)],
+);
+
+export const messages = pgTable(
+  'messages',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    conversationId: uuid('conversation_id')
+      .notNull()
+      .references(() => conversations.id, { onDelete: 'cascade' }),
+    role: varchar('role', { length: 20 }).notNull(), // user | assistant
+    content: text('content').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  t => [index('messages_conversation_idx').on(t.conversationId, t.createdAt)],
+);
+
 // ─── Boilerplate demo table (kept because migration 0000 already created it) ─
 export const todoSchema = pgTable('todo', {
   id: serial('id').primaryKey(),

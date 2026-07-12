@@ -15,6 +15,13 @@
       "when": 1783820473944,
       "tag": "0001_auth-tenancy",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1783823310571,
+      "tag": "0002_agent-conversations",
+      "breakpoints": true
     }
   ]
 }

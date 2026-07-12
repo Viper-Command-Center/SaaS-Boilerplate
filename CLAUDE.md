@@ -15,11 +15,21 @@ Multi-tenant AI agent platform on this SaaS-Boilerplate fork (Next.js 16 + Clerk
 - `src/proxy.ts` = edge middleware: i18n + cheap JWT gate on /dashboard + no-store on /api. Layouts call `getCurrentUser()` for the real check.
 - `SESSION_SECRET` (32+ chars) is required at RUNTIME only (deliberately not in t3-env `Env.ts`, so builds never need it). Must be set in Railway variables.
 
-## Phase 0 remaining
-- Ryan: run `npm install` locally (syncs package-lock.json after dep changes: removed @clerk/*, added bcryptjs+jose) → commit + push → Railway deploys.
-- Ryan: add `SESSION_SECRET` to Railway variables.
-- Verify /sign-up creates the first (admin) account on artivio.ai.
-- Then Phase 1: strip marketing filler, port agent core from BudgetSmart /admin.
+## Phase 0 — COMPLETE (2026-07-11 ~10:30 PM)
+- Deployed, migrations applied, Ryan signed in on artivio.ai/dashboard as platform admin (first user).
+- Gotcha hit: SESSION_SECRET initially too short/late → signup 500 AFTER user insert (user existed, session signing threw). Deploy Logs showed "SESSION_SECRET must be set to a 32+ character random string". Fixed by updating the Railway variable + redeploy, then SIGN IN (not sign-up).
+
+## Phase 1 — agent core (built 2026-07-11 late, pending push+verify)
+- `src/libs/agent/anthropic.ts` — direct Anthropic Messages API via fetch (NO sdk dep), streaming generator. Env: ANTHROPIC_API_KEY (+ optional ANTHROPIC_MODEL, default claude-sonnet-4-5).
+- `src/libs/agent/prompt.ts` — tenant-scoped system prompt (Bud pattern; honest about Phase 2 tools not existing yet).
+- `src/libs/tenants.ts` — getUserTenants + ensureDefaultTenant (admin's first dashboard visit auto-creates tenant 'artivio' + owner membership).
+- API: POST `/api/agent/chat` {tenantSlug, message} → plain-text stream, history loaded server-side, one rolling conversation per tenant+user; GET `/api/agent/history?tenant=slug`.
+- Schema: `conversations` + `messages`; migration `0002_agent-conversations` (runs pre-deploy).
+- UI: `src/features/agent/AgentChat.tsx` on /dashboard (streams, reloads history on refresh).
+- No new npm deps (fetch-based) → no lockfile change needed for this phase.
+
+## Phase 2 — next
+- Per-tenant MCP registry (`mcp_connections` + libsodium credential vault) + tool loop in the chat route + approvals gateway + dynamic dashboard panels (see Claude Plan v1).
 
 ## Gotchas
 - Railway dashboard SPA: screenshots often hang; use get_page_text / find refs. Settings inputs need the expand button clicked first; changes stage into an "Apply N changes" → Details → Deploy Changes flow (discard stray empty staged changes).
