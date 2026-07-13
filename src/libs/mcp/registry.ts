@@ -95,12 +95,31 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
           continue;
         }
 
-        // Platform credential (tenantId NULL) sealed in the vault.
-        const [cred] = entry.credentialId
-          ? await db.select().from(credentials).where(eq(credentials.id, entry.credentialId)).limit(1)
-          : [undefined];
+        // Where the credential lives depends on the provider:
+        //  · perConnection (WordPress) → the WORKSPACE's own credential + target
+        //  · otherwise (Kie.ai)        → the PLATFORM credential on the catalog
+        let credentialId: string | undefined;
+        let target: string | undefined;
+
+        if (provider.perConnection) {
+          const map = (conn.headerCredentials ?? {}) as Record<string, string>;
+          credentialId = Object.values(map)[0];
+          target = conn.url ?? undefined;
+          if (!credentialId || !target) {
+            failedConnections.push(`${conn.name} (needs a site URL and credential — re-enable it in the Tools panel)`);
+            continue;
+          }
+        } else {
+          credentialId = entry.credentialId ?? undefined;
+        }
+        if (!credentialId) {
+          failedConnections.push(`${conn.name} (no credential configured)`);
+          continue;
+        }
+
+        const [cred] = await db.select().from(credentials).where(eq(credentials.id, credentialId)).limit(1);
         if (!cred) {
-          failedConnections.push(`${conn.name} (no platform credential configured)`);
+          failedConnections.push(`${conn.name} (credential missing)`);
           continue;
         }
         const apiKey = openSecret(cred.cipher);
@@ -120,7 +139,7 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
             toolName: tool.name,
             policy: policyMap[tool.name] ?? 'approval',
             call: async (args) => {
-              const output = await provider.call(tool.name, args, apiKey);
+              const output = await provider.call(tool.name, args, apiKey, target);
               // Meter AFTER a successful call (failed jobs aren't charged).
               const rule = rules[tool.name];
               if (rule) {

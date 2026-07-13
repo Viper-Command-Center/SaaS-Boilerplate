@@ -1,6 +1,6 @@
 'use client';
 
-import type { BuiltinProvider, Plugin } from '@/features/admin/CatalogTab';
+import type { BuiltinProvider, CatalogPreset, Plugin } from '@/features/admin/CatalogTab';
 import type { AdminUser, Workspace as WsOption } from '@/features/admin/UsersTab';
 import { useCallback, useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
@@ -35,6 +35,7 @@ export const AdminConsole = () => {
   const [emailConfigured, setEmailConfigured] = useState(false);
   const [catalog, setCatalog] = useState<Plugin[]>([]);
   const [builtins, setBuiltins] = useState<BuiltinProvider[]>([]);
+  const [presets, setPresets] = useState<CatalogPreset[]>([]);
   const [busy, setBusy] = useState(false);
 
   const reload = useCallback(() => {
@@ -50,6 +51,7 @@ export const AdminConsole = () => {
     fetch('/api/admin/catalog').then(r => r.json()).then((d) => {
       setCatalog(d.catalog ?? []);
       setBuiltins(d.builtinProviders ?? []);
+      setPresets(d.presets ?? []);
     }).catch(() => {});
   }, []);
 
@@ -179,7 +181,7 @@ export const AdminConsole = () => {
         />
       )}
 
-      {tab === 'catalog' && <CatalogTab catalog={catalog} builtins={builtins} reload={reload} />}
+      {tab === 'catalog' && <CatalogTab catalog={catalog} builtins={builtins} presets={presets} reload={reload} />}
     </div>
   );
 };

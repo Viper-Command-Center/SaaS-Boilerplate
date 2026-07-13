@@ -16,6 +16,7 @@ export type Plugin = {
   provider: string | null;
   url: string | null;
   authHeader: string | null;
+  authHint: string | null;
   enabled: boolean;
   hasCredential: boolean;
   priceRules: Record<string, PriceRule> | null;
@@ -26,7 +27,24 @@ export type BuiltinProvider = {
   name: string;
   description: string;
   credentialLabel: string;
+  perConnection?: boolean;
   tools: Array<{ name: string; description: string; meteredArg?: string }>;
+};
+
+export type CatalogPreset = {
+  key: string;
+  label: string;
+  entry: {
+    slug: string;
+    name: string;
+    description: string;
+    category: string;
+    transport: 'http' | 'builtin';
+    provider?: string;
+    url?: string;
+    authHeader?: string;
+    authHint?: string;
+  };
 };
 
 const CATEGORIES = ['media', 'seo', 'social', 'ads', 'analytics', 'dev', 'data', 'other'];
@@ -35,52 +53,123 @@ type Row = { tool: string; unit: 'call' | 'arg'; argField: string; costUsd: stri
 
 const money = (n: number) => `$${n.toFixed(n < 1 ? 4 : 2)}`;
 
+const EMPTY = {
+  slug: '',
+  name: '',
+  description: '',
+  category: 'media',
+  tier: 'tier1',
+  provider: '',
+  url: '',
+  authHeader: 'Authorization',
+  authHint: '',
+  credentialValue: '',
+};
+
 export const CatalogTab = (props: {
   catalog: Plugin[];
   builtins: BuiltinProvider[];
+  presets?: CatalogPreset[];
   reload: () => void;
 }) => {
   const [show, setShow] = useState(false);
+  /** null = creating a new entry; otherwise the id being edited. */
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   const [kind, setKind] = useState<'builtin' | 'http'>('builtin');
-  const [form, setForm] = useState({
-    slug: '',
-    name: '',
-    description: '',
-    category: 'media',
-    tier: 'tier1',
-    provider: '',
-    url: '',
-    authHeader: 'Authorization',
-    authHint: '',
-    credentialValue: '',
-  });
+  const [form, setForm] = useState({ ...EMPTY });
   const [rows, setRows] = useState<Row[]>([]);
   const [defaultMarkup, setDefaultMarkup] = useState('30');
 
   const input = 'w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring';
 
+  const rowsFromRules = (rules: Record<string, PriceRule> | null | undefined, tools?: BuiltinProvider['tools']) => {
+    const names = tools?.length
+      ? tools.map(t => t.name)
+      : Object.keys(rules ?? {});
+    return names.map((name) => {
+      const r = rules?.[name];
+      const meteredArg = tools?.find(t => t.name === name)?.meteredArg;
+      return {
+        tool: name,
+        unit: (r?.unit ?? (meteredArg ? 'arg' : 'call')) as 'call' | 'arg',
+        argField: r?.argField ?? meteredArg ?? '',
+        costUsd: r ? String(r.costUsd) : '',
+        markupPct: r?.markup !== undefined ? String(Math.round((r.markup - 1) * 100)) : defaultMarkup,
+      };
+    });
+  };
+
+  const reset = () => {
+    setShow(false);
+    setEditingId(null);
+    setError(null);
+    setRows([]);
+    setForm({ ...EMPTY });
+  };
+
   /** Picking a built-in provider pre-fills the identity and the pricing rows. */
   const pickProvider = (slug: string) => {
     const p = props.builtins.find(b => b.slug === slug);
     if (!p) {
-      setForm({ ...form, provider: '' });
+      setForm(f => ({ ...f, provider: '' }));
+      setRows([]);
       return;
     }
-    setForm({
-      ...form,
+    setForm(f => ({
+      ...f,
       provider: p.slug,
+      // Don't clobber the slug/name when correcting an existing entry.
+      slug: editingId ? f.slug : p.slug,
+      name: editingId ? f.name : p.name,
+      description: editingId && f.description ? f.description : p.description.slice(0, 300),
+    }));
+    setRows(rowsFromRules(null, p.tools));
+  };
+
+  const applyPreset = (preset: CatalogPreset) => {
+    const e = preset.entry;
+    setEditingId(null);
+    setShow(true);
+    setError(null);
+    setKind(e.transport);
+    setForm({
+      ...EMPTY,
+      slug: e.slug,
+      name: e.name,
+      description: e.description,
+      category: e.category,
+      // Presets are client-owned accounts by default → tier 2 (BYO credential).
+      tier: 'tier2',
+      provider: e.provider ?? '',
+      url: e.url ?? '',
+      authHeader: e.authHeader ?? 'Authorization',
+      authHint: e.authHint ?? '',
+    });
+    const bp = e.provider ? props.builtins.find(b => b.slug === e.provider) : undefined;
+    setRows(bp ? rowsFromRules(null, bp.tools) : []);
+  };
+
+  const startEdit = (p: Plugin) => {
+    setEditingId(p.id);
+    setShow(true);
+    setError(null);
+    setKind(p.transport === 'builtin' ? 'builtin' : 'http');
+    setForm({
       slug: p.slug,
       name: p.name,
-      description: p.description.slice(0, 300),
+      description: p.description ?? '',
+      category: p.category ?? 'other',
+      tier: p.tier,
+      provider: p.provider ?? '',
+      url: p.url ?? '',
+      authHeader: p.authHeader ?? 'Authorization',
+      authHint: p.authHint ?? '',
+      credentialValue: '',
     });
-    setRows(p.tools.map(t => ({
-      tool: t.name,
-      unit: t.meteredArg ? 'arg' : 'call',
-      argField: t.meteredArg ?? '',
-      costUsd: '',
-      markupPct: defaultMarkup,
-    })));
+    const bp = p.provider ? props.builtins.find(b => b.slug === p.provider) : undefined;
+    setRows(rowsFromRules(p.priceRules, bp?.tools));
   };
 
   const setRow = (i: number, patch: Partial<Row>) => {
@@ -112,32 +201,44 @@ export const CatalogTab = (props: {
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    setBusy(true);
+
+    const shared = {
+      name: form.name,
+      description: form.description || undefined,
+      category: form.category,
+      tier: form.tier,
+      transport: kind,
+      provider: kind === 'builtin' ? form.provider : undefined,
+      url: kind === 'http' ? form.url : undefined,
+      authHeader: kind === 'http' ? form.authHeader : undefined,
+      authHint: form.authHint || undefined,
+      priceRules: form.tier === 'tier1' ? buildPriceRules() : {},
+      // Blank on an edit = keep the stored key.
+      credentialValue: form.credentialValue || undefined,
+    };
+
     const res = await fetch('/api/admin/catalog', {
-      method: 'POST',
+      method: editingId ? 'PATCH' : 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        slug: form.slug,
-        name: form.name,
-        description: form.description || undefined,
-        category: form.category,
-        tier: form.tier,
-        transport: kind,
-        provider: kind === 'builtin' ? form.provider : undefined,
-        url: kind === 'http' ? form.url : undefined,
-        authHeader: kind === 'http' ? form.authHeader : undefined,
-        authHint: form.tier === 'tier2' ? form.authHint : undefined,
-        credentialValue: form.tier === 'tier1' ? form.credentialValue : undefined,
-        priceRules: form.tier === 'tier1' ? buildPriceRules() : undefined,
-      }),
+      body: JSON.stringify(editingId ? { id: editingId, ...shared } : { slug: form.slug, ...shared }),
     });
     const data = await res.json().catch(() => null);
+    setBusy(false);
     if (!res.ok) {
       setError(data?.error ?? 'Could not save.');
       return;
     }
-    setShow(false);
-    setRows([]);
-    setForm({ ...form, slug: '', name: '', url: '', provider: '', credentialValue: '' });
+    reset();
+    props.reload();
+  };
+
+  const toggle = async (p: Plugin) => {
+    await fetch('/api/admin/catalog', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: p.id, enabled: !p.enabled }),
+    }).catch(() => {});
     props.reload();
   };
 
@@ -149,6 +250,14 @@ export const CatalogTab = (props: {
     await fetch(`/api/admin/catalog?id=${encodeURIComponent(id)}`, { method: 'DELETE' }).catch(() => {});
     props.reload();
   };
+
+  const editing = editingId ? props.catalog.find(p => p.id === editingId) : undefined;
+  const activeBuiltin = props.builtins.find(b => b.slug === form.provider);
+  const presets = props.presets ?? [];
+  const saveLabel = editing ? 'Save changes' : 'Save plugin';
+  // Per-site providers (WordPress) have no platform key — the workspace enters
+  // their own site + credential when they enable it.
+  const perConnection = kind === 'builtin' && Boolean(activeBuiltin?.perConnection);
 
   return (
     <div className="space-y-4">
@@ -162,13 +271,38 @@ export const CatalogTab = (props: {
           {' '}
           = the client brings their own key; you don&apos;t pay or meter it.
         </p>
-        <Button size="sm" variant="outline" onClick={() => setShow(s => !s)}>
+        <Button size="sm" variant="outline" onClick={() => (show ? reset() : setShow(true))}>
           {show ? 'Cancel' : 'Add plugin'}
         </Button>
       </div>
 
+      {/* One-click starting points — just form pre-fills. */}
+      {!show && presets.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs text-muted-foreground">Quick add:</span>
+          {presets.map(p => (
+            <button
+              key={p.key}
+              type="button"
+              onClick={() => applyPreset(p)}
+              className="
+                rounded-lg border border-white/12 px-2.5 py-1 text-xs
+                text-white/70
+                hover:bg-white/5
+              "
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+      )}
+
       {show && (
         <form onSubmit={submit} className="glass space-y-4 p-4">
+          <p className="text-sm font-medium">
+            {editing ? `Edit ${editing.name}` : 'New plugin'}
+          </p>
+
           {/* what kind */}
           <div className="flex gap-2">
             {(['builtin', 'http'] as const).map(k => (
@@ -193,9 +327,10 @@ export const CatalogTab = (props: {
                     <option value="">Choose a built-in provider…</option>
                     {props.builtins.map(b => <option key={b.slug} value={b.slug}>{b.name}</option>)}
                   </select>
-                  {form.provider && (
+                  {activeBuiltin && (
                     <p className="mt-1 text-xs text-muted-foreground">
-                      {props.builtins.find(b => b.slug === form.provider)?.credentialLabel}
+                      {activeBuiltin.credentialLabel}
+                      {activeBuiltin.perConnection && ' — each workspace enters their own site URL and credential, so this must be Tier 2.'}
                     </p>
                   )}
                 </div>
@@ -208,7 +343,15 @@ export const CatalogTab = (props: {
               )}
 
           <div className="grid gap-3 sm:grid-cols-2">
-            <input className={input} placeholder="slug (e.g. kie-ai)" value={form.slug} onChange={e => setForm({ ...form, slug: e.target.value.toLowerCase() })} required />
+            <input
+              className={`${input} ${editingId ? 'opacity-60' : ''}`}
+              placeholder="slug (e.g. kie-ai)"
+              value={form.slug}
+              onChange={e => setForm({ ...form, slug: e.target.value.toLowerCase() })}
+              disabled={Boolean(editingId)}
+              title={editingId ? 'The slug is fixed — workspace connections point at it.' : undefined}
+              required
+            />
             <input className={input} placeholder="Display name" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} required />
             <select className={input} value={form.tier} onChange={e => setForm({ ...form, tier: e.target.value })}>
               <option value="tier1">Tier 1 — my account, metered &amp; billed</option>
@@ -224,10 +367,31 @@ export const CatalogTab = (props: {
           {form.tier === 'tier1'
             ? (
                 <>
-                  <div>
-                    <label className="mb-1 block text-sm font-medium" htmlFor="cat-key">Your API key (encrypted; never shown again)</label>
-                    <input id="cat-key" type="password" className={input} value={form.credentialValue} onChange={e => setForm({ ...form, credentialValue: e.target.value })} required />
-                  </div>
+                  {!perConnection && (
+                    <div>
+                      <label className="mb-1 block text-sm font-medium" htmlFor="cat-key">
+                        Your API key (encrypted; never shown again)
+                      </label>
+                      <input
+                        id="cat-key"
+                        type="password"
+                        className={input}
+                        placeholder={editing?.hasCredential ? 'Leave blank to keep the current key' : ''}
+                        value={form.credentialValue}
+                        onChange={e => setForm({ ...form, credentialValue: e.target.value })}
+                        required={!editing?.hasCredential}
+                      />
+                    </div>
+                  )}
+
+                  {perConnection && (
+                    <input
+                      className={input}
+                      placeholder="Hint shown to the client when they connect their site"
+                      value={form.authHint}
+                      onChange={e => setForm({ ...form, authHint: e.target.value })}
+                    />
+                  )}
 
                   {/* ── Pricing table ── */}
                   <div className="rounded-xl border">
@@ -261,7 +425,9 @@ export const CatalogTab = (props: {
                     {rows.length === 0
                       ? (
                           <p className="px-3 py-4 text-xs text-muted-foreground">
-                            Pick a provider above and its tools will appear here to price.
+                            {kind === 'builtin'
+                              ? 'Pick a provider above and its tools will appear here to price.'
+                              : 'Add a row for each tool you want to meter (the tool name must match the MCP server\'s).'}
                           </p>
                         )
                       : (
@@ -280,8 +446,22 @@ export const CatalogTab = (props: {
                                 const cost = Number(r.costUsd) || 0;
                                 const retail = cost * (1 + (Number(r.markupPct) || 0) / 100);
                                 return (
-                                  <tr key={r.tool} className="border-t">
-                                    <td className="p-2 font-medium">{r.tool}</td>
+                                  <tr key={r.tool || i} className="border-t">
+                                    <td className="p-2 font-medium">
+                                      {kind === 'builtin'
+                                        ? r.tool
+                                        : (
+                                            <input
+                                              className="
+                                                w-32 rounded border border-input
+                                                bg-background px-2 py-1
+                                              "
+                                              placeholder="tool name"
+                                              value={r.tool}
+                                              onChange={e => setRow(i, { tool: e.target.value })}
+                                            />
+                                          )}
+                                    </td>
                                     <td className="p-2">
                                       <select
                                         className="rounded border border-input bg-background px-1 py-1"
@@ -331,10 +511,28 @@ export const CatalogTab = (props: {
                             </tbody>
                           </table>
                         )}
-                    <p className="border-t px-3 py-2 text-xs text-muted-foreground">
-                      Leave a cost blank to leave that tool unmetered (free to the client).
-                      Set markup to 0% to pass through at wholesale.
-                    </p>
+
+                    <div className="
+                      flex items-center justify-between border-t px-3 py-2
+                    "
+                    >
+                      <p className="text-xs text-muted-foreground">
+                        Leave a cost blank to leave that tool unmetered (free to the client).
+                        Set markup to 0% to pass through at wholesale.
+                      </p>
+                      {kind === 'http' && (
+                        <button
+                          type="button"
+                          className="
+                            shrink-0 rounded border border-white/12 px-2 py-1
+                            text-xs
+                          "
+                          onClick={() => setRows(rs => [...rs, { tool: '', unit: 'call', argField: '', costUsd: '', markupPct: defaultMarkup }])}
+                        >
+                          + Add tool
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </>
               )
@@ -343,7 +541,12 @@ export const CatalogTab = (props: {
               )}
 
           {error && <p className="text-sm text-red-600" role="alert">{error}</p>}
-          <Button type="submit" size="sm">Save plugin</Button>
+          <div className="flex gap-2">
+            <Button type="submit" size="sm" disabled={busy}>
+              {busy ? 'Saving…' : saveLabel}
+            </Button>
+            <Button type="button" size="sm" variant="outline" onClick={reset}>Cancel</Button>
+          </div>
         </form>
       )}
 
@@ -367,6 +570,9 @@ export const CatalogTab = (props: {
                 {p.transport === 'builtin' && (
                   <span className="rounded bg-emerald-400/15 px-1.5 py-0.5 text-xs text-emerald-300">built-in</span>
                 )}
+                {!p.enabled && (
+                  <span className="rounded bg-amber-400/15 px-1.5 py-0.5 text-xs text-amber-300">hidden</span>
+                )}
                 {p.category && <span className="text-xs text-muted-foreground">{p.category}</span>}
               </div>
               {p.description && <p className="mt-0.5 text-xs text-muted-foreground">{p.description}</p>}
@@ -379,7 +585,13 @@ export const CatalogTab = (props: {
                 </p>
               )}
             </div>
-            <Button size="sm" variant="outline" onClick={() => del(p.id)}>Remove</Button>
+            <div className="flex shrink-0 gap-2">
+              <Button size="sm" variant="outline" onClick={() => startEdit(p)}>Edit</Button>
+              <Button size="sm" variant="outline" onClick={() => toggle(p)}>
+                {p.enabled ? 'Hide' : 'Show'}
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => del(p.id)}>Remove</Button>
+            </div>
           </div>
         ))}
       </div>

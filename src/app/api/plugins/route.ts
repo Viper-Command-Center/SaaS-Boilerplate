@@ -14,6 +14,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getCurrentUser } from '@/libs/auth/session';
 import { db } from '@/libs/DB';
+import { getBuiltinProvider } from '@/libs/plugins';
 import { getUserTenants } from '@/libs/tenants';
 import { sealSecret, vaultConfigured } from '@/libs/vault';
 import { auditLog, credentials, mcpConnections, pluginCatalog } from '@/models/Schema';
@@ -55,6 +56,8 @@ export async function GET(request: Request) {
   return NextResponse.json({
     plugins: catalog.map((p) => {
       const rules = (p.priceRules ?? {}) as Record<string, { unit: string; costUsd: number; markup?: number; argField?: string }>;
+      const provider = p.transport === 'builtin' && p.provider ? getBuiltinProvider(p.provider) : undefined;
+      const perConnection = Boolean(provider?.perConnection);
       return {
         id: p.id,
         slug: p.slug,
@@ -63,7 +66,10 @@ export async function GET(request: Request) {
         category: p.category,
         tier: p.tier,
         authHint: p.authHint,
-        needsKey: p.tier === 'tier2',
+        // Tier 2 = client's own key. Per-connection built-ins (WordPress) also
+        // need the client's own credential AND their site URL.
+        needsKey: p.tier === 'tier2' || perConnection,
+        needsSiteUrl: perConnection,
         installed: installedIds.has(p.id),
         // Show clients what they'll be charged, never our raw cost.
         pricing: Object.entries(rules).map(([tool, r]) => ({
@@ -79,8 +85,10 @@ export async function GET(request: Request) {
 const EnableSchema = z.object({
   tenantSlug: z.string().min(1).max(80),
   pluginId: z.string().uuid(),
-  /** tier2 only: the client's own API key. */
+  /** tier2 / per-connection built-ins: the workspace's own credential. */
   credentialValue: z.string().max(4000).optional(),
+  /** Per-connection built-ins (e.g. WordPress): this workspace's site URL. */
+  siteUrl: z.string().url().max(500).optional(),
 });
 
 export async function POST(request: Request) {
@@ -115,12 +123,24 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Already enabled in this workspace.' }, { status: 409 });
   }
 
-  // Tier 2 → seal the client's own key. Tier 1 → the platform credential on
-  // the catalog entry is used at call time; nothing is stored per workspace.
+  // Who supplies the credential?
+  //  · tier1 + platform provider  → the catalog's key; nothing stored here.
+  //  · tier2, or a per-connection built-in (WordPress) → this workspace's own.
+  const provider = plugin.transport === 'builtin' && plugin.provider
+    ? getBuiltinProvider(plugin.provider)
+    : undefined;
+  const needsOwnCredential = plugin.tier === 'tier2' || Boolean(provider?.perConnection);
+
+  // Per-connection built-ins (WordPress) target the workspace's own site.
+  const targetUrl = provider?.perConnection ? (body.siteUrl ?? '') : plugin.url;
+  if (provider?.perConnection && !targetUrl) {
+    return NextResponse.json({ error: 'This plugin needs your site URL (e.g. https://yoursite.com).' }, { status: 400 });
+  }
+
   const headerCredentials: Record<string, string> = {};
-  if (plugin.tier === 'tier2') {
+  if (needsOwnCredential) {
     if (!body.credentialValue) {
-      return NextResponse.json({ error: 'This plugin needs your API key.' }, { status: 400 });
+      return NextResponse.json({ error: 'This plugin needs your credential.' }, { status: 400 });
     }
     if (!vaultConfigured()) {
       return NextResponse.json({ error: 'Credential vault is not configured.' }, { status: 500 });
@@ -130,7 +150,7 @@ export async function POST(request: Request) {
       .values({
         tenantId: tenant.id,
         provider: plugin.slug,
-        label: `${plugin.slug} · ${plugin.authHeader ?? 'Authorization'}`,
+        label: `${plugin.slug} · ${plugin.authHeader ?? 'credential'}`,
         cipher: sealSecret(body.credentialValue),
       })
       .returning({ id: credentials.id });
@@ -143,7 +163,7 @@ export async function POST(request: Request) {
     tenantId: tenant.id,
     name: plugin.slug,
     transport: plugin.transport === 'builtin' ? 'builtin' : 'http',
-    url: plugin.url,
+    url: targetUrl,
     catalogId: plugin.id,
     headerCredentials,
     toolPolicy: {}, // everything approval-gated until the owner promotes it

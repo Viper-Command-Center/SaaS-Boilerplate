@@ -21,6 +21,8 @@ type CatalogPlugin = {
   tier: string;
   authHint: string | null;
   needsKey: boolean;
+  /** Per-site plugins (WordPress) also need the workspace's own site URL. */
+  needsSiteUrl?: boolean;
   installed: boolean;
   pricing: Array<{ tool: string; unit: string; retailUsd: number }>;
 };
@@ -45,6 +47,7 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
   const [busy, setBusy] = useState(false);
   const [keyFor, setKeyFor] = useState<string | null>(null);
   const [keyValue, setKeyValue] = useState('');
+  const [siteUrl, setSiteUrl] = useState('');
 
   const reload = useCallback(() => {
     fetch(`/api/mcp/connections?tenant=${encodeURIComponent(props.tenantSlug)}`)
@@ -65,7 +68,10 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
   }, [reload]);
 
   const enablePlugin = async (plugin: CatalogPlugin) => {
-    if (plugin.needsKey && !keyValue.trim()) {
+    // Open the inline form first if we still need something from the client.
+    const missing = (plugin.needsKey && !keyValue.trim())
+      || (plugin.needsSiteUrl && !siteUrl.trim());
+    if (missing) {
       setKeyFor(plugin.id);
       return;
     }
@@ -77,6 +83,7 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
         tenantSlug: props.tenantSlug,
         pluginId: plugin.id,
         credentialValue: plugin.needsKey ? keyValue.trim() : undefined,
+        siteUrl: plugin.needsSiteUrl ? siteUrl.trim() : undefined,
       }),
     });
     const data = await res.json().catch(() => null);
@@ -86,6 +93,7 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
     }
     setKeyFor(null);
     setKeyValue('');
+    setSiteUrl('');
     reload();
   };
 
@@ -244,15 +252,28 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
                 </div>
 
                 {keyFor === p.id && (
-                  <div className="mt-2 flex gap-2">
-                    <input
-                      type="password"
-                      className={inputClass}
-                      placeholder={p.authHint ?? 'Your API key'}
-                      value={keyValue}
-                      onChange={e => setKeyValue(e.target.value)}
-                    />
-                    <Button size="sm" onClick={() => enablePlugin(p)}>Save</Button>
+                  <div className="mt-2 space-y-2">
+                    {p.needsSiteUrl && (
+                      <input
+                        className={inputClass}
+                        placeholder="Your site URL — https://yoursite.com"
+                        value={siteUrl}
+                        onChange={e => setSiteUrl(e.target.value)}
+                      />
+                    )}
+                    <div className="flex gap-2">
+                      <input
+                        type="password"
+                        className={inputClass}
+                        placeholder={p.authHint ?? 'Your API key'}
+                        value={keyValue}
+                        onChange={e => setKeyValue(e.target.value)}
+                      />
+                      <Button size="sm" onClick={() => enablePlugin(p)}>Save</Button>
+                    </div>
+                    {p.authHint && (
+                      <p className="text-xs text-white/35">{p.authHint}</p>
+                    )}
                   </div>
                 )}
               </div>

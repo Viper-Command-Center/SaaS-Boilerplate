@@ -1,13 +1,14 @@
 /**
- * Built-in providers — in-app adapters for services we RESELL (tier 1).
+ * Built-in providers — in-app adapters for services with NO hosted MCP server.
  *
- * Why in-app rather than an MCP server: a third-party MCP would run on the
- * vendor's terms and never report usage back to us, so we could not meter,
- * cap or bill it. An adapter we own calls the vendor's REST API directly,
- * meters the exact cost in the same transaction, and needs no extra service.
+ * Two shapes:
+ *  1. Platform-owned (tier 1, e.g. Kie.ai): OUR key on the catalog entry,
+ *     metered per call and billed to the workspace.
+ *  2. Per-connection (e.g. WordPress): each workspace supplies its OWN target
+ *     (site URL) and credential. Set `perConnection: true`.
  *
- * Vendors that DO publish a hosted MCP (GitHub, etc.) should be registered as
- * normal HTTP connections instead — no code required.
+ * Vendors that DO publish a hosted MCP (GitHub, Duda…) are registered as plain
+ * HTTP connections instead — no code required.
  */
 
 import type { AnthropicTool } from '@/libs/mcp/registry';
@@ -21,9 +22,23 @@ export type BuiltinProvider = {
   slug: string;
   name: string;
   description: string;
-  /** What the admin pastes when adding this as a tier-1 plugin. */
+  /** What the admin (tier 1) or the client (perConnection) pastes. */
   credentialLabel: string;
+  /**
+   * True = the credential and target live on the workspace's connection, not
+   * on the catalog entry (each client has their own site/account).
+   */
+  perConnection?: boolean;
   tools: BuiltinTool[];
-  /** Execute one tool. `apiKey` is the platform credential, decrypted. */
-  call: (tool: string, args: Record<string, unknown>, apiKey: string) => Promise<string>;
+  /**
+   * Execute one tool.
+   *  credential — decrypted key (platform's, or the workspace's)
+   *  target     — per-connection target, e.g. the WordPress site URL
+   */
+  call: (
+    tool: string,
+    args: Record<string, unknown>,
+    credential: string,
+    target?: string,
+  ) => Promise<string>;
 };

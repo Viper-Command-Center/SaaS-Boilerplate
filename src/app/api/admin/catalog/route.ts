@@ -17,7 +17,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getCurrentUser } from '@/libs/auth/session';
 import { db } from '@/libs/DB';
-import { listBuiltinProviders } from '@/libs/plugins';
+import { CATALOG_PRESETS, getBuiltinProvider, listBuiltinProviders } from '@/libs/plugins';
 import { sealSecret, vaultConfigured } from '@/libs/vault';
 import { credentials, pluginCatalog } from '@/models/Schema';
 
@@ -77,6 +77,7 @@ export async function GET() {
   return NextResponse.json({
     catalog: rows.map(r => ({ ...r, hasCredential: Boolean(r.credentialId), credentialId: undefined })),
     builtinProviders: listBuiltinProviders(),
+    presets: CATALOG_PRESETS,
     vaultConfigured: vaultConfigured(),
   });
 }
@@ -107,10 +108,16 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'A plugin with this slug already exists.' }, { status: 409 });
   }
 
+  // Per-connection providers (WordPress) never have a platform key — each
+  // workspace supplies its own site + credential when they enable it.
+  const perConnection = body.transport === 'builtin' && body.provider
+    ? Boolean(getBuiltinProvider(body.provider)?.perConnection)
+    : false;
+
   // Tier 1 holds OUR credential — sealed in the vault (tenantId NULL =
   // platform-level, shared by every workspace that enables the plugin).
   let credentialId: string | undefined;
-  if (body.tier === 'tier1') {
+  if (body.tier === 'tier1' && !perConnection) {
     if (!body.credentialValue) {
       return NextResponse.json({ error: 'Tier 1 plugins need the platform credential (your API key).' }, { status: 400 });
     }
@@ -150,45 +157,101 @@ export async function POST(request: Request) {
   return NextResponse.json({ ok: true, plugin: row });
 }
 
+/**
+ * Full edit. Every field of a catalog entry can be corrected after the fact
+ * (a mis-typed name, the wrong tier, a bad price table, the wrong key) —
+ * except the slug, which workspace connections point at.
+ */
+const UpdateSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string().min(1).max(120).optional(),
+  description: z.string().max(500).optional(),
+  category: z.string().max(40).optional(),
+  tier: z.enum(['tier1', 'tier2']).optional(),
+  transport: z.enum(['http', 'builtin']).optional(),
+  provider: z.string().max(60).nullable().optional(),
+  url: z.string().max(2000).nullable().optional(),
+  authHeader: z.string().max(80).nullable().optional(),
+  authHint: z.string().max(200).nullable().optional(),
+  enabled: z.boolean().optional(),
+  priceRules: z.record(z.string(), PriceRuleSchema).optional(),
+  /** Rotate (or set for the first time) the platform credential. */
+  credentialValue: z.string().max(4000).optional(),
+});
+
 export async function PATCH(request: Request) {
   if (!(await requireAdmin())) {
     return NextResponse.json({ error: 'Platform admin only.' }, { status: 403 });
   }
-  let body: {
-    id?: string;
-    enabled?: boolean;
-    priceRules?: unknown;
-    url?: string;
-    description?: string;
-    credentialValue?: string;
-  };
+
+  let body: z.infer<typeof UpdateSchema>;
   try {
-    body = await request.json();
-  } catch {
-    return NextResponse.json({ error: 'Invalid request.' }, { status: 400 });
-  }
-  if (!body.id) {
-    return NextResponse.json({ error: 'id required.' }, { status: 400 });
+    body = UpdateSchema.parse(await request.json());
+  } catch (err) {
+    const msg = err instanceof z.ZodError ? err.issues[0]?.message : 'Invalid request.';
+    return NextResponse.json({ error: msg ?? 'Invalid request.' }, { status: 400 });
   }
 
-  // Rotating the platform key
+  const [entry] = await db.select().from(pluginCatalog).where(eq(pluginCatalog.id, body.id)).limit(1);
+  if (!entry) {
+    return NextResponse.json({ error: 'Plugin not found.' }, { status: 404 });
+  }
+
+  const transport = body.transport ?? entry.transport;
+  const tier = body.tier ?? entry.tier;
+  const url = body.url !== undefined ? body.url : entry.url;
+  const provider = body.provider !== undefined ? body.provider : entry.provider;
+
+  if (transport === 'http' && !url) {
+    return NextResponse.json({ error: 'An MCP server URL is required.' }, { status: 400 });
+  }
+  if (transport === 'builtin' && !provider) {
+    return NextResponse.json({ error: 'Pick a built-in provider.' }, { status: 400 });
+  }
+
+  // Credential: rotate the existing one, or create the platform credential if
+  // the entry didn't have one (e.g. it was tier2 and is now tier1).
+  let credentialId = entry.credentialId;
   if (body.credentialValue) {
-    const [entry] = await db.select().from(pluginCatalog).where(eq(pluginCatalog.id, body.id)).limit(1);
-    if (entry?.credentialId) {
+    if (!vaultConfigured()) {
+      return NextResponse.json({ error: 'VAULT_MASTER_KEY is not configured.' }, { status: 500 });
+    }
+    if (credentialId) {
       await db
         .update(credentials)
         .set({ cipher: sealSecret(body.credentialValue) })
-        .where(eq(credentials.id, entry.credentialId));
+        .where(eq(credentials.id, credentialId));
+    } else {
+      const [cred] = await db
+        .insert(credentials)
+        .values({
+          tenantId: null,
+          provider: entry.slug,
+          label: `platform · ${entry.slug}`,
+          cipher: sealSecret(body.credentialValue),
+        })
+        .returning({ id: credentials.id });
+      credentialId = cred?.id ?? null;
     }
   }
 
   await db
     .update(pluginCatalog)
     .set({
-      ...(body.enabled !== undefined ? { enabled: Boolean(body.enabled) } : {}),
+      ...(body.name !== undefined ? { name: body.name } : {}),
+      ...(body.description !== undefined ? { description: body.description } : {}),
+      ...(body.category !== undefined ? { category: body.category } : {}),
+      ...(body.authHeader !== undefined ? { authHeader: body.authHeader } : {}),
+      ...(body.authHint !== undefined ? { authHint: body.authHint } : {}),
+      ...(body.enabled !== undefined ? { enabled: body.enabled } : {}),
       ...(body.priceRules !== undefined ? { priceRules: body.priceRules } : {}),
-      ...(body.url !== undefined ? { url: String(body.url) } : {}),
-      ...(body.description !== undefined ? { description: String(body.description) } : {}),
+      tier,
+      transport,
+      // Keep the two transports mutually exclusive so the registry never has
+      // to guess which one an entry meant.
+      provider: transport === 'builtin' ? provider : null,
+      url: transport === 'http' ? url : null,
+      credentialId,
     })
     .where(eq(pluginCatalog.id, body.id));
 
