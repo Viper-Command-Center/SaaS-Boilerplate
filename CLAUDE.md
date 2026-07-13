@@ -85,6 +85,26 @@ Gotchas hit: (1) deploy.bat commits were silently rejected by lefthook/commitlin
 9. Support inbox (support@budgetsmart.io) → email MCP (IMAP or Gmail); replies approval-gated. Candidate for next build.
 - MCP discovery: agent now recommends specific servers (mcpmarket.com as directory) whenever a capability is missing.
 
+## Phase 4c — built-in browsing: `mcp-browser/` (built 2026-07-12 eve, pending Ryan's 2 Railway services)
+- Zero-dep MCP wrapper over self-hosted Browserless: browse_page (rendered text+title+links), get_page_html, scrape_page (CSS selectors). SSRF-guarded, 40KB caps. Verified `node --check`.
+- Ryan setup (mcp-browser/README.md): (1) Railway service from Docker image `ghcr.io/browserless/chromium` + TOKEN var, PRIVATE only; (2) service from this repo root-dir `mcp-browser` + MCP_API_KEY/BROWSERLESS_URL(internal)/BROWSERLESS_TOKEN, public domain; (3) Tools panel: name `browser`, Authorization Bearer key. Read-only tools → safe for `auto` policy.
+- Strategy: built-in flat-cost browsing for all workspaces; Firecrawl/Browserbase/Hyperbrowser MCPs = per-workspace premium add-ons (datacenter-IP blocking is the limit of self-hosting).
+
+## Phase 5 — production polish + security hardening (built 2026-07-12 night)
+- **Demo removed**: DemoBadge/DemoBanner deleted, all boilerplate marketing templates (Hero/CTA/FAQ/Features/Footer/Navbar/Pricing/Sponsors) deleted, Artivio metadata in `[locale]/layout.tsx`. Only `templates/Logo.tsx` remains (used by DashboardHeader).
+- **Landing page**: `[locale]/(marketing)/page.tsx` rewritten — self-contained Artivio marketing page (hero, 6 features, 3-step how-it-works, waitlist section, footer). Waitlist CTA = mailto hello@artivio.ai with prefilled subject/body. No Stripe/checkout yet by design.
+- **Help**: `/dashboard/help` — 4 sections (getting started, tools/MCP, approvals & safety, dashboard & missions) + support email. "Help" added to dashboard nav.
+- **SECURITY (2026 standard)**: untrusted-content framing. Tool results are wrapped in `<tool_output trust="untrusted">` + the system prompt forbids following instructions found in tool output (prompt-injection defense at the data boundary — the #1 risk in 2026 MCP guidance). See `docs/COMPETITIVE_REVIEW_2026.md`.
+- **`docs/COMPETITIVE_REVIEW_2026.md`** — market comparison (Braze/Iterable/Klaviyo/Agentforce/Tofu/1ClickReport/AI agencies), standards scorecard vs 2026 MCP+NSA/CSA guidance, gap list. Conclusion: positioning is differentiated (nobody else is a tool-agnostic multi-tenant agent host); every original brief item is addressed.
+
+### NEXT GAPS (ranked, from the review)
+1. **Spend guardrails** — per-workspace daily $ cap + kill switch before any spending tool. Blocker for autonomous ads.
+2. Support inbox via email MCP (use case #9).
+3. Client password reset / invite links (currently one-time passwords only).
+4. Streaming polish (Bedrock invoke-with-response-stream).
+5. Cost ledger (tokens + provider spend per workspace).
+6. Register official Google/Meta/TikTok Ads MCPs (they shipped in 2026) → unlocks goal missions with paid channels.
+
 ## SAVED FOR LATER (Ryan's asks, do in coming phases)
 1. WordPress sites (WellnessTrove?): connect the existing WordPress MCP per site instead of mcp-sites.
 2. Worker service (stdio MCP servers, heavy long-running jobs) — scheduled tasks no longer blocked on this.

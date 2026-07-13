@@ -2,11 +2,15 @@ import type { Metadata, Viewport } from 'next';
 import { hasLocale, NextIntlClientProvider } from 'next-intl';
 import { setRequestLocale } from 'next-intl/server';
 import { notFound } from 'next/navigation';
-import { DemoBadge } from '@/components/DemoBadge';
 import { routing } from '@/libs/I18nRouting';
 import '@/styles/global.css';
 
 export const metadata: Metadata = {
+  title: {
+    default: 'Artivio — AI Command Center for Your Business',
+    template: '%s · Artivio',
+  },
+  description: 'One AI agent per business, every tool it needs. Artivio runs marketing and operations across your companies and clients — with human approval on everything that matters.',
   icons: [
     {
       rel: 'apple-touch-icon',
@@ -57,8 +61,6 @@ export default async function RootLayout(props: {
       <body>
         <NextIntlClientProvider>
           {props.children}
-
-          <DemoBadge />
         </NextIntlClientProvider>
       </body>
     </html>
