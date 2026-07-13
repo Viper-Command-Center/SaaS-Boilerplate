@@ -66,9 +66,28 @@ Gotchas hit: (1) deploy.bat commits were silently rejected by lefthook/commitlin
 - `mcp-sites/` stays in the repo as an OPTIONAL lightweight fallback (simpler tool surface, per-site config, own bearer key) — NOT required, no Railway service needed unless wanted. See mcp-sites/README.md.
 - First smoke test once Ryan adds the connection: ask the agent to "read the hero section of budgetsmart.io's homepage and propose a headline tweak" → update lands in Approvals → approve → commit → Railway deploys the marketing site.
 
+## Phase 4b — scheduled agent tasks (built 2026-07-12 PM, pending push+verify)
+- Schema: `scheduled_tasks` (prompt = complete instructions per run, intervalMinutes min 15, nextRunAt claim-before-run). Migration `0005_scheduled-tasks`.
+- Agent platform tools: list/create/update/delete_scheduled_task — the AGENT manages its own standing missions ("post an SEO blog every Monday" → it creates the task itself).
+- Runner: POST `/api/internal/run-scheduled` (header `x-cron-secret` = CRON_SECRET env, ≥16 chars; max 3 due tasks/tick, 300s maxDuration). Each run = fresh tool loop with full toolset + approvals gateway; result stored in lastResult (visible via list_scheduled_tasks).
+- Trigger: `.github/workflows/agent-cron.yml` every 30 min (also manual via workflow_dispatch).
+- **Ryan setup**: (1) add `CRON_SECRET` to Railway variables; (2) add the SAME value as GitHub repo secret `CRON_SECRET` (repo Settings → Secrets and variables → Actions).
+
+## RYAN'S BIG-9 USE CASES → capability map (2026-07-12)
+1. Site updates w/ PR-style history → GitHub MCP (full endpoint api.githubcopilot.com/mcp/ for PR tools); agent instructed to prefer branch+PR for non-trivial changes.
+2. Social (15 platforms) → Zernio MCP in Tools panel when key ready (Phase: just config).
+3. Auto blog posting → scheduled task + GitHub MCP (commits posts to the site repo). READY once GitHub MCP connected.
+4. Railway MCP (docs.railway.com/ai/mcp-server) → gives deploy status/failures. CHECK TRANSPORT: if stdio-only, needs a hosted wrapper or the future worker; if hosted/HTTP, register directly.
+5. Analytics dashboard → DataForSEO/GA4 MCPs + scheduled collection tasks writing datasets + agent-built panels. Plumbing DONE; needs the MCP registrations.
+6. Influencer/affiliate discovery + outreach → needs a web-search MCP (e.g. Brave/Exa) + email-send MCP; outreach approval-gated.
+7. Goal missions ("100 customers this week") → create_scheduled_task with the goal prompt + progress dataset + honest-escalation instructions (prompt supports this now; gets stronger with more MCPs).
+8. Agent-as-employee → system prompt updated (ownership, honesty, business's best interest).
+9. Support inbox (support@budgetsmart.io) → email MCP (IMAP or Gmail); replies approval-gated. Candidate for next build.
+- MCP discovery: agent now recommends specific servers (mcpmarket.com as directory) whenever a capability is missing.
+
 ## SAVED FOR LATER (Ryan's asks, do in coming phases)
 1. WordPress sites (WellnessTrove?): connect the existing WordPress MCP per site instead of mcp-sites.
-2. Phase 4: BullMQ worker service (scheduled agent tasks, stdio MCP servers, nightly dataset snapshots).
+2. Worker service (stdio MCP servers, heavy long-running jobs) — scheduled tasks no longer blocked on this.
 3. Password change/reset flow for client accounts (currently one-time generated password only).
 4. Approval → notify agent/conversation on execution (currently result lives in the inbox).
 5. Strip boilerplate marketing landing page + real Artivio branding; retire legacy artivio.ai Railway service.

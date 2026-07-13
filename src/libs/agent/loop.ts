@@ -77,7 +77,7 @@ export async function runToolLoop(a: {
           .insert(approvals)
           .values({
             tenantId: a.tenantId,
-            conversationId: a.conversationId,
+            conversationId: a.conversationId || null,
             connectionId: resolved.connectionId || null,
             toolName: name,
             args,

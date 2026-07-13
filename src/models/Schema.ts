@@ -243,6 +243,31 @@ export const dashboardPanels = pgTable(
   t => [index('dashboard_panels_tenant_idx').on(t.tenantId, t.position)],
 );
 
+// ─── Phase 4b: scheduled agent tasks ─────────────────────────────────────────
+// Standing missions the agent runs on an interval ("post a blog every Monday",
+// "collect SEO metrics nightly", "work toward 100 new customers"). A cron
+// trigger (GitHub Actions → /api/internal/run-scheduled) executes due tasks
+// through the same tool loop + approvals gateway as chat.
+
+export const scheduledTasks = pgTable(
+  'scheduled_tasks',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    prompt: text('prompt').notNull(),
+    intervalMinutes: integer('interval_minutes').notNull().default(1440), // daily
+    nextRunAt: timestamp('next_run_at', { withTimezone: true }).notNull().defaultNow(),
+    enabled: boolean('enabled').notNull().default(true),
+    lastRunAt: timestamp('last_run_at', { withTimezone: true }),
+    lastResult: text('last_result'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  t => [index('scheduled_tasks_due_idx').on(t.enabled, t.nextRunAt)],
+);
+
 // ─── Boilerplate demo table (kept because migration 0000 already created it) ─
 export const todoSchema = pgTable('todo', {
   id: serial('id').primaryKey(),

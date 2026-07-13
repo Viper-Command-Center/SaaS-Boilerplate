@@ -1,0 +1,20 @@
+name: Agent scheduled tasks
+
+# Triggers the Command Center's scheduled-task runner. Each tick executes up
+# to 3 due tasks through the agent tool loop + approvals gateway.
+# Requires the repo secret CRON_SECRET to match the Railway variable CRON_SECRET.
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch: {}
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run due scheduled tasks
+        run: |
+          curl -sS -X POST "https://artivio.ai/api/internal/run-scheduled" \
+            -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" \
+            --max-time 280 || true
