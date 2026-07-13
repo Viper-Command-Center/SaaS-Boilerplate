@@ -377,6 +377,41 @@ export const pluginCatalog = pgTable(
   t => [uniqueIndex('plugin_catalog_slug_uq').on(t.slug)],
 );
 
+// ─── Phase 12: workspace file library (R2) ───────────────────────────────────
+// One table for BOTH sides of the same problem:
+//  · knowledge  — briefs, brand guides, requirement docs the client uploads so
+//    the agent can read them instead of being pasted a 5-page prompt.
+//  · assets     — media the agent generates (Kie.ai deletes originals after 14
+//    days), archived to R2 so links stay alive for the site / social schedule.
+// Bytes live in R2 under tenants/<tenantId>/…; rows here are the index.
+
+export const files = pgTable(
+  'files',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    // knowledge | asset | note (agent-written text)
+    kind: varchar('kind', { length: 20 }).notNull().default('knowledge'),
+    mime: varchar('mime', { length: 120 }),
+    sizeBytes: integer('size_bytes').notNull().default(0),
+    r2Key: text('r2_key').notNull(),
+    // Public URL when the bucket has a custom domain (used by social/CMS posts)
+    publicUrl: text('public_url'),
+    // Where it came from: upload | kie-ai | agent
+    source: varchar('source', { length: 40 }).notNull().default('upload'),
+    // Extracted text (documents) so the agent can read a file without bytes.
+    textContent: text('text_content'),
+    // Free-form: model, prompt, taskId, tags…
+    meta: jsonb('meta'),
+    createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  t => [index('files_tenant_at_idx').on(t.tenantId, t.createdAt)],
+);
+
 // ─── Boilerplate demo table (kept because migration 0000 already created it) ─
 export const todoSchema = pgTable('todo', {
   id: serial('id').primaryKey(),

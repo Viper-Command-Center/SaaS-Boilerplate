@@ -72,11 +72,24 @@ export async function GET(request: Request) {
         needsSiteUrl: perConnection,
         installed: installedIds.has(p.id),
         // Show clients what they'll be charged, never our raw cost.
-        pricing: Object.entries(rules).map(([tool, r]) => ({
-          tool,
-          unit: r.unit === 'arg' ? (r.argField ?? 'unit') : 'call',
-          retailUsd: Number((r.costUsd * (r.markup ?? 1.5)).toFixed(4)),
-        })),
+        // Usage-priced plugins (Kie.ai) are one rate for every tool — collapse
+        // them to a single line instead of repeating it per tool.
+        pricing: (() => {
+          const entries = Object.entries(rules);
+          const usageRule = entries.find(([, r]) => r.unit === 'usage')?.[1];
+          if (usageRule) {
+            return [{
+              tool: 'all generations',
+              unit: provider?.usageMetering?.unitLabel ?? 'unit',
+              retailUsd: Number((usageRule.costUsd * (usageRule.markup ?? 1.5)).toFixed(4)),
+            }];
+          }
+          return entries.map(([tool, r]) => ({
+            tool,
+            unit: r.unit === 'arg' ? (r.argField ?? 'unit') : 'call',
+            retailUsd: Number((r.costUsd * (r.markup ?? 1.5)).toFixed(4)),
+          }));
+        })(),
       };
     }),
   });

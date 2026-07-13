@@ -71,6 +71,13 @@
       "when": 1783965646420,
       "tag": "0009_builtin-plugins",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1784030000000,
+      "tag": "0010_file-library",
+      "breakpoints": true
     }
   ]
 }

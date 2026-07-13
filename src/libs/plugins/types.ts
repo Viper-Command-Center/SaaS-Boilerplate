@@ -18,6 +18,32 @@ export type BuiltinTool = AnthropicTool & {
   meteredArg?: string;
 };
 
+/**
+ * What a tool call returns. A provider that knows what a call actually cost it
+ * (Kie.ai reports `creditsConsumed` on every task) returns `units`, so we bill
+ * the exact amount instead of guessing from a price table.
+ */
+export type BuiltinResult = {
+  output: string;
+  /** Units the provider consumed (e.g. Kie credits). */
+  units?: number;
+  /** Media the platform should archive (provider URLs expire). */
+  assetUrls?: string[];
+};
+
+/**
+ * Usage-based metering: the provider reports units, we price them at one flat
+ * rate. Beats maintaining a per-model price table that goes stale weekly.
+ */
+export type UsageMetering = {
+  /** e.g. 'credit' */
+  unitLabel: string;
+  /** Our cost per unit — Kie.ai = $0.005 per credit, flat across all models. */
+  defaultUnitCostUsd: number;
+  /** Shown in the admin pricing UI. */
+  note?: string;
+};
+
 export type BuiltinProvider = {
   slug: string;
   name: string;
@@ -29,10 +55,18 @@ export type BuiltinProvider = {
    * on the catalog entry (each client has their own site/account).
    */
   perConnection?: boolean;
+  /**
+   * True = the platform credential may hold MANY keys (one per line). The
+   * adapter round-robins across them and fails over if one is rate-limited,
+   * out of credit or blocked.
+   */
+  multiKey?: boolean;
+  /** Set when the provider reports its own consumption (see UsageMetering). */
+  usageMetering?: UsageMetering;
   tools: BuiltinTool[];
   /**
    * Execute one tool.
-   *  credential — decrypted key (platform's, or the workspace's)
+   *  credential — decrypted key(s) (platform's, or the workspace's)
    *  target     — per-connection target, e.g. the WordPress site URL
    */
   call: (
@@ -40,5 +74,5 @@ export type BuiltinProvider = {
     args: Record<string, unknown>,
     credential: string,
     target?: string,
-  ) => Promise<string>;
+  ) => Promise<string | BuiltinResult>;
 };

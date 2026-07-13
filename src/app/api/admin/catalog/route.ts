@@ -12,13 +12,14 @@
  * tier2 = bring-your-own-key: the client pastes their own credential.
  */
 
-import { desc, eq } from 'drizzle-orm';
+import { desc, eq, inArray } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getCurrentUser } from '@/libs/auth/session';
 import { db } from '@/libs/DB';
 import { CATALOG_PRESETS, getBuiltinProvider, listBuiltinProviders } from '@/libs/plugins';
-import { sealSecret, vaultConfigured } from '@/libs/vault';
+import { MAX_KEYS, parseKeys } from '@/libs/plugins/kie';
+import { openSecret, sealSecret, vaultConfigured } from '@/libs/vault';
 import { credentials, pluginCatalog } from '@/models/Schema';
 
 export const dynamic = 'force-dynamic';
@@ -50,6 +51,24 @@ async function requireAdmin() {
   return user?.isAdmin ? user : null;
 }
 
+/**
+ * Multi-key providers (Kie.ai) accept up to 20 keys, one per line — the adapter
+ * round-robins and fails over. Everything else takes exactly one credential.
+ */
+function validateKeys(value: string, multiKey: boolean): string | null {
+  const count = parseKeys(value).length;
+  if (count === 0) {
+    return 'The credential is empty.';
+  }
+  if (!multiKey && count > 1) {
+    return 'This plugin takes a single credential.';
+  }
+  if (count > MAX_KEYS) {
+    return `Up to ${MAX_KEYS} keys, one per line.`;
+  }
+  return null;
+}
+
 export async function GET() {
   if (!(await requireAdmin())) {
     return NextResponse.json({ error: 'Platform admin only.' }, { status: 403 });
@@ -74,8 +93,31 @@ export async function GET() {
     .from(pluginCatalog)
     .orderBy(desc(pluginCatalog.createdAt));
 
+  // How many keys are stored (multi-key providers like Kie.ai) — the VALUES are
+  // never returned, only the count, so the admin can see "4 keys in rotation".
+  const credIds = rows.map(r => r.credentialId).filter((v): v is string => Boolean(v));
+  const keyCounts = new Map<string, number>();
+  if (credIds.length > 0) {
+    const creds = await db
+      .select({ id: credentials.id, cipher: credentials.cipher })
+      .from(credentials)
+      .where(inArray(credentials.id, credIds));
+    for (const c of creds) {
+      try {
+        keyCounts.set(c.id, parseKeys(openSecret(c.cipher)).length);
+      } catch {
+        keyCounts.set(c.id, 0);
+      }
+    }
+  }
+
   return NextResponse.json({
-    catalog: rows.map(r => ({ ...r, hasCredential: Boolean(r.credentialId), credentialId: undefined })),
+    catalog: rows.map(r => ({
+      ...r,
+      hasCredential: Boolean(r.credentialId),
+      keyCount: r.credentialId ? (keyCounts.get(r.credentialId) ?? 0) : 0,
+      credentialId: undefined,
+    })),
     builtinProviders: listBuiltinProviders(),
     presets: CATALOG_PRESETS,
     vaultConfigured: vaultConfigured(),
@@ -110,9 +152,8 @@ export async function POST(request: Request) {
 
   // Per-connection providers (WordPress) never have a platform key — each
   // workspace supplies its own site + credential when they enable it.
-  const perConnection = body.transport === 'builtin' && body.provider
-    ? Boolean(getBuiltinProvider(body.provider)?.perConnection)
-    : false;
+  const bp = body.transport === 'builtin' && body.provider ? getBuiltinProvider(body.provider) : undefined;
+  const perConnection = Boolean(bp?.perConnection);
 
   // Tier 1 holds OUR credential — sealed in the vault (tenantId NULL =
   // platform-level, shared by every workspace that enables the plugin).
@@ -120,6 +161,10 @@ export async function POST(request: Request) {
   if (body.tier === 'tier1' && !perConnection) {
     if (!body.credentialValue) {
       return NextResponse.json({ error: 'Tier 1 plugins need the platform credential (your API key).' }, { status: 400 });
+    }
+    const keyErr = validateKeys(body.credentialValue, Boolean(bp?.multiKey));
+    if (keyErr) {
+      return NextResponse.json({ error: keyErr }, { status: 400 });
     }
     if (!vaultConfigured()) {
       return NextResponse.json({ error: 'VAULT_MASTER_KEY is not configured.' }, { status: 500 });
@@ -213,6 +258,11 @@ export async function PATCH(request: Request) {
   // the entry didn't have one (e.g. it was tier2 and is now tier1).
   let credentialId = entry.credentialId;
   if (body.credentialValue) {
+    const bp = transport === 'builtin' && provider ? getBuiltinProvider(provider) : undefined;
+    const keyErr = validateKeys(body.credentialValue, Boolean(bp?.multiKey));
+    if (keyErr) {
+      return NextResponse.json({ error: keyErr }, { status: 400 });
+    }
     if (!vaultConfigured()) {
       return NextResponse.json({ error: 'VAULT_MASTER_KEY is not configured.' }, { status: 500 });
     }

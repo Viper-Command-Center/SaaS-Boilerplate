@@ -25,6 +25,8 @@ export function listBuiltinProviders() {
     description: p.description,
     credentialLabel: p.credentialLabel,
     perConnection: Boolean(p.perConnection),
+    multiKey: Boolean(p.multiKey),
+    usageMetering: p.usageMetering ?? null,
     tools: p.tools.map(t => ({
       name: t.name,
       description: t.description,

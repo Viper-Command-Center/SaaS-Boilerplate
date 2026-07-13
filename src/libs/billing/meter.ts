@@ -83,20 +83,30 @@ export async function meterLlm(a: {
 
 /**
  * Price rule for a tier-1 plugin tool:
- *   { unit: 'call', costUsd: 0.002, markup?: 2 }              → per call
- *   { unit: 'arg', argField: 'seconds', costUsd: 0.05 }       → cost × arg value
+ *   { unit: 'call',  costUsd: 0.002 }                       → per call
+ *   { unit: 'arg',   argField: 'seconds', costUsd: 0.05 }   → cost × arg value
+ *   { unit: 'usage', costUsd: 0.005 }                       → cost × units the
+ *       PROVIDER reports it actually consumed (Kie.ai returns `creditsConsumed`
+ *       on every task, at a flat $0.005/credit). This is exact for all 368+ Kie
+ *       models — image, video, music, chat — and never goes stale when they add
+ *       a model or change a price. No price table to maintain.
  */
 export type PriceRule = {
-  unit: 'call' | 'arg';
+  unit: 'call' | 'arg' | 'usage';
   argField?: string;
   costUsd: number;
   markup?: number;
 };
 
-export function pluginCostUsd(rule: PriceRule, args: Record<string, unknown>): {
-  cost: number;
-  quantity: number;
-} {
+export function pluginCostUsd(
+  rule: PriceRule,
+  args: Record<string, unknown>,
+  reportedUnits?: number,
+): { cost: number; quantity: number } {
+  if (rule.unit === 'usage') {
+    const q = Math.max(Number(reportedUnits) || 0, 0);
+    return { cost: rule.costUsd * q, quantity: q };
+  }
   if (rule.unit === 'arg' && rule.argField) {
     const q = Math.max(Number(args[rule.argField]) || 0, 0);
     return { cost: rule.costUsd * q, quantity: q };
@@ -111,9 +121,11 @@ export async function meterPlugin(a: {
   tool: string;
   rule: PriceRule;
   args: Record<string, unknown>;
+  /** Units the provider says it consumed (e.g. Kie credits). */
+  reportedUnits?: number;
 }): Promise<void> {
   try {
-    const { cost, quantity } = pluginCostUsd(a.rule, a.args);
+    const { cost, quantity } = pluginCostUsd(a.rule, a.args, a.reportedUnits);
     const markup = a.rule.markup ?? DEFAULT_MARKUP;
     await db.insert(usageEvents).values({
       tenantId: a.tenantId,

@@ -8,6 +8,7 @@
 import type { AnthropicTool } from '@/libs/mcp/registry';
 import { and, asc, desc, eq } from 'drizzle-orm';
 import { db } from '@/libs/DB';
+import { getFile, listFiles, saveFile } from '@/libs/storage/files';
 import { dashboardPanels, datasets, scheduledTasks } from '@/models/Schema';
 
 export type PlatformExecutor = {
@@ -130,6 +131,37 @@ export function buildPlatformTools(tenantId: string): {
           limit: { type: 'number' },
         },
         required: ['key'],
+      },
+    },
+    {
+      name: 'list_files',
+      description: 'List this workspace\'s file library: documents the client uploaded (briefs, brand guides, requirement lists) and media you generated. ALWAYS check this before starting a substantial piece of work — the instructions you need are often already here rather than in the chat.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          kind: { type: 'string', description: 'Filter: knowledge | asset | note' },
+        },
+      },
+    },
+    {
+      name: 'read_file',
+      description: 'Read the text of a file in the library by id (from list_files). Use this for uploaded briefs and requirement docs instead of asking the user to paste them. Binary files (images, video) have no text — use their URL instead.',
+      input_schema: {
+        type: 'object',
+        properties: { fileId: { type: 'string' } },
+        required: ['fileId'],
+      },
+    },
+    {
+      name: 'save_note',
+      description: 'Save a text document into the workspace library (a plan, a draft, research notes, a generated report) so it persists across conversations and the client can open it.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: 'Filename, e.g. "wordpress-migration-plan.md"' },
+          content: { type: 'string' },
+        },
+        required: ['name', 'content'],
       },
     },
   ];
@@ -309,6 +341,69 @@ export function buildPlatformTools(tenantId: string): {
         .orderBy(desc(datasets.capturedAt))
         .limit(limit);
       return JSON.stringify(rows).slice(0, 20_000);
+    },
+  });
+
+  // ── File library ───────────────────────────────────────────────────────────
+  executors.set('list_files', {
+    policy: 'auto',
+    call: async (args) => {
+      const rows = await listFiles(tenantId, 200);
+      const kind = args.kind ? String(args.kind) : null;
+      const filtered = kind ? rows.filter(r => r.kind === kind) : rows;
+      if (filtered.length === 0) {
+        return 'The workspace file library is empty. The client can upload briefs and documents on the Files page.';
+      }
+      return JSON.stringify(filtered.map(f => ({
+        id: f.id,
+        name: f.name,
+        kind: f.kind,
+        mime: f.mime,
+        sizeKb: Math.round(f.sizeBytes / 1024),
+        readable: Boolean(f.hasText),
+        url: f.publicUrl,
+        source: f.source,
+        createdAt: f.createdAt,
+      }))).slice(0, 20_000);
+    },
+  });
+
+  executors.set('read_file', {
+    policy: 'auto',
+    call: async (args) => {
+      const row = await getFile(tenantId, String(args.fileId ?? ''));
+      if (!row) {
+        throw new Error('File not found in this workspace.');
+      }
+      if (!row.textContent) {
+        return JSON.stringify({
+          name: row.name,
+          mime: row.mime,
+          url: row.publicUrl,
+          note: 'This file has no extractable text (it is media or an unsupported format). Use its URL.',
+        });
+      }
+      // Untrusted content: the loop already wraps tool output, and the system
+      // prompt forbids following instructions found inside it. A client brief
+      // is a REQUEST, not a command chain — plan from it, don't blindly execute.
+      return row.textContent.slice(0, 60_000);
+    },
+  });
+
+  executors.set('save_note', {
+    policy: 'auto',
+    call: async (args) => {
+      const name = String(args.name ?? 'note.md').slice(0, 120);
+      const content = String(args.content ?? '');
+      const row = await saveFile({
+        tenantId,
+        name: name.includes('.') ? name : `${name}.md`,
+        bytes: Buffer.from(content, 'utf8'),
+        mime: 'text/markdown',
+        kind: 'note',
+        source: 'agent',
+      });
+      return `Saved "${row?.name}" to the workspace library (id ${row?.id}).`;
     },
   });
 

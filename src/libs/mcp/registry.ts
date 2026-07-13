@@ -10,6 +10,7 @@ import { meterPlugin } from '@/libs/billing/meter';
 import { db } from '@/libs/DB';
 import { McpHttpClient } from '@/libs/mcp/client';
 import { getBuiltinProvider } from '@/libs/plugins';
+import { archiveGeneratedAssets } from '@/libs/storage/files';
 import { openSecret } from '@/libs/vault';
 import { credentials, mcpConnections, pluginCatalog } from '@/models/Schema';
 
@@ -139,8 +140,12 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
             toolName: tool.name,
             policy: policyMap[tool.name] ?? 'approval',
             call: async (args) => {
-              const output = await provider.call(tool.name, args, apiKey, target);
+              const raw = await provider.call(tool.name, args, apiKey, target);
+              const result = typeof raw === 'string' ? { output: raw } : raw;
+
               // Meter AFTER a successful call (failed jobs aren't charged).
+              // `units` = what the provider says it actually consumed (Kie.ai
+              // returns creditsConsumed), so usage-priced plugins bill exactly.
               const rule = rules[tool.name];
               if (rule) {
                 await meterPlugin({
@@ -149,9 +154,27 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
                   tool: tool.name,
                   rule,
                   args,
+                  reportedUnits: result.units,
                 });
               }
-              return output;
+
+              // Generated media expires at the provider (Kie.ai: 14 days) —
+              // archive it into the workspace library so published links live.
+              if (result.assetUrls?.length) {
+                const saved = await archiveGeneratedAssets({
+                  tenantId,
+                  urls: result.assetUrls,
+                  source: entry.slug,
+                  meta: { tool: tool.name, args },
+                }).catch(() => []);
+                if (saved.length > 0) {
+                  return `${result.output}\n\nArchived to the workspace file library (permanent links — use these, not the provider URLs):\n${
+                    saved.map(s => `- ${s.name}: ${s.url ?? `/api/files/${s.id}/content`}`).join('\n')
+                  }`;
+                }
+              }
+
+              return result.output;
             },
           });
         }

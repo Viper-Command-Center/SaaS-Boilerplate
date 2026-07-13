@@ -10,6 +10,7 @@ type Ws = { id: string; name: string; slug: string; role: string };
 const PATHS: Record<string, string> = {
   home: 'M3 10.5 12 3l9 7.5M5.5 9.5V20h13V9.5',
   admin: 'M12 3l7.5 3.5v5c0 4.5-3.2 8.4-7.5 9.5-4.3-1.1-7.5-5-7.5-9.5v-5L12 3z',
+  files: 'M6 3.5h7l5 5V20a.5.5 0 01-.5.5h-11A.5.5 0 016 20V4a.5.5 0 010-.5zM13 3.5V9h5',
   account: 'M12 12a4 4 0 100-8 4 4 0 000 8zM4.5 20a7.5 7.5 0 0115 0',
   help: 'M12 21a9 9 0 100-18 9 9 0 000 18zM9.5 9a2.5 2.5 0 114 2c-.9.7-1.5 1.2-1.5 2.5M12 17h.01',
 };
@@ -42,6 +43,7 @@ export const Sidebar = (props: {
 
   const nav = [
     { href: active ? `/dashboard?t=${active.slug}` : '/dashboard', label: 'Workspace', icon: 'home', match: /\/dashboard$/ },
+    { href: active ? `/dashboard/files?t=${active.slug}` : '/dashboard/files', label: 'Files', icon: 'files', match: /\/dashboard\/files/ },
     ...(props.isAdmin ? [{ href: '/dashboard/admin', label: 'Platform', icon: 'admin', match: /\/dashboard\/admin/ }] : []),
     { href: '/dashboard/settings', label: 'Account', icon: 'account', match: /\/dashboard\/settings/ },
     { href: '/dashboard/help', label: 'Help', icon: 'help', match: /\/dashboard\/help/ },
