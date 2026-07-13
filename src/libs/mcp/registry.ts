@@ -4,11 +4,14 @@
  * so the model's tool_use maps back to the right server.
  */
 
+import type { PriceRule } from '@/libs/billing/meter';
 import { and, eq, inArray } from 'drizzle-orm';
+import { meterPlugin } from '@/libs/billing/meter';
 import { db } from '@/libs/DB';
 import { McpHttpClient } from '@/libs/mcp/client';
+import { getBuiltinProvider } from '@/libs/plugins';
 import { openSecret } from '@/libs/vault';
-import { credentials, mcpConnections } from '@/models/Schema';
+import { credentials, mcpConnections, pluginCatalog } from '@/models/Schema';
 
 export type ToolPolicy = 'auto' | 'approval' | 'deny';
 
@@ -79,8 +82,69 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
   }>();
 
   for (const conn of connections) {
+    // ── Built-in (tier-1) provider: in-app adapter, platform credential,
+    // metered on every call so the workspace is billed exactly. ──
+    if (conn.transport === 'builtin') {
+      try {
+        const [entry] = conn.catalogId
+          ? await db.select().from(pluginCatalog).where(eq(pluginCatalog.id, conn.catalogId)).limit(1)
+          : [undefined];
+        const provider = entry?.provider ? getBuiltinProvider(entry.provider) : undefined;
+        if (!entry || !provider || !entry.enabled) {
+          failedConnections.push(`${conn.name} (plugin unavailable)`);
+          continue;
+        }
+
+        // Platform credential (tenantId NULL) sealed in the vault.
+        const [cred] = entry.credentialId
+          ? await db.select().from(credentials).where(eq(credentials.id, entry.credentialId)).limit(1)
+          : [undefined];
+        if (!cred) {
+          failedConnections.push(`${conn.name} (no platform credential configured)`);
+          continue;
+        }
+        const apiKey = openSecret(cred.cipher);
+        const rules = (entry.priceRules ?? {}) as Record<string, PriceRule>;
+        const policyMap = (conn.toolPolicy ?? {}) as Record<string, ToolPolicy>;
+
+        for (const tool of provider.tools) {
+          const namespaced = `mcp__${sanitize(conn.name)}__${tool.name}`;
+          anthropicTools.push({
+            name: namespaced,
+            description: tool.description,
+            input_schema: tool.input_schema,
+          });
+          executors.set(namespaced, {
+            connectionId: conn.id,
+            connectionName: conn.name,
+            toolName: tool.name,
+            policy: policyMap[tool.name] ?? 'approval',
+            call: async (args) => {
+              const output = await provider.call(tool.name, args, apiKey);
+              // Meter AFTER a successful call (failed jobs aren't charged).
+              const rule = rules[tool.name];
+              if (rule) {
+                await meterPlugin({
+                  tenantId,
+                  slug: entry.slug,
+                  tool: tool.name,
+                  rule,
+                  args,
+                });
+              }
+              return output;
+            },
+          });
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'unavailable';
+        failedConnections.push(`${conn.name} (${msg.slice(0, 120)})`);
+      }
+      continue;
+    }
+
     if (conn.transport !== 'http' || !conn.url) {
-      failedConnections.push(`${conn.name} (stdio transport arrives with the Phase 4 worker)`);
+      failedConnections.push(`${conn.name} (unsupported transport — only hosted HTTP MCP servers and built-in plugins are supported)`);
       continue;
     }
     try {

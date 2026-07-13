@@ -133,6 +133,16 @@ Gotchas hit: (1) deploy.bat commits were silently rejected by lefthook/commitlin
 - **Dashboard revamp**: left sidebar shell (`features/shell/Sidebar.tsx` — brand, workspace switcher w/ gradient avatars, nav, sign-out; collapses on mobile) replaces the old top nav (DashboardHeader/MobileNavigation/SlashIcon DELETED). Dashboard = header + agent-built panels (rounded-2xl cards) + 2-col: chat (2/3) and side rail (approvals, tools).
 - **Chat revamp**: compact bubbles, brand-mark avatar, auto-growing composer (Enter sends, Shift+Enter newline), animated typing dots, `[tool]`/`[approval]` lines rendered as subtle status rows, empty-state with suggestion chips, inline **bold**/`code` rendering.
 
+## Phase 9 — built-in providers (Kie.ai) + plugin marketplace (2026-07-13, migration 0009)
+- **Built-in provider framework** (`src/libs/plugins/`): for services we RESELL that have NO hosted MCP (Kie.ai, later HeyGen). In-app adapter = we own the code, meter exactly in-process, no extra Railway service. Vendors WITH a hosted MCP still just get registered as an HTTP connection (zero code).
+- `kie.ts` — Kie.ai adapter. Their API is REST + ASYNC (POST /api/v1/jobs/createTask → poll /api/v1/jobs/recordInfo), so the adapter creates the job and polls (3s interval, 4-min ceiling) and hands the agent simple tools: `generate_image`, `generate_video` (metered per `duration_seconds`), `generate_music`, `kie_credits`. Base URL overridable via `KIE_BASE_URL`. NOTE: media is deleted by Kie.ai after 14 days.
+- Schema: `plugin_catalog.provider` (builtin slug) + `mcp_connections.catalogId` + transport `builtin`. Registry (`mcp/registry.ts`) resolves builtin connections → adapter + platform credential, and **meters every successful call** via `meterPlugin()` (failed jobs aren't charged).
+- **Pricing is now a TABLE, not JSON** (`features/admin/CatalogTab.tsx`): pick a built-in provider → its tools auto-populate rows → enter YOUR cost per call (or per metered arg, e.g. per video-second), set markup % (bulk-apply control), and the client's retail price computes live. Blank cost = unmetered/free. 0% markup = pass through at wholesale.
+- **Marketplace**: `GET/POST /api/plugins` + the Tools panel now shows "Available plugins" — Tier 1 enables with one click (uses the platform key; client never sees it), Tier 2 prompts the client for their own key. Clients see RETAIL prices only, never our cost.
+
+### RYAN — adding Kie.ai
+Admin → Plugin catalog → Add plugin → "Built-in provider" → Kie.ai → Tier 1 → paste a `KIE_API_KEY_*` value → fill the cost column from kie.ai/pricing → set markup → Save. It then appears in every workspace's Tools panel.
+
 ### NEXT GAPS (ranked, from the review)
 1. **Spend guardrails** — per-workspace daily $ cap + kill switch before any spending tool. Blocker for autonomous ads.
 2. Support inbox via email MCP (use case #9).

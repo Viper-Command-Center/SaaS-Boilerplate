@@ -162,8 +162,12 @@ export const mcpConnections = pgTable(
       .notNull()
       .references(() => tenants.id, { onDelete: 'cascade' }),
     name: varchar('name', { length: 80 }).notNull(), // used in tool namespace mcp__<name>__<tool>
-    transport: varchar('transport', { length: 10 }).notNull().default('http'), // http | stdio (stdio = Phase 4 worker)
+    // http = remote MCP server · builtin = in-app tier-1 adapter (Kie.ai etc.)
+    transport: varchar('transport', { length: 10 }).notNull().default('http'),
     url: text('url'), // http transport: the MCP endpoint
+    // When enabled from the plugin catalog, links back to the catalog entry
+    // (gives us the tier, the platform credential and the price rules).
+    catalogId: uuid('catalog_id'),
     // Header name → credential id; resolved+decrypted at call time and sent as
     // HTTP headers (e.g. { "Authorization": "<credId>" } where the credential
     // holds "Bearer sk_…"). Never stored plaintext.
@@ -356,6 +360,8 @@ export const pluginCatalog = pgTable(
     category: varchar('category', { length: 40 }), // media | seo | social | ads | analytics | dev | data
     tier: varchar('tier', { length: 10 }).notNull().default('tier2'), // tier1 | tier2
     transport: varchar('transport', { length: 12 }).notNull().default('http'), // http | builtin
+    // builtin transport: which in-app adapter powers it (e.g. 'kie-ai')
+    provider: varchar('provider', { length: 60 }),
     url: text('url'), // http: the MCP endpoint
     // tier2: which header the client's key goes in, e.g. "Authorization"
     authHeader: varchar('auth_header', { length: 80 }),

@@ -12,6 +12,19 @@ type Connection = {
   enabled: boolean;
 };
 
+type CatalogPlugin = {
+  id: string;
+  slug: string;
+  name: string;
+  description: string | null;
+  category: string | null;
+  tier: string;
+  authHint: string | null;
+  needsKey: boolean;
+  installed: boolean;
+  pricing: Array<{ tool: string; unit: string; retailUsd: number }>;
+};
+
 /**
  * Per-tenant MCP tool registry panel: list connections, toggle them, add new
  * servers. Credential values go straight to the encrypted vault server-side
@@ -28,6 +41,10 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  const [catalog, setCatalog] = useState<CatalogPlugin[]>([]);
+  const [keyFor, setKeyFor] = useState<string | null>(null);
+  const [keyValue, setKeyValue] = useState('');
+
   const reload = useCallback(() => {
     fetch(`/api/mcp/connections?tenant=${encodeURIComponent(props.tenantSlug)}`)
       .then(r => (r.ok ? r.json() : { connections: [] }))
@@ -36,7 +53,36 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
         setVaultOk(data.vaultConfigured !== false);
       })
       .catch(() => {});
+    fetch(`/api/plugins?tenant=${encodeURIComponent(props.tenantSlug)}`)
+      .then(r => (r.ok ? r.json() : { plugins: [] }))
+      .then(data => setCatalog(data.plugins ?? []))
+      .catch(() => {});
   }, [props.tenantSlug]);
+
+  const enablePlugin = async (plugin: CatalogPlugin) => {
+    if (plugin.needsKey && !keyValue.trim()) {
+      setKeyFor(plugin.id);
+      return;
+    }
+    setError(null);
+    const res = await fetch('/api/plugins', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        tenantSlug: props.tenantSlug,
+        pluginId: plugin.id,
+        credentialValue: plugin.needsKey ? keyValue.trim() : undefined,
+      }),
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) {
+      setError(data?.error ?? 'Could not enable.');
+      return;
+    }
+    setKeyFor(null);
+    setKeyValue('');
+    reload();
+  };
 
   useEffect(() => {
     reload();
@@ -143,10 +189,74 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
         </form>
       )}
 
+      {/* Marketplace — plugins the platform offers */}
+      {catalog.filter(p => !p.installed).length > 0 && (
+        <div className="border-b">
+          <p className="
+            px-4 pt-3 pb-1 text-[11px] font-semibold tracking-wider
+            text-muted-foreground uppercase
+          "
+          >
+            Available plugins
+          </p>
+          <div className="divide-y">
+            {catalog.filter(p => !p.installed).map(p => (
+              <div key={p.id} className="px-4 py-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-medium">{p.name}</span>
+                      {p.tier === 'tier1' && (
+                        <span className="
+                          rounded bg-indigo-100 px-1.5 py-0.5 text-[10px]
+                          text-indigo-700
+                        "
+                        >
+                          included · pay per use
+                        </span>
+                      )}
+                      {p.needsKey && (
+                        <span className="
+                          rounded bg-slate-100 px-1.5 py-0.5 text-[10px]
+                          text-slate-600
+                        "
+                        >
+                          needs your key
+                        </span>
+                      )}
+                    </div>
+                    {p.description && <p className="mt-0.5 text-xs text-muted-foreground">{p.description}</p>}
+                    {p.pricing.length > 0 && (
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {p.pricing.map(pr => `${pr.tool}: $${pr.retailUsd}/${pr.unit}`).join(' · ')}
+                      </p>
+                    )}
+                  </div>
+                  <Button size="sm" onClick={() => enablePlugin(p)}>Enable</Button>
+                </div>
+
+                {keyFor === p.id && (
+                  <div className="mt-2 flex gap-2">
+                    <input
+                      type="password"
+                      className={inputClass}
+                      placeholder={p.authHint ?? 'Your API key'}
+                      value={keyValue}
+                      onChange={e => setKeyValue(e.target.value)}
+                    />
+                    <Button size="sm" onClick={() => enablePlugin(p)}>Save</Button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="divide-y">
         {connections.length === 0 && (
           <p className="px-4 py-4 text-sm text-muted-foreground">
-            No tool servers yet. Add one and the agent picks it up on the next message.
+            No tools enabled yet. Enable a plugin above, or add any hosted MCP server.
           </p>
         )}
         {connections.map(conn => (
