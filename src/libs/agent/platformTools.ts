@@ -7,6 +7,7 @@
 
 import type { AnthropicTool } from '@/libs/mcp/registry';
 import { and, asc, desc, eq } from 'drizzle-orm';
+import { buildWebTools } from '@/libs/agent/webTools';
 import { db } from '@/libs/DB';
 import { getFile, listFiles, saveFile } from '@/libs/storage/files';
 import { dashboardPanels, datasets, scheduledTasks } from '@/models/Schema';
@@ -406,6 +407,13 @@ export function buildPlatformTools(tenantId: string): {
       return `Saved "${row?.name}" to the workspace library (id ${row?.id}).`;
     },
   });
+
+  // ── Web reading (fetch always; real browser when Browserless is configured) ─
+  const web = buildWebTools();
+  anthropicTools.push(...web.anthropicTools);
+  for (const [name, executor] of web.executors) {
+    executors.set(name, executor);
+  }
 
   return { anthropicTools, executors };
 }

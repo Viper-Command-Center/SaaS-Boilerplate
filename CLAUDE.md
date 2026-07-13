@@ -197,6 +197,15 @@ Admin → Plugin catalog → Add plugin → "Built-in provider" → Kie.ai → T
 - **Workspace delete**: `DELETE /api/tenants?slug=…&confirm=<slug>` (platform admin; slug must be echoed). Purges the workspace's R2 objects FIRST (no FK cascade reaches the bucket), then deletes the tenant — every child table cascades. "Danger zone" button in `WorkspacePanel`.
 - **Upload 403 for editors**: `/api/files` POST read the tenant slug from the multipart BODY, so a body that failed to parse (e.g. an oversized file) fell through to "you need editor access". Tenant now comes from the QUERY STRING and the role check runs BEFORE the body is read; body-parse and size failures have their own messages (and the client checks 25MB before sending).
 
+## Phase 13 — web reading (2026-07-13, no migration, no new deps)
+- **This was the honest gap**: `mcp-browser/` was deleted under the no-wrapper-services rule and the direct replacement was never built, so the agent could not read a web page at all.
+- `src/libs/agent/webTools.ts`, merged into `buildPlatformTools()` (policy `auto`, read-only):
+  - **`fetch_url`** — plain fetch + HTML→text. ALWAYS available, free, no JS. Handles most blogs/docs/APIs/competitor copy.
+  - **`browse_page`** / **`scrape_page`** — real browser via **self-hosted Browserless REST** (`/content`, `/scrape`). Registered ONLY when `BROWSERLESS_URL` is set, so the platform runs fine without it.
+- Architecture decision #4 honoured: Browserless is its OWN Railway service (it's a browser binary); the app calls its REST API directly — no MCP wrapper service.
+- **SSRF guard** (`assertPublicUrl`): http(s) only; blocks localhost, `.internal`/`.local` (Railway private network!), 10./127./0./169.254./192.168./172.16-31. The agent picks these URLs — sometimes from untrusted page content — while sitting next to Postgres and the browser service on the private network.
+- **Ryan's setup**: Railway → New Service → Docker image `ghcr.io/browserless/chromium` → variables `TOKEN=<random>`, `CONCURRENT=3`, `TIMEOUT=60000`; keep it PRIVATE (no public domain). Then on SaaS-Boilerplate: `BROWSERLESS_URL=http://<service>.railway.internal:3000`, `BROWSERLESS_TOKEN=<same random>` → redeploy. Premium scrapers (Firecrawl/Browserbase) remain per-workspace MCP add-ons for datacenter-IP-blocked sites.
+
 ## Gotchas
 - **Migration 0010 was hand-written** (SQL + `_journal.json`), because bash reads of the mounted repo are stale/truncated so drizzle-kit can't see the real `Schema.ts`. The SQL is idempotent (`IF NOT EXISTS` + `DO $$ … EXCEPTION WHEN duplicate_object`). If drizzle-kit ever regenerates from the last snapshot it may re-emit `files` — harmless, but delete the dupe.
 - **Bash cannot read mounted files reliably** (virtiofs returns NUL-padded or truncated content — `Schema.ts` read as 1KB when it's 15KB). Never typecheck/build/patch from bash on the mount; use Read/Grep/Edit/Write tools.

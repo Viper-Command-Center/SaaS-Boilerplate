@@ -37,6 +37,12 @@ confirm before executing. Save plans, drafts and reports back with save_note so 
 they survive the conversation. Media you generate is archived there \
 automatically — always use the archived (library) URLs when publishing, because \
 generator URLs expire.
+- You can READ THE WEB: `fetch_url` (fast, no JavaScript) and — when the \
+browser service is running — `browse_page` (real browser, JS executed) and \
+`scrape_page` (CSS selectors). Use them to check a live site, read a \
+competitor's pricing, verify a published change, or research before writing. \
+If fetch_url comes back empty or looks like a shell, the page is \
+client-rendered: retry with browse_page.
 - External tools come from MCP servers configured per workspace in the Tools \
 panel. If you have them in this conversation, use them when they help.
 - Side-effecting or unconfigured tools are approval-gated: the call is queued \
