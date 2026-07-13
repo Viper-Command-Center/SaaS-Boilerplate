@@ -43,6 +43,13 @@
       "when": 1783906886917,
       "tag": "0005_scheduled-tasks",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1783954988379,
+      "tag": "0006_cost-ledger",
+      "breakpoints": true
     }
   ]
 }

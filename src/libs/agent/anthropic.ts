@@ -15,6 +15,16 @@ export type BlockMessage = { role: 'user' | 'assistant'; content: unknown };
 export type RawModelResponse = {
   content: Array<{ type: string; text?: string; id?: string; name?: string; input?: Record<string, unknown> }>;
   stop_reason: string;
+  // Exact token counts, returned in-band by both Bedrock and Anthropic — this
+  // is what the cost ledger meters (no need to scrape AWS bills).
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    cache_read_input_tokens?: number;
+    cache_creation_input_tokens?: number;
+  };
+  /** Which model actually served the call (for the ledger). */
+  _modelId?: string;
 };
 
 const BEDROCK_MODEL = process.env.BEDROCK_MODEL_ID || 'us.anthropic.claude-sonnet-4-6';
@@ -154,7 +164,9 @@ export async function callClaudeWithTools(a: {
       const detail = (await resp.text().catch(() => '')).slice(0, 300);
       throw new Error(`Bedrock ${resp.status}: ${detail}`);
     }
-    return await resp.json() as RawModelResponse;
+    const data = await resp.json() as RawModelResponse;
+    data._modelId = BEDROCK_MODEL;
+    return data;
   }
 
   if (wantsAnthropic) {
@@ -178,7 +190,9 @@ export async function callClaudeWithTools(a: {
       const detail = (await resp.text().catch(() => '')).slice(0, 300);
       throw new Error(`Anthropic ${resp.status}: ${detail}`);
     }
-    return await resp.json() as RawModelResponse;
+    const data = await resp.json() as RawModelResponse;
+    data._modelId = ANTHROPIC_MODEL;
+    return data;
   }
 
   throw new Error(

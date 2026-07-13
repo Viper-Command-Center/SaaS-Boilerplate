@@ -12,6 +12,7 @@
 import type { BlockMessage, ChatMessage } from '@/libs/agent/anthropic';
 import type { TenantToolset } from '@/libs/mcp/registry';
 import { callClaudeWithTools } from '@/libs/agent/anthropic';
+import { checkSpend, meterLlm } from '@/libs/billing/meter';
 import { db } from '@/libs/DB';
 import { approvals, auditLog } from '@/models/Schema';
 
@@ -35,11 +36,35 @@ export async function runToolLoop(a: {
   let finalText = '';
 
   for (let i = 0; i < MAX_ITERATIONS; i++) {
+    // Guardrail: kill switch + daily cost cap, re-checked every iteration so a
+    // long tool loop can't blow through the cap mid-turn.
+    const spend = await checkSpend(a.tenantId);
+    if (!spend.allowed) {
+      const msg = `\n\n[stopped] ${spend.reason}`;
+      a.onDelta(msg);
+      finalText += msg;
+      break;
+    }
+
     const response = await callClaudeWithTools({
       system: a.system,
       messages,
       tools: a.toolset.anthropicTools,
     });
+
+    // Meter the exact tokens this call used (returned in-band by the provider).
+    if (response.usage) {
+      await meterLlm({
+        tenantId: a.tenantId,
+        modelId: response._modelId ?? 'unknown',
+        usage: {
+          inputTokens: response.usage.input_tokens ?? 0,
+          outputTokens: response.usage.output_tokens ?? 0,
+          cacheReadTokens: response.usage.cache_read_input_tokens ?? 0,
+        },
+        detail: a.conversationId ? 'chat' : 'scheduled',
+      });
+    }
 
     const textBlocks = response.content.filter(b => b.type === 'text');
     for (const block of textBlocks) {

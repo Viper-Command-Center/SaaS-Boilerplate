@@ -97,6 +97,25 @@ Gotchas hit: (1) deploy.bat commits were silently rejected by lefthook/commitlin
 - **SECURITY (2026 standard)**: untrusted-content framing. Tool results are wrapped in `<tool_output trust="untrusted">` + the system prompt forbids following instructions found in tool output (prompt-injection defense at the data boundary — the #1 risk in 2026 MCP guidance). See `docs/COMPETITIVE_REVIEW_2026.md`.
 - **`docs/COMPETITIVE_REVIEW_2026.md`** — market comparison (Braze/Iterable/Klaviyo/Agentforce/Tofu/1ClickReport/AI agencies), standards scorecard vs 2026 MCP+NSA/CSA guidance, gap list. Conclusion: positioning is differentiated (nobody else is a tool-agnostic multi-tenant agent host); every original brief item is addressed.
 
+## ARCHITECTURE DECISIONS (2026-07-13, Ryan + Claude — do not undo)
+1. **HTTP Streamable MCP only.** No stdio support, ever. stdio's value (local files/browser) is meaningless server-side, and spawning third-party npm processes next to client credentials is the #1 supply-chain risk in 2026 MCP guidance.
+2. **No wrapper services for stdio-only servers** — adds cost + instability. `mcp-sites/` and `mcp-browser/` were DELETED for this reason.
+3. **Two ways to add capability:** (a) vendor has a hosted MCP → register it in the registry, zero code; (b) we resell it (tier 1) → thin adapter IN-APP as a platform tool (no separate service), so metering/billing is exact and in-process.
+4. Browserless is the one exception that must be its own service (it's a browser binary) — the app calls it directly, no MCP wrapper.
+5. Next real MCP gap = **OAuth for remote servers** (not stdio) — that's where the commercial ecosystem is going.
+
+## Phase 6 — cost ledger + guardrails + admin console (built 2026-07-13, pending push+verify)
+- Schema (migration `0006_cost-ledger`): `usage_events` (kind llm|plugin, tokens, costUsd = what WE pay, billedUsd = what client pays), `plugin_catalog` (tier1 = our key + priceRules metering; tier2 = BYO key), tenants gain `planName`/`monthlyBudgetUsd`/`dailyCapUsd`/`paused`. **`credentials.tenantId` is now NULLABLE** = platform-level (tier-1) credential shared across workspaces.
+- `src/libs/billing/meter.ts` — MODEL_PRICES table (sonnet/haiku/opus per 1M tokens), `meterLlm()` (exact tokens from the provider response — Bedrock returns them in-band, no AWS bill scraping), `meterPlugin()` (price rules: per-call or per-arg e.g. video seconds), `checkSpend()` (kill switch + daily cap). `BILLING_MARKUP` env (default 1.5).
+- Tool loop: `checkSpend()` runs BEFORE every iteration (so a long loop can't blow the cap mid-turn) and `meterLlm()` after every model call. Blocked turns emit "[stopped] …".
+- APIs: `/api/admin/overview` (GET all workspaces w/ cost/billed/margin/today-vs-cap; PATCH plan, caps, pause), `/api/admin/users` (GET all + memberships; PATCH isAdmin/disable), `/api/admin/catalog` (CRUD; tier-1 credential sealed into vault), `/api/usage?tenant=` (client's own spend view).
+- UI: `/dashboard/admin` (platform admin only, nav link auto-shown) — totals (revenue/cost/margin MTD), workspaces table w/ editable daily cap + Pause-agent switch, users tab, plugin catalog tab w/ Tier 1 price-rules JSON.
+
+### RYAN — Phase 6 notes
+- Optional env: `BILLING_MARKUP` (default 1.5 = 50% markup on raw AI/plugin cost).
+- Defaults per new workspace: $50/mo budget, **$10/day hard cap**, not paused. Raise caps in the admin console per client.
+- Economics sanity check: Sonnet ≈ $3/M in, $15/M out. Even a heavy workspace lands in the low hundreds/month → a $3k/mo client is high-margin. Real cost risks = media generation + runaway loops, both now capped.
+
 ### NEXT GAPS (ranked, from the review)
 1. **Spend guardrails** — per-workspace daily $ cap + kill switch before any spending tool. Blocker for autonomous ads.
 2. Support inbox via email MCP (use case #9).

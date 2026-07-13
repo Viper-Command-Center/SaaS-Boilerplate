@@ -1,4 +1,4 @@
-import { boolean, index, integer, jsonb, pgTable, serial, text, timestamp, uniqueIndex, uuid, varchar } from 'drizzle-orm/pg-core';
+import { boolean, index, integer, jsonb, numeric, pgTable, serial, text, timestamp, uniqueIndex, uuid, varchar } from 'drizzle-orm/pg-core';
 
 // This file defines the structure of your database tables using the Drizzle ORM.
 // To modify the database schema:
@@ -63,7 +63,15 @@ export const tenants = pgTable(
     slug: varchar('slug', { length: 80 }).notNull(), // used in URLs: /t/true-therapy
     vertical: varchar('vertical', { length: 40 }), // health | finance | ecommerce…
     brandVoice: jsonb('brand_voice'),
-    settings: jsonb('settings'), // guardrails, intensity, spend caps…
+    settings: jsonb('settings'), // guardrails, intensity…
+    // ── Billing & guardrails (Phase 6) ──
+    planName: varchar('plan_name', { length: 40 }).notNull().default('trial'),
+    // Monthly allowance the client's plan includes (what we bill them against).
+    monthlyBudgetUsd: numeric('monthly_budget_usd', { precision: 10, scale: 2 }).notNull().default('50'),
+    // Hard daily ceiling on OUR cost. Nothing runs past it, ever.
+    dailyCapUsd: numeric('daily_cap_usd', { precision: 10, scale: 2 }).notNull().default('10'),
+    // Kill switch — when true the agent refuses to run for this workspace.
+    paused: boolean('paused').notNull().default(false),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   t => [uniqueIndex('tenants_slug_uq').on(t.slug)],
@@ -99,9 +107,9 @@ export const credentials = pgTable(
   'credentials',
   {
     id: uuid('id').primaryKey().defaultRandom(),
-    tenantId: uuid('tenant_id')
-      .notNull()
-      .references(() => tenants.id, { onDelete: 'cascade' }),
+    // NULL = a platform-level credential (tier-1 plugin key owned by us and
+    // reused across workspaces). Non-null = that workspace's own credential.
+    tenantId: uuid('tenant_id').references(() => tenants.id, { onDelete: 'cascade' }),
     provider: varchar('provider', { length: 80 }).notNull(), // dataforseo | zernio | shopify | custom…
     label: varchar('label', { length: 120 }),
     cipher: text('cipher').notNull(), // vault-sealed, never plaintext
@@ -266,6 +274,66 @@ export const scheduledTasks = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   t => [index('scheduled_tasks_due_idx').on(t.enabled, t.nextRunAt)],
+);
+
+// ─── Phase 6: cost ledger, plans/caps, plugin catalog ────────────────────────
+// Every LLM call and every metered plugin call writes a usage_events row with
+// the real underlying cost (costUsd) and what we charge (billedUsd = cost ×
+// markup). That gives real-time margin per workspace and makes hard caps
+// enforceable before the next call.
+
+export const usageEvents = pgTable(
+  'usage_events',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+    kind: varchar('kind', { length: 20 }).notNull(), // llm | plugin
+    // llm: model id · plugin: catalog slug (e.g. kie-ai)
+    source: varchar('source', { length: 120 }).notNull(),
+    detail: varchar('detail', { length: 160 }), // tool name, operation…
+    inputTokens: integer('input_tokens').notNull().default(0),
+    outputTokens: integer('output_tokens').notNull().default(0),
+    cacheReadTokens: integer('cache_read_tokens').notNull().default(0),
+    quantity: numeric('quantity', { precision: 12, scale: 4 }), // plugin units (calls, seconds…)
+    costUsd: numeric('cost_usd', { precision: 12, scale: 6 }).notNull().default('0'), // what WE pay
+    billedUsd: numeric('billed_usd', { precision: 12, scale: 6 }).notNull().default('0'), // what the client is charged
+    at: timestamp('at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  t => [index('usage_events_tenant_at_idx').on(t.tenantId, t.at)],
+);
+
+/**
+ * Catalog of connectable capabilities, managed by the platform admin.
+ *  tier1 = platform-provided: OUR credential, metered + billed (priceRules).
+ *  tier2 = bring-your-own-key: client pastes their credential, not metered.
+ * A catalog entry is just a template — enabling it for a workspace creates a
+ * normal mcp_connection (or, for in-app adapters, flips a provider on).
+ */
+export const pluginCatalog = pgTable(
+  'plugin_catalog',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    slug: varchar('slug', { length: 80 }).notNull(),
+    name: text('name').notNull(),
+    description: text('description'),
+    category: varchar('category', { length: 40 }), // media | seo | social | ads | analytics | dev | data
+    tier: varchar('tier', { length: 10 }).notNull().default('tier2'), // tier1 | tier2
+    transport: varchar('transport', { length: 12 }).notNull().default('http'), // http | builtin
+    url: text('url'), // http: the MCP endpoint
+    // tier2: which header the client's key goes in, e.g. "Authorization"
+    authHeader: varchar('auth_header', { length: 80 }),
+    authHint: text('auth_hint'), // "Bearer sk_…" / where to get the key
+    // tier1: platform credential (vault) used for every workspace
+    credentialId: uuid('credential_id'),
+    // tier1 metering: { "<tool>": { unit: 'call'|'arg', argField?: string,
+    //                   costUsd: number, markup: number } }
+    priceRules: jsonb('price_rules'),
+    enabled: boolean('enabled').notNull().default(true),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  t => [uniqueIndex('plugin_catalog_slug_uq').on(t.slug)],
 );
 
 // ─── Boilerplate demo table (kept because migration 0000 already created it) ─
