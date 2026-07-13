@@ -182,6 +182,83 @@ export function publicUrlFor(key: string): string | null {
   return `${cfg.publicUrl}/${encodeKey(key)}`;
 }
 
+/**
+ * Presigned PUT URL — the browser uploads DIRECTLY to R2 with it.
+ *
+ * Why: a 2GB HeyGen render should not be streamed through the Next.js server on
+ * Railway (memory, request timeouts, bandwidth). With this, the app only ever
+ * handles the metadata; Cloudflare handles the bytes.
+ *
+ * Query-string SigV4 with UNSIGNED-PAYLOAD, signing only the `host` header, so
+ * the browser is free to send Content-Type and friends without breaking the
+ * signature. Requires PUT in the bucket's CORS policy.
+ */
+export function presignPutUrl(key: string, expiresSeconds = 900): string {
+  const cfg = r2Config();
+  if (!cfg) {
+    throw new Error('Storage is not configured.');
+  }
+
+  const url = new URL(`${cfg.endpoint}/${cfg.bucket}/${encodeKey(key)}`);
+  const now = new Date();
+  const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, '');
+  const dateStamp = amzDate.slice(0, 8);
+  const scope = `${dateStamp}/${REGION}/${SERVICE}/aws4_request`;
+
+  const query = new URLSearchParams({
+    'X-Amz-Algorithm': 'AWS4-HMAC-SHA256',
+    'X-Amz-Credential': `${cfg.accessKeyId}/${scope}`,
+    'X-Amz-Date': amzDate,
+    'X-Amz-Expires': String(Math.min(Math.max(expiresSeconds, 60), 60 * 60 * 12)),
+    'X-Amz-SignedHeaders': 'host',
+  });
+  // S3 requires the canonical query string to be sorted by key.
+  const canonicalQuery = [...query.entries()]
+    .sort(([a], [b]) => (a < b ? -1 : 1))
+    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+    .join('&');
+
+  const canonicalRequest = [
+    'PUT',
+    url.pathname,
+    canonicalQuery,
+    `host:${url.host}\n`,
+    'host',
+    'UNSIGNED-PAYLOAD',
+  ].join('\n');
+
+  const stringToSign = [
+    'AWS4-HMAC-SHA256',
+    amzDate,
+    scope,
+    sha256(canonicalRequest),
+  ].join('\n');
+
+  const kDate = hmac(`AWS4${cfg.secretAccessKey}`, dateStamp);
+  const kRegion = hmac(kDate, REGION);
+  const kService = hmac(kRegion, SERVICE);
+  const kSigning = hmac(kService, 'aws4_request');
+  const signature = createHmac('sha256', kSigning).update(stringToSign).digest('hex');
+
+  return `${url.origin}${url.pathname}?${canonicalQuery}&X-Amz-Signature=${signature}`;
+}
+
+/** Confirm an object landed, and how big it actually is. */
+export async function headObject(key: string): Promise<{ size: number; contentType: string } | null> {
+  const cfg = r2Config();
+  if (!cfg) {
+    return null;
+  }
+  const resp = await signedFetch(cfg, 'HEAD', key);
+  if (!resp.ok) {
+    return null;
+  }
+  return {
+    size: Number(resp.headers.get('content-length') ?? 0),
+    contentType: resp.headers.get('content-type') ?? 'application/octet-stream',
+  };
+}
+
 /** Pull a remote URL (e.g. Kie.ai output) straight into R2. */
 export async function archiveRemote(
   url: string,

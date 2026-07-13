@@ -13,7 +13,16 @@
 import { randomUUID } from 'node:crypto';
 import { and, desc, eq } from 'drizzle-orm';
 import { db } from '@/libs/DB';
-import { archiveRemote, deleteObject, publicUrlFor, putObject, storageConfigured } from '@/libs/storage/r2';
+import {
+  archiveRemote,
+  deleteObject,
+  getObject,
+  headObject,
+  presignPutUrl,
+  publicUrlFor,
+  putObject,
+  storageConfigured,
+} from '@/libs/storage/r2';
 import { files } from '@/models/Schema';
 
 export const MAX_TEXT_CHARS = 400_000;
@@ -29,6 +38,74 @@ export function isTextual(name: string, mime?: string | null): boolean {
 function keyFor(tenantId: string, name: string): string {
   const safe = name.replace(/[^\w.-]+/g, '-').slice(-80);
   return `tenants/${tenantId}/${randomUUID()}-${safe}`;
+}
+
+/** Text is only worth extracting for things the agent can actually read. */
+const MAX_EXTRACT_BYTES = 5 * 1024 * 1024;
+
+/**
+ * Big uploads (HeyGen renders, raw footage) go browser → R2 directly, so the
+ * app never touches the bytes. Two steps:
+ *   1. reserveUpload()  → a tenant-scoped key + a presigned PUT URL
+ *   2. confirmUpload()  → HEAD the object (proves it landed, gives the real
+ *      size) and index it. No row is written for an upload that never finished.
+ */
+export function reserveUpload(tenantId: string, name: string): { key: string; uploadUrl: string } {
+  if (!storageConfigured()) {
+    throw new Error('File storage is not configured (R2_* variables missing in Railway).');
+  }
+  const key = keyFor(tenantId, name);
+  return { key, uploadUrl: presignPutUrl(key) };
+}
+
+export async function confirmUpload(a: {
+  tenantId: string;
+  key: string;
+  name: string;
+  mime?: string;
+  createdBy?: string;
+}) {
+  // The key must be inside this tenant's prefix — never trust the client's.
+  if (!a.key.startsWith(`tenants/${a.tenantId}/`)) {
+    throw new Error('Invalid upload key.');
+  }
+
+  const head = await headObject(a.key);
+  if (!head) {
+    throw new Error('The upload did not complete — nothing was stored.');
+  }
+
+  const mime = a.mime || head.contentType;
+
+  // Small text documents get their text extracted now, so read_file is a single
+  // DB read later. Video and other binaries are indexed as-is.
+  let text: string | null = null;
+  if (isTextual(a.name, mime) && head.size <= MAX_EXTRACT_BYTES) {
+    try {
+      const { body } = await getObject(a.key);
+      text = body.toString('utf8').slice(0, MAX_TEXT_CHARS);
+    } catch {
+      text = null;
+    }
+  }
+
+  const [row] = await db
+    .insert(files)
+    .values({
+      tenantId: a.tenantId,
+      name: a.name.slice(0, 300),
+      kind: 'knowledge',
+      mime: mime.slice(0, 120),
+      sizeBytes: head.size,
+      r2Key: a.key,
+      publicUrl: null, // client documents stay private (see saveFile)
+      source: 'upload',
+      textContent: text,
+      meta: {},
+      createdBy: a.createdBy,
+    })
+    .returning();
+  return row;
 }
 
 export type SaveInput = {

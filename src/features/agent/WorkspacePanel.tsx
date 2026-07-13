@@ -102,6 +102,32 @@ export const WorkspacePanel = (props: {
     router.refresh();
   };
 
+  /**
+   * Deleting a workspace destroys its conversations, tools, panels, usage and
+   * files (in R2 too) — so it asks for the slug to be typed, not just an OK.
+   */
+  const deleteWorkspace = async () => {
+    // eslint-disable-next-line no-alert
+    const typed = window.prompt(
+      `This permanently deletes the "${props.tenantSlug}" workspace: members, chat history, tools, panels, scheduled tasks and every stored file.\n\nType the slug to confirm:`,
+    );
+    if (typed !== props.tenantSlug) {
+      if (typed !== null) {
+        setWsError('The slug didn\'t match — nothing was deleted.');
+      }
+      return;
+    }
+    const url = `/api/tenants?slug=${encodeURIComponent(props.tenantSlug)}&confirm=${encodeURIComponent(typed)}`;
+    const res = await fetch(url, { method: 'DELETE' }).catch(() => null);
+    const data = await res?.json().catch(() => null);
+    if (!res?.ok) {
+      setWsError(data?.error ?? 'Could not delete the workspace.');
+      return;
+    }
+    router.push('/dashboard');
+    router.refresh();
+  };
+
   const inputClass = 'w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring';
 
   if (!props.canManageMembers && !props.isPlatformAdmin) {
@@ -166,6 +192,36 @@ export const WorkspacePanel = (props: {
           {wsError && <p className="text-xs text-red-600" role="alert">{wsError}</p>}
           <Button type="submit" size="sm" variant="outline">Create workspace</Button>
         </form>
+      )}
+
+      {props.isPlatformAdmin && (
+        <div className="
+          flex flex-wrap items-center justify-between gap-2 border-t
+          border-white/8 p-4
+        "
+        >
+          <div>
+            <p className="text-xs font-semibold text-rose-300">Danger zone</p>
+            <p className="text-xs text-muted-foreground">
+              Delete
+              {' '}
+              <strong>{props.tenantSlug}</strong>
+              {' '}
+              and everything in it — chat, tools, panels, files. Not reversible.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={deleteWorkspace}
+            className="
+              rounded-md border border-rose-400/30 px-3 py-1.5 text-xs
+              font-medium text-rose-300
+              hover:bg-rose-400/10
+            "
+          >
+            Delete workspace
+          </button>
+        </div>
       )}
     </div>
   );

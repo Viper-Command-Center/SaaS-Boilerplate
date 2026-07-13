@@ -16,6 +16,9 @@ type Item = {
 };
 
 const KB = 1024;
+const GB = KB * KB * KB;
+/** R2's single-PUT ceiling. Plenty for HeyGen renders and raw footage. */
+const MAX_UPLOAD_BYTES = 5 * GB;
 
 function size(bytes: number): string {
   if (bytes < KB) {
@@ -24,7 +27,10 @@ function size(bytes: number): string {
   if (bytes < KB * KB) {
     return `${Math.round(bytes / KB)} KB`;
   }
-  return `${(bytes / (KB * KB)).toFixed(1)} MB`;
+  if (bytes < GB) {
+    return `${(bytes / (KB * KB)).toFixed(1)} MB`;
+  }
+  return `${(bytes / GB).toFixed(2)} GB`;
 }
 
 const isImage = (m: string | null) => Boolean(m?.startsWith('image/'));
@@ -35,6 +41,7 @@ export const FileLibrary = (props: { tenantSlug: string; canWrite: boolean }) =>
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<'all' | 'knowledge' | 'asset'>('all');
+  const [progress, setProgress] = useState<{ name: string; pct: number } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const reload = useCallback(() => {
@@ -51,25 +58,80 @@ export const FileLibrary = (props: { tenantSlug: string; canWrite: boolean }) =>
     reload();
   }, [reload]);
 
+  /** PUT straight to R2 so the app server never carries the bytes. */
+  const putToR2 = (url: string, file: File, onProgress: (pct: number) => void) =>
+    new Promise<void>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('PUT', url);
+      if (file.type) {
+        xhr.setRequestHeader('Content-Type', file.type);
+      }
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) {
+          onProgress(Math.round((e.loaded / e.total) * 100));
+        }
+      };
+      xhr.onload = () => (xhr.status >= 200 && xhr.status < 300
+        ? resolve()
+        : reject(new Error(`Storage rejected the upload (HTTP ${xhr.status}).`)));
+      xhr.onerror = () => reject(new Error('Network error during upload. If this persists, check the bucket CORS policy allows PUT.'));
+      xhr.send(file);
+    });
+
   const upload = async (files: FileList | null) => {
     if (!files?.length) {
       return;
     }
     setBusy(true);
     setError(null);
+
+    const tenant = encodeURIComponent(props.tenantSlug);
+
     for (const file of Array.from(files)) {
-      const body = new FormData();
-      body.append('tenant', props.tenantSlug);
-      body.append('file', file);
-      // eslint-disable-next-line no-await-in-loop
-      const res = await fetch('/api/files', { method: 'POST', body });
-      if (!res.ok) {
+      if (file.size > MAX_UPLOAD_BYTES) {
+        setError(`"${file.name}" is ${(file.size / GB).toFixed(1)}GB — the limit is 5GB.`);
+        break;
+      }
+
+      try {
+        setProgress({ name: file.name, pct: 0 });
+
+        // 1. reserve a key + presigned URL
         // eslint-disable-next-line no-await-in-loop
-        const d = await res.json().catch(() => null);
-        setError(d?.error ?? `Could not upload ${file.name}.`);
+        const startRes = await fetch(`/api/files/upload?tenant=${tenant}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: file.name, sizeBytes: file.size }),
+        });
+        // eslint-disable-next-line no-await-in-loop
+        const start = await startRes.json().catch(() => null);
+        if (!startRes.ok) {
+          throw new Error(start?.error ?? 'Could not start the upload.');
+        }
+
+        // 2. the bytes go browser → Cloudflare, not through us
+        // eslint-disable-next-line no-await-in-loop
+        await putToR2(start.uploadUrl, file, pct => setProgress({ name: file.name, pct }));
+
+        // 3. index it (HEAD proves it landed)
+        // eslint-disable-next-line no-await-in-loop
+        const doneRes = await fetch(`/api/files/upload?tenant=${tenant}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key: start.key, name: file.name, mime: file.type }),
+        });
+        if (!doneRes.ok) {
+          // eslint-disable-next-line no-await-in-loop
+          const d = await doneRes.json().catch(() => null);
+          throw new Error(d?.error ?? 'Upload finished but could not be saved.');
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : `Could not upload ${file.name}.`);
         break;
       }
     }
+
+    setProgress(null);
     setBusy(false);
     if (inputRef.current) {
       inputRef.current.value = '';
@@ -138,6 +200,24 @@ export const FileLibrary = (props: { tenantSlug: string; canWrite: boolean }) =>
           </div>
         )}
       </div>
+
+      {progress && (
+        <div className="glass p-3">
+          <div className="mb-1.5 flex items-center justify-between text-xs">
+            <span className="truncate text-white/70">{progress.name}</span>
+            <span className="text-white/45">
+              {progress.pct}
+              %
+            </span>
+          </div>
+          <div className="h-1.5 overflow-hidden rounded-full bg-white/8">
+            <div
+              className="grad-fill h-full rounded-full transition-[width] duration-200"
+              style={{ width: `${progress.pct}%` }}
+            />
+          </div>
+        </div>
+      )}
 
       {error && <p className="text-sm text-rose-400" role="alert">{error}</p>}
 

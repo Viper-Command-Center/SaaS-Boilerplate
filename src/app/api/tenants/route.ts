@@ -8,8 +8,9 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getCurrentUser } from '@/libs/auth/session';
 import { db } from '@/libs/DB';
+import { deleteObject } from '@/libs/storage/r2';
 import { getUserTenants } from '@/libs/tenants';
-import { auditLog, memberships, tenants } from '@/models/Schema';
+import { auditLog, files, memberships, tenants } from '@/models/Schema';
 
 export const dynamic = 'force-dynamic';
 
@@ -70,4 +71,49 @@ export async function POST(request: Request) {
   }).catch(() => {});
 
   return NextResponse.json({ ok: true, tenant: { id: tenant.id, name: tenant.name, slug: tenant.slug } });
+}
+
+/**
+ * DELETE /api/tenants?slug=…&confirm=<slug> — platform admin only.
+ *
+ * Deletes the workspace and EVERYTHING scoped to it (memberships, conversations,
+ * connections, panels, datasets, scheduled tasks, usage, files) — the DB does
+ * that by ON DELETE CASCADE. The stored objects in R2 are not cascaded, so we
+ * remove those first, otherwise the bucket keeps paying for orphaned bytes.
+ * The caller must echo the slug in `confirm` — this is not undoable.
+ */
+export async function DELETE(request: Request) {
+  const user = await getCurrentUser();
+  if (!user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+  if (!user.isAdmin) {
+    return NextResponse.json({ error: 'Only the platform admin can delete workspaces.' }, { status: 403 });
+  }
+
+  const params = new URL(request.url).searchParams;
+  const slug = params.get('slug') ?? '';
+  if (!slug || params.get('confirm') !== slug) {
+    return NextResponse.json({ error: 'Type the workspace slug to confirm deletion.' }, { status: 400 });
+  }
+
+  const [tenant] = await db.select().from(tenants).where(eq(tenants.slug, slug)).limit(1);
+  if (!tenant) {
+    return NextResponse.json({ error: 'Workspace not found.' }, { status: 404 });
+  }
+
+  // Purge the workspace's objects from R2 before the rows cascade away.
+  const stored = await db.select({ r2Key: files.r2Key }).from(files).where(eq(files.tenantId, tenant.id));
+  await Promise.all(stored.map(f => deleteObject(f.r2Key).catch(() => {})));
+
+  await db.delete(tenants).where(eq(tenants.id, tenant.id));
+
+  await db.insert(auditLog).values({
+    actor: user.id,
+    action: 'tenant.delete',
+    target: slug,
+    detail: { files: stored.length },
+  }).catch(() => {});
+
+  return NextResponse.json({ ok: true });
 }

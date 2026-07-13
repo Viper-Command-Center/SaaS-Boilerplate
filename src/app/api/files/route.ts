@@ -62,19 +62,39 @@ export async function POST(request: Request) {
     );
   }
 
-  const form = await request.formData().catch(() => null);
-  const slug = String(form?.get('tenant') ?? '');
-  const file = form?.get('file');
-
-  const tenant = await resolveTenant(user.id, user.isAdmin, slug, true);
-  if (!tenant) {
-    return NextResponse.json({ error: 'You need editor access to upload files.' }, { status: 403 });
+  // The tenant comes from the QUERY STRING, not the body: permission has to be
+  // decided before we read a multi-megabyte upload, and a body that fails to
+  // parse must not masquerade as "you don't have access".
+  const slug = new URL(request.url).searchParams.get('tenant') ?? '';
+  const membership = (await getUserTenants(user.id)).find(t => t.slug === slug);
+  if (!membership) {
+    return NextResponse.json({ error: 'No access to this workspace.' }, { status: 403 });
   }
+  if (!user.isAdmin && !WRITE_ROLES.includes(membership.role)) {
+    return NextResponse.json(
+      { error: `Uploading needs editor access — your role here is "${membership.role}".` },
+      { status: 403 },
+    );
+  }
+  const tenant = membership;
+
+  const form = await request.formData().catch(() => null);
+  if (!form) {
+    return NextResponse.json(
+      { error: 'Could not read the upload — the file may be too large for a single request.' },
+      { status: 400 },
+    );
+  }
+
+  const file = form.get('file');
   if (!(file instanceof File)) {
     return NextResponse.json({ error: 'No file provided.' }, { status: 400 });
   }
   if (file.size > MAX_UPLOAD_BYTES) {
-    return NextResponse.json({ error: 'Files must be 25MB or smaller.' }, { status: 413 });
+    return NextResponse.json(
+      { error: `"${file.name}" is ${Math.round(file.size / (1024 * 1024))}MB — the limit is ${MAX_UPLOAD_BYTES / (1024 * 1024)}MB.` },
+      { status: 413 },
+    );
   }
 
   try {
