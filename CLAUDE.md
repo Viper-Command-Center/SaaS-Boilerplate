@@ -57,8 +57,17 @@ Gotchas hit: (1) deploy.bat commits were silently rejected by lefthook/commitlin
 - deploy.bat (or wait for the 30-min scheduler). Migration 0004 runs pre-deploy. No new env vars, no new npm deps.
 - Smoke: dashboard → ask the agent "create a markdown panel titled Hello saying hi" → panel appears within 30s. Create a test workspace + add a viewer member → log in as them → confirm they see chat+panels only.
 
+## Phase 4a — website updates via the OFFICIAL GitHub MCP (decided 2026-07-12, Ryan's call: generalized > custom)
+- **Standard path**: register GitHub's hosted MCP in the Tools panel — no custom code, works for ANY site whose host deploys on git push (Railway, Vercel, Netlify, Cloudflare Pages…).
+  - Tools panel → Add MCP server: name `github`, URL `https://api.githubcopilot.com/mcp/x/repos` (the `/x/repos` path serves only the repos toolset — keeps the tool list lean), header `Authorization` = `Bearer <fine-grained PAT>` (PAT: Contents R/W + Pull requests on the site repos; the PAT's repo scope IS the tenant isolation — one PAT per client, sealed in the vault per workspace).
+  - Full server (all toolsets incl. issues/PRs/actions): URL `https://api.githubcopilot.com/mcp/`.
+  - Client-onboarding pitch: "no MCP for your custom site? Put it in a GitHub repo with auto-deploy on your host, connect the GitHub MCP, the agent can now edit your site — behind approvals."
+- `src/libs/mcp/client.ts` sends `MCP-Protocol-Version` header after initialize (required by 2025-06-18-spec servers like GitHub's).
+- `mcp-sites/` stays in the repo as an OPTIONAL lightweight fallback (simpler tool surface, per-site config, own bearer key) — NOT required, no Railway service needed unless wanted. See mcp-sites/README.md.
+- First smoke test once Ryan adds the connection: ask the agent to "read the hero section of budgetsmart.io's homepage and propose a headline tweak" → update lands in Approvals → approve → commit → Railway deploys the marketing site.
+
 ## SAVED FOR LATER (Ryan's asks, do in coming phases)
-1. **Website-update MCPs** (BudgetSmart, WellnessTrove, ChurchWebGlobal…): build one small MCP server per site exposing safe page-edit tools. For Railway-hosted Next.js sites: tools commit to the site's GitHub repo via GitHub API (contents API) → push to main triggers Railway auto-deploy (that's the deploy mechanism — no Railway API needed). For WordPress sites: use the existing WordPress MCP. Replaces the OpenClaw agent's job. Host these MCPs as tiny Railway services (or one multi-site MCP with per-site tokens in the vault).
+1. WordPress sites (WellnessTrove?): connect the existing WordPress MCP per site instead of mcp-sites.
 2. Phase 4: BullMQ worker service (scheduled agent tasks, stdio MCP servers, nightly dataset snapshots).
 3. Password change/reset flow for client accounts (currently one-time generated password only).
 4. Approval → notify agent/conversation on execution (currently result lives in the inbox).

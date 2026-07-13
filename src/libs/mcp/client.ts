@@ -21,6 +21,7 @@ type Transport = {
   url: string;
   headers: Record<string, string>;
   sessionId?: string;
+  protocolVersion?: string;
 };
 
 async function rpc(t: Transport, method: string, params?: unknown, id?: number): Promise<unknown> {
@@ -30,6 +31,9 @@ async function rpc(t: Transport, method: string, params?: unknown, id?: number):
       'Content-Type': 'application/json',
       'Accept': 'application/json, text/event-stream',
       ...(t.sessionId ? { 'Mcp-Session-Id': t.sessionId } : {}),
+      // Required by servers implementing the 2025-06-18 spec (e.g. GitHub's
+      // hosted MCP) on every request after initialize.
+      ...(t.protocolVersion ? { 'MCP-Protocol-Version': t.protocolVersion } : {}),
       ...t.headers,
     },
     body: JSON.stringify(
@@ -102,11 +106,12 @@ export class McpHttpClient {
     if (this.initialized) {
       return;
     }
-    await rpc(this.t, 'initialize', {
+    const result = await rpc(this.t, 'initialize', {
       protocolVersion: PROTOCOL_VERSION,
       capabilities: {},
       clientInfo: { name: 'artivio-command-center', version: '1.0.0' },
-    }, this.nextId++);
+    }, this.nextId++) as { protocolVersion?: string } | undefined;
+    this.t.protocolVersion = result?.protocolVersion || PROTOCOL_VERSION;
     await rpc(this.t, 'notifications/initialized');
     this.initialized = true;
   }

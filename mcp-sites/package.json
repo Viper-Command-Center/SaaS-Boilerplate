@@ -1,0 +1,13 @@
+{
+  "name": "artivio-mcp-sites",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Multi-site website-update MCP server: exposes safe page-edit tools per site; edits commit to each site's GitHub repo, which triggers Railway auto-deploy.",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server.mjs"
+  }
+}
