@@ -198,13 +198,15 @@ Admin → Plugin catalog → Add plugin → "Built-in provider" → Kie.ai → T
 - **Upload 403 for editors**: `/api/files` POST read the tenant slug from the multipart BODY, so a body that failed to parse (e.g. an oversized file) fell through to "you need editor access". Tenant now comes from the QUERY STRING and the role check runs BEFORE the body is read; body-parse and size failures have their own messages (and the client checks 25MB before sending).
 
 ## Phase 13 — web reading (2026-07-13, no migration, no new deps)
-- **This was the honest gap**: `mcp-browser/` was deleted under the no-wrapper-services rule and the direct replacement was never built, so the agent could not read a web page at all.
-- `src/libs/agent/webTools.ts`, merged into `buildPlatformTools()` (policy `auto`, read-only):
-  - **`fetch_url`** — plain fetch + HTML→text. ALWAYS available, free, no JS. Handles most blogs/docs/APIs/competitor copy.
-  - **`browse_page`** / **`scrape_page`** — real browser via **self-hosted Browserless REST** (`/content`, `/scrape`). Registered ONLY when `BROWSERLESS_URL` is set, so the platform runs fine without it.
-- Architecture decision #4 honoured: Browserless is its OWN Railway service (it's a browser binary); the app calls its REST API directly — no MCP wrapper service.
-- **SSRF guard** (`assertPublicUrl`): http(s) only; blocks localhost, `.internal`/`.local` (Railway private network!), 10./127./0./169.254./192.168./172.16-31. The agent picks these URLs — sometimes from untrusted page content — while sitting next to Postgres and the browser service on the private network.
-- **Ryan's setup**: Railway → New Service → Docker image `ghcr.io/browserless/chromium` → variables `TOKEN=<random>`, `CONCURRENT=3`, `TIMEOUT=60000`; keep it PRIVATE (no public domain). Then on SaaS-Boilerplate: `BROWSERLESS_URL=http://<service>.railway.internal:3000`, `BROWSERLESS_TOKEN=<same random>` → redeploy. Premium scrapers (Firecrawl/Browserbase) remain per-workspace MCP add-ons for datacenter-IP-blocked sites.
+- **The honest gap was**: the agent could not read a web page at all (`mcp-browser/` had been deleted under the no-wrapper-services rule and never replaced).
+- `src/libs/agent/webTools.ts` → **`fetch_url`** only, merged into `buildPlatformTools()` (policy `auto`, read-only). Plain fetch + HTML→text, free, no JS. Covers blogs/docs/APIs/competitor copy and verifying our own server-rendered sites. Tells the model when a page looks client-rendered instead of letting it hallucinate content.
+- **SSRF guard** (`assertPublicUrl`): http(s) only; blocks localhost, `.internal`/`.local` (Railway private network!), 10./127./0./169.254./192.168./172.16-31. The agent picks these URLs — sometimes from untrusted page content — while sitting next to Postgres on the private network.
+- **BROWSERLESS IS DEAD (Ryan's call, 2026-07-13).** ARCHITECTURE DECISION #4 is REVERSED: no self-hosted browser service, ever. Reasons: it costs money + memory, and its datacenter IP is blocked by exactly the sites that need a real browser — so it solved nothing fetch couldn't do. **Supersedes the "Browserless is the one exception" note in the ARCHITECTURE DECISIONS section.**
+- **Replacement strategy (researched, NOT yet installed — Ryan is evaluating)**: when `fetch_url` can't read a page, register a hosted MCP in the Tools panel — zero code, cost lands on the workspace that needs it:
+  - **Firecrawl** — page → clean markdown/JSON, credit-per-page (~$19–399/mo). The likely platform default (Tier 1, our key + markup).
+  - **Bright Data MCP** — 400M+ residential IPs for sites that actively block scrapers. Tier 2 (client's key) — e.g. BargainBalloons competitor price monitoring.
+  - Cloud browsers (Browserbase/Hyperbrowser/Steel) are only for AUTHENTICATED multi-step flows. We don't need them: Zernio/WordPress/GitHub/Duda/ads all have APIs or MCPs.
+- **Still missing: WEB SEARCH.** The agent can read a URL but cannot find one. Bigger day-one gap than JS rendering; fix with a search MCP (Brave/Exa/Firecrawl search).
 
 ## Gotchas
 - **Migration 0010 was hand-written** (SQL + `_journal.json`), because bash reads of the mounted repo are stale/truncated so drizzle-kit can't see the real `Schema.ts`. The SQL is idempotent (`IF NOT EXISTS` + `DO $$ … EXCEPTION WHEN duplicate_object`). If drizzle-kit ever regenerates from the last snapshot it may re-emit `files` — harmless, but delete the dupe.
