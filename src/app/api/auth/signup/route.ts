@@ -6,6 +6,13 @@ import { createSession } from '@/libs/auth/session';
 import { db } from '@/libs/DB';
 import { users } from '@/models/Schema';
 
+/**
+ * Artivio is INVITE-ONLY. Public signup is disabled unless
+ * ALLOW_PUBLIC_SIGNUP=true. The single exception is bootstrap: if no user
+ * exists yet, the first signup creates the platform admin (so the platform can
+ * never lock itself out). Everyone else is created by an admin in the console,
+ * which emails them an invite.
+ */
 const BodySchema = z.object({
   email: z.string().email().max(254),
   password: z.string().min(1).max(128),
@@ -19,6 +26,18 @@ export async function POST(request: Request) {
     body = BodySchema.parse(await request.json());
   } catch {
     return NextResponse.json({ error: 'Invalid request.' }, { status: 400 });
+  }
+
+  // The first user ever created becomes the platform admin (bootstrap).
+  const [{ total }] = await db.select({ total: count() }).from(users) as [{ total: number }];
+  const isBootstrap = Number(total) === 0;
+  const publicSignupAllowed = process.env.ALLOW_PUBLIC_SIGNUP === 'true';
+
+  if (!isBootstrap && !publicSignupAllowed) {
+    return NextResponse.json(
+      { error: 'Artivio is invite-only right now. Join the waitlist at hello@artivio.ai and we\'ll set up your workspace.' },
+      { status: 403 },
+    );
   }
 
   const passwordErrors = validatePassword(body.password);
@@ -37,9 +56,6 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'An account with this email already exists.' }, { status: 409 });
   }
 
-  // The first user ever created becomes the platform admin.
-  const [{ total }] = await db.select({ total: count() }).from(users) as [{ total: number }];
-
   const [user] = await db
     .insert(users)
     .values({
@@ -48,7 +64,7 @@ export async function POST(request: Request) {
       passwordHash: await hashPassword(body.password),
       firstName: body.firstName?.trim() || null,
       lastName: body.lastName?.trim() || null,
-      isAdmin: Number(total) === 0,
+      isAdmin: isBootstrap,
     })
     .returning();
 
@@ -62,4 +78,12 @@ export async function POST(request: Request) {
   });
 
   return NextResponse.json({ ok: true });
+}
+
+/** Tells the sign-up page whether to show the form or the waitlist message. */
+export async function GET() {
+  const [{ total }] = await db.select({ total: count() }).from(users) as [{ total: number }];
+  return NextResponse.json({
+    open: Number(total) === 0 || process.env.ALLOW_PUBLIC_SIGNUP === 'true',
+  });
 }

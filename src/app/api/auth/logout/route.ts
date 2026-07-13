@@ -1,13 +1,28 @@
-import { NextResponse } from 'next/server';
 import { destroyCurrentSession } from '@/libs/auth/session';
 
-export async function POST(request: Request) {
-  await destroyCurrentSession();
-  return NextResponse.redirect(new URL('/', request.url), 303);
+/**
+ * Ends the session and returns to the sign-in page.
+ *
+ * NOTE: we must NOT build an absolute URL from `request.url` — behind Railway's
+ * proxy that resolves to the container's internal address (localhost:8080) and
+ * the browser would follow it. A relative Location is proxy-safe.
+ */
+function backToSignIn(): Response {
+  return new Response(null, {
+    status: 303,
+    headers: {
+      'Location': '/sign-in',
+      'Cache-Control': 'no-store',
+    },
+  });
 }
 
-// Support plain-link logout too.
-export async function GET(request: Request) {
+export async function POST() {
   await destroyCurrentSession();
-  return NextResponse.redirect(new URL('/', request.url), 303);
+  return backToSignIn();
+}
+
+export async function GET() {
+  await destroyCurrentSession();
+  return backToSignIn();
 }

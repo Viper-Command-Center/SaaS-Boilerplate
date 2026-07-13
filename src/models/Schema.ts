@@ -24,10 +24,32 @@ export const users = pgTable(
     // Platform admin — full access to every tenant and platform settings.
     // The first user ever created is automatically the platform admin.
     isAdmin: boolean('is_admin').notNull().default(false),
+    // ── Two-factor auth (TOTP) ──
+    twoFactorSecret: text('two_factor_secret'), // base32, set at enrolment
+    twoFactorEnabled: boolean('two_factor_enabled').notNull().default(false),
+    twoFactorBackupCodes: jsonb('two_factor_backup_codes'), // bcrypt hashes
+    // Forces a password change on next sign-in (invited accounts).
+    mustChangePassword: boolean('must_change_password').notNull().default(false),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
   },
   t => [uniqueIndex('users_email_normalized_uq').on(t.emailNormalized)],
+);
+
+/** Single-use, time-limited password reset tokens (hashed at rest). */
+export const passwordResetTokens = pgTable(
+  'password_reset_tokens',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    tokenHash: varchar('token_hash', { length: 128 }).notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    usedAt: timestamp('used_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  t => [index('password_reset_user_idx').on(t.userId)],
 );
 
 export const sessions = pgTable(
