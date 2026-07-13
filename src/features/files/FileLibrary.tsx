@@ -160,10 +160,14 @@ export const FileLibrary = (props: { tenantSlug: string; canWrite: boolean }) =>
                   overflow-hidden rounded-lg bg-white/5 text-xs text-white/40
                 "
                 >
-                  {isImage(f.mime) && f.publicUrl
+                  {isImage(f.mime)
                     ? (
                         // eslint-disable-next-line @next/next/no-img-element
-                        <img src={f.publicUrl} alt="" className="size-full object-cover" />
+                        <img
+                          src={f.publicUrl ?? `/api/files/${f.id}/content?tenant=${encodeURIComponent(props.tenantSlug)}`}
+                          alt=""
+                          className="size-full object-cover"
+                        />
                       )
                     : (f.mime?.split('/')[1] ?? 'file').slice(0, 4)}
                 </div>

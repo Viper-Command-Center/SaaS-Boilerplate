@@ -188,6 +188,8 @@ Admin → Plugin catalog → Add plugin → "Built-in provider" → Kie.ai → T
 - API `/api/files` (GET list · POST multipart upload, 25MB, editor+ · DELETE) and `/api/files/[id]/content` (membership-checked stream, for private docs / no public bucket domain).
 - UI: **/dashboard/files** (`features/files/FileLibrary.tsx`) + "Files" in the sidebar. Tabs: All · Documents · Generated media; image thumbnails; "agent-readable" badge.
 - Zernio (when connected): it can post the archived R2 URLs — that's exactly why assets are archived with stable links.
+- **Public vs private split (2026-07-13):** the R2 custom domain is **s.artivio.ai** (`R2_PUBLIC_URL`). A custom domain serves objects to anyone with the URL, so `publicUrl` is set ONLY for `kind='asset'` (generated media must be publicly fetchable by WordPress/social/Zernio). Client documents (`knowledge`/`note`) get `publicUrl = null` and are served through `/api/files/<id>/content`, which re-checks workspace membership. Do not "fix" this by making everything public.
+- **R2 CORS**: uploads are signed SERVER-side (SigV4 in the app), so the browser never PUTs to R2 → CORS only needs GET/HEAD for s.artivio.ai. Policy: AllowedOrigins `https://artivio.ai` + `http://localhost:3000`, AllowedMethods GET/HEAD. Add PUT only if we ever move to presigned direct-to-R2 uploads.
 
 ## Gotchas
 - **Migration 0010 was hand-written** (SQL + `_journal.json`), because bash reads of the mounted repo are stale/truncated so drizzle-kit can't see the real `Schema.ts`. The SQL is idempotent (`IF NOT EXISTS` + `DO $$ … EXCEPTION WHEN duplicate_object`). If drizzle-kit ever regenerates from the last snapshot it may re-emit `files` — harmless, but delete the dupe.

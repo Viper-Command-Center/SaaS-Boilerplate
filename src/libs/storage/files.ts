@@ -55,16 +55,25 @@ export async function saveFile(input: SaveInput) {
     ? input.bytes.toString('utf8').slice(0, MAX_TEXT_CHARS)
     : null;
 
+  const kind = input.kind ?? 'knowledge';
+
+  // IMPORTANT: a custom R2 domain (s.artivio.ai) serves objects to ANYONE with
+  // the URL. Generated media NEEDS that — a WordPress post or a scheduled social
+  // post has to hit a public link. Client documents do NOT: briefs, contracts and
+  // brand guides stay private and are served through /api/files/<id>/content,
+  // which checks workspace membership on every request.
+  const publicUrl = kind === 'asset' ? publicUrlFor(key) : null;
+
   const [row] = await db
     .insert(files)
     .values({
       tenantId: input.tenantId,
       name: input.name.slice(0, 300),
-      kind: input.kind ?? 'knowledge',
+      kind,
       mime: mime.slice(0, 120),
       sizeBytes: input.bytes.length,
       r2Key: key,
-      publicUrl: publicUrlFor(key),
+      publicUrl,
       source: (input.source ?? 'upload').slice(0, 40),
       textContent: text,
       meta: input.meta ?? {},
