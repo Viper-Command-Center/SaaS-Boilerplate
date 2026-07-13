@@ -159,7 +159,15 @@ Admin → Plugin catalog → Add plugin → "Built-in provider" → Kie.ai → T
 5. Strip boilerplate marketing landing page + real Artivio branding; retire legacy artivio.ai Railway service.
 6. Streaming polish: token streaming when ANTHROPIC_API_KEY present; Bedrock invoke-with-response-stream parsing.
 
+## Phase 10 — futuristic dark UI (2026-07-13)
+- `src/styles/global.css`: `.artivio` scope retheming the shadcn tokens dark (deep navy #070b18, indigo/fuchsia accents) — applied ONLY on the dashboard shell, so marketing + auth stay light. Utilities: `.artivio-canvas` (aurora blooms + masked grid), `.glass` / `.glass-hover` / `.glass-topline` (glassmorphic cards w/ gradient hairline), `.grad-text`, `.grad-fill`, `.glow-ring`, `.nav-active`, `.pulse-dot`.
+- Sidebar: glass rail, gradient workspace avatars, live pulse on the active workspace, glass user card w/ sign-out icon.
+- Panels: glass cards; timeseries now has gradient stroke + area fill + SVG glow filter + delta % badge; KPI uses gradient numerals.
+- Chat: glass surface, gradient user bubbles + send button, online/thinking status chips, tool activity as glowing status chips.
+- Admin: glass stat cards w/ gradient numerals, glass tables, gradient tab pills.
+
 ## Gotchas
+- **DO NOT patch mounted .tsx files with python/sed via bash.** The virtiofs mount returns stale/NUL-padded reads, so a read-modify-write TRUNCATES the file (this silently corrupted AgentChat.tsx + ToolsPanel.tsx). Use the Edit/Write tools, which are reliable. Bash greps of mounted files can also report false zeros — verify with Grep/Read.
 - Railway dashboard SPA: screenshots often hang; use get_page_text / find refs. Settings inputs need the expand button clicked first; changes stage into an "Apply N changes" → Details → Deploy Changes flow (discard stray empty staged changes).
 - Git write-ops don't work from the Cowork sandbox on mounted folders — Ryan pushes.
 - Never print secrets to chat; secrets live in Railway variables / .env.local only.

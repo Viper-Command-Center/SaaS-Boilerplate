@@ -26,12 +26,15 @@ type CatalogPlugin = {
 };
 
 /**
- * Per-tenant MCP tool registry panel: list connections, toggle them, add new
- * servers. Credential values go straight to the encrypted vault server-side
- * and are never echoed back.
+ * Tools = the workspace's capabilities.
+ *  · "Available plugins" — the platform catalog (tier 1 uses our key and is
+ *    billed per use; tier 2 asks the client for their own key).
+ *  · "Connected" — everything currently wired up, with enable/disable.
+ *  · Advanced: point the agent at any hosted MCP server by URL.
  */
 export const ToolsPanel = (props: { tenantSlug: string }) => {
   const [connections, setConnections] = useState<Connection[]>([]);
+  const [catalog, setCatalog] = useState<CatalogPlugin[]>([]);
   const [vaultOk, setVaultOk] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [name, setName] = useState('');
@@ -40,8 +43,6 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
   const [headerValue, setHeaderValue] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-
-  const [catalog, setCatalog] = useState<CatalogPlugin[]>([]);
   const [keyFor, setKeyFor] = useState<string | null>(null);
   const [keyValue, setKeyValue] = useState('');
 
@@ -58,6 +59,10 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
       .then(data => setCatalog(data.plugins ?? []))
       .catch(() => {});
   }, [props.tenantSlug]);
+
+  useEffect(() => {
+    reload();
+  }, [reload]);
 
   const enablePlugin = async (plugin: CatalogPlugin) => {
     if (plugin.needsKey && !keyValue.trim()) {
@@ -83,10 +88,6 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
     setKeyValue('');
     reload();
   };
-
-  useEffect(() => {
-    reload();
-  }, [reload]);
 
   const add = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -133,23 +134,26 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
 
   const remove = async (conn: Connection) => {
     // eslint-disable-next-line no-alert
-    if (!window.confirm(`Remove tool server "${conn.name}" and its stored credentials?`)) {
+    if (!window.confirm(`Remove "${conn.name}" and its stored credentials?`)) {
       return;
     }
     await fetch(`/api/mcp/connections/${conn.id}`, { method: 'DELETE' }).catch(() => {});
     reload();
   };
 
-  const inputClass = 'w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring';
+  const inputClass = 'w-full rounded-lg border border-white/12 bg-white/[0.04] px-3 py-2 text-sm text-white/90 outline-none transition placeholder:text-white/30 focus:border-indigo-400/40';
+  const available = catalog.filter(p => !p.installed);
 
   return (
     <div className="glass glass-topline relative">
-      <div className="flex items-center justify-between border-b border-white/8 px-4 py-3">
+      <div className="
+        flex items-center justify-between border-b border-white/8 px-4 py-3
+      "
+      >
         <div>
-          <span className="text-sm font-semibold">Tools (MCP servers)</span>
-          <p className="text-xs text-muted-foreground">
-            Connect tool servers to give the agent real capabilities. New tools
-            require approval by default.
+          <span className="text-sm font-semibold text-white">Tools</span>
+          <p className="text-xs text-white/40">
+            Capabilities the agent can use. New tools need approval by default.
           </p>
         </div>
         <Button variant="outline" size="sm" onClick={() => setShowForm(s => !s)}>
@@ -158,30 +162,132 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
       </div>
 
       {!vaultOk && (
-        <p className="border-b px-4 py-2 text-xs text-red-600">
+        <p className="
+          border-b border-white/8 px-4 py-2 text-xs text-rose-300
+        "
+        >
           Credential vault not configured — set VAULT_MASTER_KEY in Railway
-          before adding servers that need credentials.
+          before adding tools that need credentials.
         </p>
       )}
 
+      {error && (
+        <p className="border-b border-white/8 px-4 py-2 text-xs text-rose-300" role="alert">
+          {error}
+        </p>
+      )}
+
+      {/* Advanced: any hosted MCP server */}
       {showForm && (
-        <form onSubmit={add} className="space-y-3 border-b p-4">
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div>
-              <label className="mb-1 block text-xs font-medium" htmlFor="mcp-name">Name (a-z, 0-9, dashes)</label>
-              <input id="mcp-name" className={inputClass} value={name} onChange={e => setName(e.target.value)} placeholder="dataforseo" required />
+        <form onSubmit={add} className="space-y-3 border-b border-white/8 p-4">
+          <div className="
+            grid gap-3
+            sm:grid-cols-2
+          "
+          >
+            <input className={inputClass} value={name} onChange={e => setName(e.target.value)} placeholder="Name (e.g. github)" required />
+            <input className={inputClass} value={url} onChange={e => setUrl(e.target.value)} placeholder="https://…/mcp" required />
+            <input className={inputClass} value={headerName} onChange={e => setHeaderName(e.target.value)} placeholder="Auth header" />
+            <input className={inputClass} type="password" value={headerValue} onChange={e => setHeaderValue(e.target.value)} placeholder="Bearer sk_… (encrypted)" />
+          </div>
+          <Button type="submit" size="sm" disabled={busy}>
+            {busy ? 'Adding…' : 'Add server'}
+          </Button>
+        </form>
+      )}
+
+      {/* Marketplace */}
+      {available.length > 0 && (
+        <div className="border-b border-white/8">
+          <p className="
+            px-4 pt-3 pb-1 text-[10px] font-semibold tracking-[0.12em]
+            text-white/35 uppercase
+          "
+          >
+            Available plugins
+          </p>
+          <div className="divide-y divide-white/6">
+            {available.map(p => (
+              <div key={p.id} className="px-4 py-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-medium text-white">{p.name}</span>
+                      {p.tier === 'tier1'
+                        ? (
+                            <span className="
+                              rounded bg-indigo-400/15 px-1.5 py-0.5 text-[10px]
+                              text-indigo-300
+                            "
+                            >
+                              included · pay per use
+                            </span>
+                          )
+                        : (
+                            <span className="
+                              rounded bg-white/10 px-1.5 py-0.5 text-[10px]
+                              text-white/50
+                            "
+                            >
+                              needs your key
+                            </span>
+                          )}
+                    </div>
+                    {p.description && <p className="mt-0.5 text-xs text-white/45">{p.description}</p>}
+                    {p.pricing.length > 0 && (
+                      <p className="mt-1 text-xs text-white/35">
+                        {p.pricing.map(pr => `${pr.tool}: $${pr.retailUsd}/${pr.unit}`).join(' · ')}
+                      </p>
+                    )}
+                  </div>
+                  <Button size="sm" onClick={() => enablePlugin(p)}>Enable</Button>
+                </div>
+
+                {keyFor === p.id && (
+                  <div className="mt-2 flex gap-2">
+                    <input
+                      type="password"
+                      className={inputClass}
+                      placeholder={p.authHint ?? 'Your API key'}
+                      value={keyValue}
+                      onChange={e => setKeyValue(e.target.value)}
+                    />
+                    <Button size="sm" onClick={() => enablePlugin(p)}>Save</Button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Connected */}
+      <div className="divide-y divide-white/6">
+        {connections.length === 0 && (
+          <p className="px-4 py-4 text-sm text-white/40">
+            No tools enabled yet. Enable a plugin above, or connect any hosted MCP server.
+          </p>
+        )}
+        {connections.map(conn => (
+          <div key={conn.id} className="flex items-center justify-between gap-3 px-4 py-3">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <span className={`size-1.5 rounded-full ${conn.enabled ? 'bg-emerald-400' : 'bg-white/25'}`} />
+                <span className="text-sm font-medium text-white">{conn.name}</span>
+              </div>
+              <p className="truncate pl-3.5 text-xs text-white/35">
+                {conn.transport === 'builtin' ? 'built-in plugin' : conn.url}
+              </p>
             </div>
-            <div>
-              <label className="mb-1 block text-xs font-medium" htmlFor="mcp-url">MCP server URL</label>
-              <input id="mcp-url" className={inputClass} value={url} onChange={e => setUrl(e.target.value)} placeholder="https://…/mcp" required />
-            </div>
-            <div>
-              <label className="mb-1 block text-xs font-medium" htmlFor="mcp-header">Auth header (optional)</label>
-              <input id="mcp-header" className={inputClass} value={headerName} onChange={e => setHeaderName(e.target.value)} />
-            </div>
-            <div>
-              <label className="mb-1 block text-xs font-medium" htmlFor="mcp-secret">Header value (stored encrypted)</label>
-              <input id="mcp-secret" type="password" className={inputClass} value={headerValue} onChange={e => setHeaderValue(e.target.value)} placeholder="Bearer sk_…" />
+            <div className="flex shrink-0 items-center gap-2">
+              <Button variant="outline" size="sm" onClick={() => toggle(conn)}>
+                {conn.enabled ? 'Disable' : 'Enable'}
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => remove(conn)}>Remove</Button>
             </div>
           </div>
-          {error && <p classNa
+        ))}
+      </div>
+    </div>
+  );
+};
