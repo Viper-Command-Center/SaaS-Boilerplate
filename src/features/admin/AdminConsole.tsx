@@ -1,7 +1,9 @@
 'use client';
 
+import type { AdminUser, Workspace as WsOption } from '@/features/admin/UsersTab';
 import { useCallback, useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
+import { UsersTab } from '@/features/admin/UsersTab';
 
 type Workspace = {
   id: string;
@@ -18,15 +20,6 @@ type Workspace = {
   todayCostUsd: number;
   inputTokens: number;
   outputTokens: number;
-};
-
-type AdminUser = {
-  id: string;
-  email: string;
-  firstName: string | null;
-  isAdmin: boolean;
-  deletedAt: string | null;
-  memberships: Array<{ role: string; tenantName: string; tenantSlug: string }>;
 };
 
 type Plugin = {
@@ -50,6 +43,8 @@ export const AdminConsole = () => {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [totals, setTotals] = useState({ cost: 0, billed: 0, margin: 0, users: 0, workspaces: 0 });
   const [users, setUsers] = useState<AdminUser[]>([]);
+  const [wsOptions, setWsOptions] = useState<WsOption[]>([]);
+  const [emailConfigured, setEmailConfigured] = useState(false);
   const [catalog, setCatalog] = useState<Plugin[]>([]);
   const [busy, setBusy] = useState(false);
 
@@ -58,7 +53,11 @@ export const AdminConsole = () => {
       setWorkspaces(d.workspaces ?? []);
       setTotals(d.totals ?? { cost: 0, billed: 0, margin: 0, users: 0, workspaces: 0 });
     }).catch(() => {});
-    fetch('/api/admin/users').then(r => r.json()).then(d => setUsers(d.users ?? [])).catch(() => {});
+    fetch('/api/admin/users').then(r => r.json()).then((d) => {
+      setUsers(d.users ?? []);
+      setWsOptions(d.workspaces ?? []);
+      setEmailConfigured(Boolean(d.emailConfigured));
+    }).catch(() => {});
     fetch('/api/admin/catalog').then(r => r.json()).then(d => setCatalog(d.catalog ?? [])).catch(() => {});
   }, []);
 
@@ -76,15 +75,6 @@ export const AdminConsole = () => {
       body: JSON.stringify({ tenantId, ...patch }),
     }).catch(() => {});
     setBusy(false);
-    reload();
-  };
-
-  const patchUser = async (userId: string, patch: Record<string, unknown>) => {
-    await fetch('/api/admin/users', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId, ...patch }),
-    }).catch(() => {});
     reload();
   };
 
@@ -185,43 +175,12 @@ export const AdminConsole = () => {
       )}
 
       {tab === 'users' && (
-        <div className="overflow-x-auto rounded-lg border bg-background">
-          <table className="w-full text-sm">
-            <thead className="border-b text-left text-xs text-muted-foreground">
-              <tr>
-                <th className="p-3">User</th>
-                <th className="p-3">Workspaces</th>
-                <th className="p-3">Platform admin</th>
-                <th className="p-3">Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {users.map(u => (
-                <tr key={u.id} className="border-t">
-                  <td className="p-3">
-                    <div className="font-medium">{u.email}</div>
-                    {u.firstName && <div className="text-xs text-muted-foreground">{u.firstName}</div>}
-                  </td>
-                  <td className="p-3 text-xs">
-                    {u.memberships.length === 0
-                      ? <span className="text-muted-foreground">none</span>
-                      : u.memberships.map(m => `${m.tenantName} (${m.role})`).join(', ')}
-                  </td>
-                  <td className="p-3">
-                    <Button size="sm" variant="outline" onClick={() => patchUser(u.id, { isAdmin: !u.isAdmin })}>
-                      {u.isAdmin ? 'Yes — revoke' : 'No — grant'}
-                    </Button>
-                  </td>
-                  <td className="p-3">
-                    {u.deletedAt
-                      ? <Button size="sm" variant="outline" onClick={() => patchUser(u.id, { deleted: false })}>Restore</Button>
-                      : <Button size="sm" variant="outline" onClick={() => patchUser(u.id, { deleted: true })}>Disable</Button>}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <UsersTab
+          users={users}
+          workspaces={wsOptions}
+          emailConfigured={emailConfigured}
+          reload={reload}
+        />
       )}
 
       {tab === 'catalog' && <CatalogTab catalog={catalog} reload={reload} />}

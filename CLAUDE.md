@@ -116,6 +116,15 @@ Gotchas hit: (1) deploy.bat commits were silently rejected by lefthook/commitlin
 - Defaults per new workspace: $50/mo budget, **$10/day hard cap**, not paused. Raise caps in the admin console per client.
 - Economics sanity check: Sonnet ≈ $3/M in, $15/M out. Even a heavy workspace lands in the low hundreds/month → a $3k/mo client is high-margin. Real cost risks = media generation + runaway loops, both now capped.
 
+## Phase 7 — auth hardening + user management (built 2026-07-13, migration 0007)
+- **Logout fix**: NEVER build absolute URLs from `request.url` behind Railway's proxy — it resolves to localhost:8080 and the browser follows it. `/api/auth/logout` now returns a 303 with a RELATIVE `Location: /sign-in`.
+- **INVITE-ONLY**: `/api/auth/signup` refuses unless (a) zero users exist (bootstrap → first user = platform admin) or (b) `ALLOW_PUBLIC_SIGNUP=true`. `GET /api/auth/signup` tells the page which state it's in; the sign-up page shows a waitlist CTA (mailto hello@artivio.ai) when closed.
+- **Email** (`src/libs/email.ts`, fetch-only): Postmark via `POSTMARK_SERVER_TOKEN`; `EMAIL_FROM` (default hello@artivio.ai), links built from `PRODUCTION_URL`. Sends invite emails (temp password) + password-reset links. Never throws — email failure can't break account creation.
+- **2FA (TOTP)** — `src/libs/auth/totp.ts`, pure node:crypto (NO new deps): base32 secret, HMAC-SHA1, 6 digits/30s, ±1 step drift. `/api/auth/2fa` GET status · POST start enrolment (returns secret + otpauth URI) · PUT confirm code → enables + returns 8 backup codes ONCE (bcrypt-hashed at rest) · DELETE (password required). Login accepts `code`; if 2FA on and no code → 401 `{twoFactorRequired:true}` and the sign-in form reveals the code field. Backup codes are single-use.
+- **Password**: `/api/auth/password` PUT (change own) · POST (request reset — always 200, never reveals if an account exists) · PATCH (complete with emailed token; sha256-hashed, single-use, 1h expiry). `/reset-password?token=` page. `users.mustChangePassword` set for invited accounts.
+- **Admin user CRUD** (`/api/admin/users` + `UsersTab.tsx`): create user (optionally into a workspace with a role) → emails the invite, returns the temp password if email isn't configured; grant/revoke platform admin; reset password; disable/restore; hard delete; add/remove/modify workspace memberships inline.
+- New nav: **Account** (`/dashboard/settings` — 2FA + password) for everyone; **Admin** for platform admins.
+
 ### NEXT GAPS (ranked, from the review)
 1. **Spend guardrails** — per-workspace daily $ cap + kill switch before any spending tool. Blocker for autonomous ads.
 2. Support inbox via email MCP (use case #9).

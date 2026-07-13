@@ -55,6 +55,10 @@ export default async function DashboardLayout(props: DashboardLayoutProps) {
                 ? [{ href: '/dashboard/admin', label: 'Admin' }]
                 : []),
               {
+                href: '/dashboard/settings',
+                label: 'Account',
+              },
+              {
                 href: '/dashboard/help',
                 label: 'Help',
               },
