@@ -109,8 +109,8 @@ export const WorkspacePanel = (props: {
   }
 
   return (
-    <div className="rounded-lg border bg-background">
-      <div className="border-b px-4 py-3">
+    <div className="glass relative">
+      <div className="border-b border-white/8 px-4 py-3">
         <span className="text-sm font-semibold">Workspace</span>
         <p className="text-xs text-muted-foreground">
           Members, roles and — for the platform admin — new client workspaces.

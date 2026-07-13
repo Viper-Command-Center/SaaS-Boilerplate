@@ -98,3 +98,166 @@
     @apply bg-background text-foreground antialiased;
   }
 }
+
+/* ════════════════════════════════════════════════════════════════════════
+   ARTIVIO COMMAND CENTER — futuristic dark theme
+   Scoped to `.artivio` (the dashboard shell) so marketing/auth stay light.
+   Deep navy canvas · glass cards · gradient accents · ambient glow.
+   ════════════════════════════════════════════════════════════════════════ */
+
+.artivio {
+  --a-bg: #070b18;
+  --a-bg-soft: #0b1225;
+  --a-card: 255 255 255 / 0.04;
+  --a-border: 255 255 255 / 0.08;
+  --a-border-strong: 255 255 255 / 0.14;
+  --a-text: #e8ecf8;
+  --a-muted: #8892b0;
+  --a-accent: #7c8cff;
+  --a-accent-2: #d946ef;
+  --a-success: #34d399;
+
+  /* Retheme the shadcn tokens inside the shell so every existing component
+     (buttons, inputs, cards) inherits the dark look without being rewritten. */
+  --background: #070b18;
+  --foreground: #e8ecf8;
+  --card: rgb(255 255 255 / 4%);
+  --card-foreground: #e8ecf8;
+  --popover: #0d1428;
+  --popover-foreground: #e8ecf8;
+  --primary: #7c8cff;
+  --primary-foreground: #070b18;
+  --secondary: rgb(255 255 255 / 6%);
+  --secondary-foreground: #e8ecf8;
+  --muted: rgb(255 255 255 / 5%);
+  --muted-foreground: #8892b0;
+  --accent: rgb(255 255 255 / 8%);
+  --accent-foreground: #e8ecf8;
+  --border: rgb(255 255 255 / 9%);
+  --input: rgb(255 255 255 / 14%);
+  --ring: #7c8cff;
+
+  color: var(--a-text);
+  background: var(--a-bg);
+}
+
+/* Ambient background: two aurora blooms + a faint grid. */
+.artivio-canvas {
+  position: relative;
+  isolation: isolate;
+  background:
+    radial-gradient(70% 55% at 12% 0%, rgb(99 102 241 / 18%) 0%, transparent 60%),
+    radial-gradient(60% 50% at 95% 8%, rgb(217 70 239 / 12%) 0%, transparent 55%),
+    radial-gradient(70% 60% at 50% 110%, rgb(56 189 248 / 8%) 0%, transparent 60%),
+    var(--a-bg);
+}
+
+.artivio-canvas::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  opacity: 0.35;
+  background-image:
+    linear-gradient(to right, rgb(255 255 255 / 3%) 1px, transparent 1px),
+    linear-gradient(to bottom, rgb(255 255 255 / 3%) 1px, transparent 1px);
+  background-size: 56px 56px;
+  mask-image: radial-gradient(80% 60% at 50% 0%, black, transparent 75%);
+}
+
+/* Glass surface — the core card treatment. */
+.glass {
+  background: linear-gradient(
+    180deg,
+    rgb(255 255 255 / 6%) 0%,
+    rgb(255 255 255 / 3%) 100%
+  );
+  border: 1px solid rgb(255 255 255 / 9%);
+  border-radius: 1rem;
+  backdrop-filter: blur(14px);
+  box-shadow:
+    0 1px 0 0 rgb(255 255 255 / 6%) inset,
+    0 20px 40px -24px rgb(0 0 0 / 80%);
+  transition: border-color 0.25s ease, transform 0.25s ease, box-shadow 0.25s ease;
+}
+
+.glass-hover:hover {
+  border-color: rgb(124 140 255 / 35%);
+  box-shadow:
+    0 1px 0 0 rgb(255 255 255 / 8%) inset,
+    0 0 0 1px rgb(124 140 255 / 10%),
+    0 24px 50px -24px rgb(80 60 220 / 45%);
+  transform: translateY(-1px);
+}
+
+/* Gradient hairline at the top of a card — the "premium SaaS" tell. */
+.glass-topline::after {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgb(124 140 255 / 70%),
+    rgb(217 70 239 / 60%),
+    transparent
+  );
+  opacity: 0.7;
+}
+
+/* Text + surface accents */
+.grad-text {
+  background: linear-gradient(100deg, #a5b4fc 0%, #c4b5fd 45%, #f0abfc 100%);
+  background-clip: text;
+  color: transparent;
+}
+
+.grad-fill {
+  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #d946ef 100%);
+}
+
+.glow-ring {
+  box-shadow: 0 0 0 1px rgb(124 140 255 / 35%), 0 0 24px -6px rgb(124 140 255 / 60%);
+}
+
+/* Active nav pill */
+.nav-active {
+  background: linear-gradient(
+    90deg,
+    rgb(124 140 255 / 18%),
+    rgb(217 70 239 / 8%)
+  );
+  border: 1px solid rgb(124 140 255 / 25%);
+  box-shadow: inset 0 0 20px -8px rgb(124 140 255 / 60%);
+}
+
+/* Scrollbars inside the shell */
+.artivio ::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.artivio ::-webkit-scrollbar-thumb {
+  background: rgb(255 255 255 / 10%);
+  border-radius: 8px;
+}
+
+.artivio ::-webkit-scrollbar-thumb:hover {
+  background: rgb(255 255 255 / 18%);
+}
+
+.artivio ::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Live pulse dot */
+@keyframes a-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.35; transform: scale(0.85); }
+}
+
+.pulse-dot {
+  animation: a-pulse 1.6s ease-in-out infinite;
+}

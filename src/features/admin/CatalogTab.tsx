@@ -168,7 +168,7 @@ export const CatalogTab = (props: {
       </div>
 
       {show && (
-        <form onSubmit={submit} className="space-y-4 rounded-2xl border bg-background p-4">
+        <form onSubmit={submit} className="glass space-y-4 p-4">
           {/* what kind */}
           <div className="flex gap-2">
             {(['builtin', 'http'] as const).map(k => (
@@ -177,7 +177,7 @@ export const CatalogTab = (props: {
                 type="button"
                 onClick={() => setKind(k)}
                 className={`rounded-lg border px-3 py-1.5 text-xs font-medium ${
-                  kind === k ? 'border-foreground bg-foreground text-background' : 'text-muted-foreground'
+                  kind === k ? 'grad-fill border-transparent text-white' : 'border-white/12 text-white/50'
                 }`}
               >
                 {k === 'builtin' ? 'Built-in provider (REST API we wrap)' : 'Hosted MCP server (URL)'}
@@ -347,7 +347,7 @@ export const CatalogTab = (props: {
         </form>
       )}
 
-      <div className="divide-y rounded-2xl border bg-background">
+      <div className="glass glass-topline relative divide-y divide-white/6">
         {props.catalog.length === 0 && (
           <p className="px-4 py-6 text-sm text-muted-foreground">
             No plugins yet. Add Kie.ai as Tier 1 to give every workspace image and video generation.
@@ -359,13 +359,13 @@ export const CatalogTab = (props: {
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-sm font-medium">{p.name}</span>
                 <span className={`rounded px-1.5 py-0.5 text-xs ${
-                  p.tier === 'tier1' ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-600'
+                  p.tier === 'tier1' ? 'bg-indigo-400/15 text-indigo-300' : 'bg-white/10 text-white/50'
                 }`}
                 >
                   {p.tier === 'tier1' ? 'Tier 1 · metered' : 'Tier 2 · BYO key'}
                 </span>
                 {p.transport === 'builtin' && (
-                  <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-xs text-emerald-700">built-in</span>
+                  <span className="rounded bg-emerald-400/15 px-1.5 py-0.5 text-xs text-emerald-300">built-in</span>
                 )}
                 {p.category && <span className="text-xs text-muted-foreground">{p.category}</span>}
               </div>

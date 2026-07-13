@@ -26,12 +26,9 @@ export default async function DashboardIndexPage(props: {
 
   if (!tenant) {
     return (
-      <div className="
-        rounded-2xl border bg-background p-10 text-center
-      "
-      >
-        <h1 className="text-lg font-semibold">No workspace yet</h1>
-        <p className="mt-2 text-sm text-muted-foreground">
+      <div className="glass p-10 text-center">
+        <h1 className="text-lg font-semibold text-white">No workspace yet</h1>
+        <p className="mt-2 text-sm text-white/50">
           Ask your administrator to invite you to a workspace.
         </p>
       </div>
@@ -43,17 +40,26 @@ export default async function DashboardIndexPage(props: {
       {/* Header */}
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">
+          <p className="
+            text-[11px] font-semibold tracking-[0.14em] text-white/35 uppercase
+          "
+          >
+            Command Center
+          </p>
+          <h1 className="
+            grad-text mt-1 text-3xl font-extrabold tracking-tight
+          "
+          >
             {tenant.name}
           </h1>
-          <p className="text-sm text-muted-foreground">
+          <p className="mt-1 text-sm text-white/45">
             {user?.firstName ? `Welcome back, ${user.firstName}. ` : ''}
             Your agent is standing by.
           </p>
         </div>
         <span className="
-          rounded-full border px-2.5 py-1 text-xs font-medium
-          text-muted-foreground
+          rounded-full border border-white/12 bg-white/5 px-3 py-1 text-[11px]
+          font-medium tracking-wide text-white/60
         "
         >
           {role}

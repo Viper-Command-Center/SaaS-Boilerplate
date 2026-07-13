@@ -121,7 +121,7 @@ export const UsersTab = (props: {
       {error && <p className="text-sm text-red-600" role="alert">{error}</p>}
 
       {showNew && (
-        <form onSubmit={create} className="space-y-3 rounded-lg border bg-background p-4">
+        <form onSubmit={create} className="glass space-y-3 p-4">
           <div className="grid gap-3 sm:grid-cols-2">
             <input className={input} type="email" placeholder="email@client.com" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} required />
             <input className={input} placeholder="First name" value={form.firstName} onChange={e => setForm({ ...form, firstName: e.target.value })} />
@@ -141,9 +141,9 @@ export const UsersTab = (props: {
         </form>
       )}
 
-      <div className="overflow-x-auto rounded-lg border bg-background">
+      <div className="glass relative overflow-x-auto">
         <table className="w-full text-sm">
-          <thead className="border-b text-left text-xs text-muted-foreground">
+          <thead className="border-b border-white/8 text-left text-[10px] uppercase tracking-wider text-white/40">
             <tr>
               <th className="p-3">User</th>
               <th className="p-3">Workspaces</th>
@@ -153,12 +153,12 @@ export const UsersTab = (props: {
           </thead>
           <tbody>
             {props.users.map(u => (
-              <tr key={u.id} className="border-t align-top">
+              <tr key={u.id} className="border-t border-white/6 align-top">
                 <td className="p-3">
                   <div className="font-medium">
                     {u.email}
-                    {u.isAdmin && <span className="ml-2 rounded bg-indigo-100 px-1.5 py-0.5 text-xs text-indigo-700">admin</span>}
-                    {u.deletedAt && <span className="ml-2 rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600">disabled</span>}
+                    {u.isAdmin && <span className="ml-2 rounded bg-indigo-400/15 px-1.5 py-0.5 text-xs text-indigo-300">admin</span>}
+                    {u.deletedAt && <span className="ml-2 rounded bg-white/10 px-1.5 py-0.5 text-xs text-white/50">disabled</span>}
                   </div>
                   {u.firstName && <div className="text-xs text-muted-foreground">{u.firstName}</div>}
                 </td>

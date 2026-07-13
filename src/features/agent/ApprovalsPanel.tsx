@@ -59,8 +59,8 @@ export const ApprovalsPanel = (props: { tenantSlug: string }) => {
   };
 
   return (
-    <div className="rounded-lg border bg-background">
-      <div className="border-b px-4 py-3">
+    <div className="glass glass-topline relative">
+      <div className="border-b border-white/8 px-4 py-3">
         <span className="text-sm font-semibold">
           Approvals
           {pending.length > 0 ? ` (${pending.length} pending)` : ''}

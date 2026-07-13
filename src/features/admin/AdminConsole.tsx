@@ -71,7 +71,11 @@ export const AdminConsole = () => {
   };
 
   const tabClass = (t: string) =>
-    `rounded-md px-3 py-1.5 text-sm font-medium ${tab === t ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'}`;
+    `rounded-xl px-3.5 py-1.5 text-sm font-medium transition ${
+      tab === t
+        ? 'nav-active text-white'
+        : 'text-white/45 hover:bg-white/5 hover:text-white'
+    }`;
 
   return (
     <div className="space-y-6">
@@ -95,9 +99,9 @@ export const AdminConsole = () => {
       </div>
 
       {tab === 'workspaces' && (
-        <div className="overflow-x-auto rounded-lg border bg-background">
+        <div className="glass glass-topline relative overflow-x-auto">
           <table className="w-full text-sm">
-            <thead className="border-b text-left text-xs text-muted-foreground">
+            <thead className="border-b border-white/8 text-left text-[10px] uppercase tracking-wider text-white/40">
               <tr>
                 <th className="p-3">Workspace</th>
                 <th className="p-3">Plan</th>
@@ -113,7 +117,7 @@ export const AdminConsole = () => {
               {workspaces.map((w) => {
                 const overCap = w.dailyCapUsd > 0 && w.todayCostUsd >= w.dailyCapUsd;
                 return (
-                  <tr key={w.id} className="border-t">
+                  <tr key={w.id} className="border-t border-white/6">
                     <td className="p-3">
                       <div className="font-medium">{w.name}</div>
                       <div className="text-xs text-muted-foreground">
@@ -181,9 +185,22 @@ export const AdminConsole = () => {
 };
 
 const Stat = ({ label, value, accent }: { label: string; value: string; accent?: boolean }) => (
-  <div className="rounded-lg border bg-background p-4">
-    <div className="text-xs text-muted-foreground">{label}</div>
-    <div className={`mt-1 text-2xl font-bold ${accent === undefined ? '' : accent ? 'text-green-600' : 'text-red-600'}`}>
+  <div className="glass glass-hover glass-topline relative overflow-hidden p-4">
+    <div className="
+      text-[10px] font-semibold tracking-[0.12em] text-white/40 uppercase
+    "
+    >
+      {label}
+    </div>
+    <div
+      className={`mt-1.5 text-2xl font-extrabold tracking-tight ${
+        accent === undefined
+          ? 'grad-text'
+          : accent
+            ? 'text-emerald-400'
+            : 'text-rose-400'
+      }`}
+    >
       {value}
     </div>
   </div>

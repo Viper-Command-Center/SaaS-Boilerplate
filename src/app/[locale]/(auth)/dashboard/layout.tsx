@@ -18,8 +18,6 @@ export default async function DashboardLayout(props: {
   const { locale } = await props.params;
   setRequestLocale(locale);
 
-  // Authoritative auth check (the edge middleware only verifies the JWT
-  // signature; this hits the DB and honors revocation/expiry).
   const user = await getCurrentUser();
   if (!user) {
     redirect('/sign-in');
@@ -29,7 +27,7 @@ export default async function DashboardLayout(props: {
 
   return (
     <div className="
-      flex min-h-svh flex-col bg-muted/40
+      artivio artivio-canvas flex min-h-svh flex-col
       lg:flex-row
     "
     >
@@ -38,6 +36,7 @@ export default async function DashboardLayout(props: {
           workspaces={tenants.map(t => ({ id: t.id, name: t.name, slug: t.slug, role: t.role }))}
           isAdmin={user.isAdmin}
           userEmail={user.email}
+          userName={user.firstName}
         />
       </Suspense>
 
