@@ -30,15 +30,28 @@ export type R2Config = {
 };
 
 export function r2Config(): R2Config | null {
-  const endpoint = process.env.R2_ENDPOINT;
+  const rawEndpoint = process.env.R2_ENDPOINT;
   const bucket = process.env.R2_BUCKET_NAME;
   const accessKeyId = process.env.R2_ACCESS_KEY_ID;
   const secretAccessKey = process.env.R2_SECRET_ACCESS_KEY || process.env.R2_TOKEN_VALUE;
-  if (!endpoint || !bucket || !accessKeyId || !secretAccessKey) {
+  if (!rawEndpoint || !bucket || !accessKeyId || !secretAccessKey) {
     return null;
   }
+
+  // Cloudflare's dashboard shows the "S3 API" value WITH the bucket appended
+  // (https://<account>.r2.cloudflarestorage.com/<bucket>), and that's what people
+  // paste. We build path-style URLs ourselves, so keep only the origin —
+  // otherwise every key gets silently prefixed with the bucket name and the
+  // public domain 404s.
+  let endpoint: string;
+  try {
+    endpoint = new URL(rawEndpoint).origin;
+  } catch {
+    endpoint = rawEndpoint.replace(/\/+$/, '');
+  }
+
   return {
-    endpoint: endpoint.replace(/\/$/, ''),
+    endpoint,
     bucket,
     accessKeyId,
     secretAccessKey,
