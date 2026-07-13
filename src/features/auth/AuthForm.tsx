@@ -208,7 +208,7 @@ export const AuthForm = (props: { mode: Mode }) => {
               <>
                 Need access?
                 {' '}
-                <a className="text-primary underline" href="mailto:hello@artivio.ai">Request an invite</a>
+                <a className="text-primary underline" href="/request-invite">Request an invite</a>
               </>
             )}
       </p>

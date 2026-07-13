@@ -19,15 +19,22 @@ export function emailConfigured(): boolean {
   return Boolean(process.env.POSTMARK_SERVER_TOKEN);
 }
 
-async function send(a: {
+export type SendResult = { ok: boolean; error?: string };
+
+/**
+ * Low-level send. Returns the provider's error rather than swallowing it —
+ * silent email failures are impossible to debug (Postmark's most common one is
+ * an unverified Sender Signature for the From address).
+ */
+export async function sendEmail(a: {
   to: string;
   subject: string;
   html: string;
   text: string;
-}): Promise<boolean> {
+}): Promise<SendResult> {
   const token = process.env.POSTMARK_SERVER_TOKEN;
   if (!token) {
-    return false;
+    return { ok: false, error: 'POSTMARK_SERVER_TOKEN is not set.' };
   }
   try {
     const resp = await fetch('https://api.postmarkapp.com/email', {
@@ -46,10 +53,29 @@ async function send(a: {
         MessageStream: 'outbound',
       }),
     });
-    return resp.ok;
-  } catch {
-    return false;
+
+    if (resp.ok) {
+      return { ok: true };
+    }
+
+    const detail = await resp.json().catch(() => ({})) as { ErrorCode?: number; Message?: string };
+    const error = `Postmark ${resp.status} (code ${detail.ErrorCode ?? '?'}): ${detail.Message ?? 'unknown error'} · From=${FROM}`;
+    console.error('[email] send failed —', error);
+    return { ok: false, error };
+  } catch (err) {
+    const error = err instanceof Error ? err.message : 'network error';
+    console.error('[email] send threw —', error);
+    return { ok: false, error };
   }
+}
+
+async function send(a: {
+  to: string;
+  subject: string;
+  html: string;
+  text: string;
+}): Promise<boolean> {
+  return (await sendEmail(a)).ok;
 }
 
 function shell(title: string, body: string): string {

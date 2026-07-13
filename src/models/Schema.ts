@@ -36,6 +36,19 @@ export const users = pgTable(
   t => [uniqueIndex('users_email_normalized_uq').on(t.emailNormalized)],
 );
 
+/** Waitlist / invite requests from the public site. */
+export const inviteRequests = pgTable('invite_requests', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  name: varchar('name', { length: 120 }).notNull(),
+  email: varchar('email', { length: 254 }).notNull(),
+  company: varchar('company', { length: 160 }),
+  website: varchar('website', { length: 300 }),
+  useCase: text('use_case'),
+  clientCount: varchar('client_count', { length: 40 }),
+  status: varchar('status', { length: 20 }).notNull().default('new'), // new | invited | declined
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 /** Single-use, time-limited password reset tokens (hashed at rest). */
 export const passwordResetTokens = pgTable(
   'password_reset_tokens',

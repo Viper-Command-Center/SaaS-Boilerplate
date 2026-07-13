@@ -42,13 +42,26 @@ export const PanelsGrid = (props: { tenantSlug: string }) => {
 
   return (
     <div className="
-      grid gap-4 sm:grid-cols-2
+      grid gap-4
+      sm:grid-cols-2
       lg:grid-cols-3
     "
     >
       {panels.map(panel => (
-        <div key={panel.id} className="rounded-lg border bg-background p-4">
-          <div className="mb-2 text-xs font-semibold text-muted-foreground">{panel.title}</div>
+        <div
+          key={panel.id}
+          className="
+            rounded-2xl border bg-background p-4 shadow-sm transition
+            hover:shadow-md
+          "
+        >
+          <div className="
+            mb-2 text-[11px] font-semibold tracking-wider text-muted-foreground
+            uppercase
+          "
+          >
+            {panel.title}
+          </div>
           <PanelBody panel={panel} />
         </div>
       ))}

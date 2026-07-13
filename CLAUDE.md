@@ -125,6 +125,14 @@ Gotchas hit: (1) deploy.bat commits were silently rejected by lefthook/commitlin
 - **Admin user CRUD** (`/api/admin/users` + `UsersTab.tsx`): create user (optionally into a workspace with a role) → emails the invite, returns the temp password if email isn't configured; grant/revoke platform admin; reset password; disable/restore; hard delete; add/remove/modify workspace memberships inline.
 - New nav: **Account** (`/dashboard/settings` — 2FA + password) for everyone; **Admin** for platform admins.
 
+## Phase 8 — brand + UI revamp (built 2026-07-13, migration 0008)
+- **Logo**: `src/components/BrandLogo.tsx` — `<BrandMark>` (gradient tile + ascending bars + spark) and `<BrandLogo>` (mark + wordmark). Pure SVG, no assets.
+- **Split-screen auth**: `(auth)/(center)/layout.tsx` — brand panel (generated gradient-mesh + grid art, value props) on the left, form right; mark-only on mobile. Applies to sign-in / sign-up / reset-password / request-invite.
+- **Request-invite form** (`/request-invite`, replaces the mailto): name/email/company/website/how-many-clients/use-case → `invite_requests` table (migration 0008) + Postmark notice to hello@artivio.ai. Landing page + sign-in link to it.
+- **EMAIL DEBUGGING**: `sendEmail()` now returns the provider's real error and logs it (silent failures were undebuggable). `POST /api/admin/email-test` (admin only) sends a test and returns the Postmark error + hint. **"Test email" button in Admin → Users.** If Postmark rejects: the From address (EMAIL_FROM, default hello@artivio.ai) is most likely not a verified Sender Signature.
+- **Dashboard revamp**: left sidebar shell (`features/shell/Sidebar.tsx` — brand, workspace switcher w/ gradient avatars, nav, sign-out; collapses on mobile) replaces the old top nav (DashboardHeader/MobileNavigation/SlashIcon DELETED). Dashboard = header + agent-built panels (rounded-2xl cards) + 2-col: chat (2/3) and side rail (approvals, tools).
+- **Chat revamp**: compact bubbles, brand-mark avatar, auto-growing composer (Enter sends, Shift+Enter newline), animated typing dots, `[tool]`/`[approval]` lines rendered as subtle status rows, empty-state with suggestion chips, inline **bold**/`code` rendering.
+
 ### NEXT GAPS (ranked, from the review)
 1. **Spend guardrails** — per-workspace daily $ cap + kill switch before any spending tool. Blocker for autonomous ads.
 2. Support inbox via email MCP (use case #9).

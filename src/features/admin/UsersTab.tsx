@@ -88,17 +88,33 @@ export const UsersTab = (props: {
     props.reload();
   };
 
+  const testEmail = async () => {
+    setError(null);
+    setNotice('Sending test email…');
+    const res = await fetch('/api/admin/email-test', { method: 'POST' });
+    const data = await res.json().catch(() => null);
+    if (res.ok && data?.ok) {
+      setNotice(`Test email sent to ${data.to} (from ${data.from}). Check your inbox.`);
+    } else {
+      setNotice(null);
+      setError(`${data?.error ?? 'Email failed.'}${data?.hint ? ` — ${data.hint}` : ''}`);
+    }
+  };
+
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-xs text-muted-foreground">
           {props.emailConfigured
             ? 'New users are emailed an invite with a temporary password.'
             : 'Email is not configured — you\'ll get a temporary password to share manually.'}
         </p>
-        <Button size="sm" variant="outline" onClick={() => setShowNew(s => !s)}>
-          {showNew ? 'Cancel' : 'Add user'}
-        </Button>
+        <div className="flex gap-2">
+          <Button size="sm" variant="outline" onClick={testEmail}>Test email</Button>
+          <Button size="sm" variant="outline" onClick={() => setShowNew(s => !s)}>
+            {showNew ? 'Cancel' : 'Add user'}
+          </Button>
+        </div>
       </div>
 
       {notice && <p className="rounded-md bg-muted p-3 text-sm">{notice}</p>}

@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { setRequestLocale } from 'next-intl/server';
+import { BrandLogo } from '@/components/BrandLogo';
 
 export const metadata: Metadata = {
   title: 'Artivio — an AI employee for every business',
@@ -49,16 +50,7 @@ export default async function Index(props: IndexProps) {
   return (
     <main className="min-h-screen bg-white text-slate-900">
       <header className="mx-auto flex max-w-6xl items-center justify-between px-6 py-5">
-        <div className="flex items-center gap-2 text-lg font-bold tracking-tight">
-          <span className="
-            inline-flex size-7 items-center justify-center rounded-md
-            bg-slate-900 text-sm text-white
-          "
-          >
-            A
-          </span>
-          Artivio
-        </div>
+        <BrandLogo size={30} />
         <nav className="flex items-center gap-3 text-sm">
           <Link
             href="/sign-in"
@@ -69,15 +61,15 @@ export default async function Index(props: IndexProps) {
           >
             Sign in
           </Link>
-          <a
-            href="#waitlist"
+          <Link
+            href="/request-invite"
             className="
               rounded-lg bg-slate-900 px-4 py-2 font-medium text-white
               hover:bg-slate-700
             "
           >
-            Join the waitlist
-          </a>
+            Request an invite
+          </Link>
         </nav>
       </header>
 
@@ -180,16 +172,16 @@ export default async function Index(props: IndexProps) {
             Artivio is onboarding a first group of businesses and agencies. Tell
             us about your project and we&apos;ll set you up with a workspace.
           </p>
-          <a
-            href="mailto:hello@artivio.ai?subject=Artivio%20waitlist&body=Hi%20Artivio%20team%2C%0A%0AI%27d%20like%20early%20access.%0A%0ABusiness%2Fagency%3A%0AWebsite%3A%0AWhat%20I%27d%20use%20Artivio%20for%3A%0A"
+          <Link
+            href="/request-invite"
             className="
               mt-8 inline-block rounded-lg bg-white px-8 py-3 font-semibold
               text-slate-900
               hover:bg-slate-100
             "
           >
-            Join the waitlist →
-          </a>
+            Request an invite →
+          </Link>
           <p className="mt-4 text-sm text-slate-400">
             Or email us directly at
             {' '}

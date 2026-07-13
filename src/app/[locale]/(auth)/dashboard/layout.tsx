@@ -1,28 +1,20 @@
 import type { Metadata } from 'next';
-import { getTranslations, setRequestLocale } from 'next-intl/server';
+import { setRequestLocale } from 'next-intl/server';
 import { redirect } from 'next/navigation';
-import { DashboardHeader } from '@/features/dashboard/DashboardHeader';
+import { Suspense } from 'react';
+import { Sidebar } from '@/features/shell/Sidebar';
 import { getCurrentUser } from '@/libs/auth/session';
+import { ensureDefaultTenant } from '@/libs/tenants';
 
-type DashboardLayoutProps = {
-  params: Promise<{ locale: string }>;
-  children: React.ReactNode;
+export const metadata: Metadata = {
+  title: 'Command Center',
+  description: 'Your Artivio workspace.',
 };
 
-export async function generateMetadata(props: DashboardLayoutProps): Promise<Metadata> {
-  const { locale } = await props.params;
-  const t = await getTranslations({
-    locale,
-    namespace: 'DashboardLayout',
-  });
-
-  return {
-    title: t('meta_title'),
-    description: t('meta_description'),
-  };
-}
-
-export default async function DashboardLayout(props: DashboardLayoutProps) {
+export default async function DashboardLayout(props: {
+  params: Promise<{ locale: string }>;
+  children: React.ReactNode;
+}) {
   const { locale } = await props.params;
   setRequestLocale(locale);
 
@@ -33,46 +25,28 @@ export default async function DashboardLayout(props: DashboardLayoutProps) {
     redirect('/sign-in');
   }
 
-  const t = await getTranslations({
-    locale,
-    namespace: 'DashboardLayout',
-  });
+  const tenants = await ensureDefaultTenant(user.id, user.isAdmin);
 
   return (
-    <>
-      <div className="shadow-md">
-        <div className="
-          mx-auto flex max-w-7xl items-center justify-between px-3 py-4
-        "
-        >
-          <DashboardHeader
-            menu={[
-              {
-                href: '/dashboard',
-                label: t('home'),
-              },
-              ...(user.isAdmin
-                ? [{ href: '/dashboard/admin', label: 'Admin' }]
-                : []),
-              {
-                href: '/dashboard/settings',
-                label: 'Account',
-              },
-              {
-                href: '/dashboard/help',
-                label: 'Help',
-              },
-            ]}
-          />
-        </div>
-      </div>
+    <div className="
+      flex min-h-svh flex-col bg-muted/40
+      lg:flex-row
+    "
+    >
+      <Suspense fallback={null}>
+        <Sidebar
+          workspaces={tenants.map(t => ({ id: t.id, name: t.name, slug: t.slug, role: t.role }))}
+          isAdmin={user.isAdmin}
+          userEmail={user.email}
+        />
+      </Suspense>
 
-      <div className="min-h-[calc(100vh-72px)] bg-muted">
-        <div className="mx-auto max-w-7xl px-3 pt-6 pb-16">
+      <main className="min-w-0 flex-1">
+        <div className="mx-auto max-w-6xl px-5 py-8">
           {props.children}
         </div>
-      </div>
-    </>
+      </main>
+    </div>
   );
 }
 
