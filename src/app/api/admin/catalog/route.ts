@@ -154,7 +154,9 @@ export async function POST(request: Request) {
   // Per-connection providers (WordPress) never have a platform key — each
   // workspace supplies its own site + credential when they enable it.
   const bp = body.transport === 'builtin' && body.provider ? getBuiltinProvider(body.provider) : undefined;
-  const perConnection = Boolean(bp?.perConnection);
+  // Neither needs a platform key: per-connection providers take the client's own,
+  // and noCredential providers (AgentCore browser) ride the platform AWS keys.
+  const perConnection = Boolean(bp?.perConnection) || Boolean(bp?.noCredential);
 
   // Tier 1 holds OUR credential — sealed in the vault (tenantId NULL =
   // platform-level, shared by every workspace that enables the plugin).

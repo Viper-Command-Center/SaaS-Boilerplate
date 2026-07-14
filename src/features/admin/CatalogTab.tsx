@@ -38,6 +38,8 @@ export type BuiltinProvider = {
   perConnection?: boolean;
   /** Accepts up to 20 keys, round-robined with failover. */
   multiKey?: boolean;
+  /** Needs no credential at all — rides platform infrastructure. */
+  noCredential?: boolean;
   /** Provider reports its own consumption — one rate prices every model. */
   usageMetering?: {
     unitLabel: string;
@@ -308,9 +310,11 @@ export const CatalogTab = (props: {
   const activeBuiltin = props.builtins.find(b => b.slug === form.provider);
   const presets = props.presets ?? [];
   const saveLabel = editing ? 'Save changes' : 'Save plugin';
-  // Per-site providers (WordPress) have no platform key — the workspace enters
-  // their own site + credential when they enable it.
-  const perConnection = kind === 'builtin' && Boolean(activeBuiltin?.perConnection);
+  // No platform key field for these: per-site providers (WordPress) take the
+  // client's own credential, and noCredential providers (AgentCore browser)
+  // authenticate with the platform's AWS keys.
+  const perConnection = kind === 'builtin'
+    && (Boolean(activeBuiltin?.perConnection) || Boolean(activeBuiltin?.noCredential));
   const multiKey = kind === 'builtin' && Boolean(activeBuiltin?.multiKey);
   const usage = kind === 'builtin' ? activeBuiltin?.usageMetering ?? null : null;
   const retailPerUnit = (Number(unitCost) || 0) * (1 + (Number(defaultMarkup) || 0) / 100);

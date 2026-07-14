@@ -52,6 +52,7 @@
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "tailwind-merge": "^3.6.0",
+    "ws": "^8.18.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
@@ -78,6 +79,7 @@
     "@types/node": "^25.9.3",
     "@types/pg": "^8.20.0",
     "@types/react": "^19.2.17",
+    "@types/ws": "^8.5.13",
     "@vitejs/plugin-react": "^6.0.2",
     "@vitest/browser": "^4.1.9",
     "@vitest/browser-playwright": "^4.1.9",

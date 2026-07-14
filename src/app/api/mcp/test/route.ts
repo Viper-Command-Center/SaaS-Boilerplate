@@ -17,6 +17,7 @@ import { z } from 'zod';
 import { getCurrentUser } from '@/libs/auth/session';
 import { db } from '@/libs/DB';
 import { McpHttpClient } from '@/libs/mcp/client';
+import { applyUrlSecret } from '@/libs/mcp/registry';
 import { classifyToolError } from '@/libs/support/issues';
 import { getUserTenants } from '@/libs/tenants';
 import { openSecret } from '@/libs/vault';
@@ -105,7 +106,10 @@ export async function POST(request: Request) {
   }
 
   try {
-    const client = new McpHttpClient(url, headers);
+    // Vendors that carry the key in the URL path (Firecrawl) keep it in the
+    // vault under the reserved `url` name; substitute it in memory here too.
+    const resolved = applyUrlSecret(url, headers);
+    const client = new McpHttpClient(resolved.url, resolved.headers);
     const tools = await client.listTools();
     return NextResponse.json({
       ok: true,

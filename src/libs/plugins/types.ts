@@ -61,6 +61,12 @@ export type BuiltinProvider = {
    * out of credit or blocked.
    */
   multiKey?: boolean;
+  /**
+   * True = the provider needs NO credential of its own because it authenticates
+   * with platform infrastructure already configured (e.g. the AgentCore browser
+   * uses the same AWS keys as Bedrock). Nothing for anyone to paste.
+   */
+  noCredential?: boolean;
   /** Set when the provider reports its own consumption (see UsageMetering). */
   usageMetering?: UsageMetering;
   tools: BuiltinTool[];

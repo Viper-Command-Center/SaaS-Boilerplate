@@ -61,7 +61,10 @@ export async function runToolLoop(a: {
         usage: {
           inputTokens: response.usage.input_tokens ?? 0,
           outputTokens: response.usage.output_tokens ?? 0,
+          // Prompt caching: reads are ~10% of input price, writes are 1.25x.
+          // Both must be metered or the ledger lies about our real cost.
           cacheReadTokens: response.usage.cache_read_input_tokens ?? 0,
+          cacheWriteTokens: response.usage.cache_creation_input_tokens ?? 0,
         },
         detail: a.conversationId ? 'chat' : 'scheduled',
       });

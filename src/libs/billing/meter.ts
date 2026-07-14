@@ -43,8 +43,14 @@ function priceForModel(modelId: string): ModelPrice {
 export type TokenUsage = {
   inputTokens: number;
   outputTokens: number;
+  /** Read from the prompt cache — ~10% of the input price. */
   cacheReadTokens?: number;
+  /** Written to the prompt cache — 1.25x the input price (a one-off premium). */
+  cacheWriteTokens?: number;
 };
+
+/** Cache writes carry a 25% premium over normal input tokens. */
+const CACHE_WRITE_MULTIPLIER = 1.25;
 
 /** Cost in USD of a single LLM call, from its actual token counts. */
 export function llmCostUsd(modelId: string, usage: TokenUsage): number {
@@ -53,6 +59,7 @@ export function llmCostUsd(modelId: string, usage: TokenUsage): number {
     (usage.inputTokens / 1_000_000) * p.input
     + (usage.outputTokens / 1_000_000) * p.output
     + ((usage.cacheReadTokens ?? 0) / 1_000_000) * p.cacheRead
+    + ((usage.cacheWriteTokens ?? 0) / 1_000_000) * p.input * CACHE_WRITE_MULTIPLIER
   );
 }
 

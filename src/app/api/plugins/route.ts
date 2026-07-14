@@ -58,6 +58,7 @@ export async function GET(request: Request) {
       const rules = (p.priceRules ?? {}) as Record<string, { unit: string; costUsd: number; markup?: number; argField?: string }>;
       const provider = p.transport === 'builtin' && p.provider ? getBuiltinProvider(p.provider) : undefined;
       const perConnection = Boolean(provider?.perConnection);
+      const noCredential = Boolean(provider?.noCredential);
       return {
         id: p.id,
         slug: p.slug,
@@ -67,8 +68,9 @@ export async function GET(request: Request) {
         tier: p.tier,
         authHint: p.authHint,
         // Tier 2 = client's own key. Per-connection built-ins (WordPress) also
-        // need the client's own credential AND their site URL.
-        needsKey: p.tier === 'tier2' || perConnection,
+        // need the client's own credential AND their site URL. noCredential
+        // providers (AgentCore browser) need nothing — one click to enable.
+        needsKey: !noCredential && (p.tier === 'tier2' || perConnection),
         needsSiteUrl: perConnection,
         installed: installedIds.has(p.id),
         // Show clients what they'll be charged, never our raw cost.
@@ -142,7 +144,10 @@ export async function POST(request: Request) {
   const provider = plugin.transport === 'builtin' && plugin.provider
     ? getBuiltinProvider(plugin.provider)
     : undefined;
-  const needsOwnCredential = plugin.tier === 'tier2' || Boolean(provider?.perConnection);
+  // noCredential providers (AgentCore browser) authenticate with platform AWS
+  // keys — there is nothing for the client to supply, even on tier 2.
+  const needsOwnCredential = !provider?.noCredential
+    && (plugin.tier === 'tier2' || Boolean(provider?.perConnection));
 
   // Per-connection built-ins (WordPress) target the workspace's own site.
   const targetUrl = provider?.perConnection ? (body.siteUrl ?? '') : plugin.url;
@@ -170,6 +175,13 @@ export async function POST(request: Request) {
     if (cred) {
       headerCredentials[plugin.authHeader ?? 'Authorization'] = cred.id;
     }
+  } else if (plugin.transport === 'http' && plugin.credentialId) {
+    // Tier 1 over HTTP (e.g. Firecrawl on OUR key): the registry reads
+    // credentials from the CONNECTION, but the platform key lives on the
+    // catalog entry. Point the connection at it so the call is authenticated.
+    // The credential row is platform-level (tenantId NULL) and shared — the
+    // client never sees the value, only the capability.
+    headerCredentials[plugin.authHeader ?? 'Authorization'] = plugin.credentialId;
   }
 
   await db.insert(mcpConnections).values({

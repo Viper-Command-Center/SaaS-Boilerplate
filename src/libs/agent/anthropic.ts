@@ -128,6 +128,30 @@ async function* streamAnthropicDirect(a: {
 }
 
 /**
+ * PROMPT CACHING — the single biggest lever on gross margin.
+ *
+ * Every turn (and every iteration of the tool loop) re-sends the same system
+ * prompt and the same tool definitions. That prefix is easily thousands of
+ * tokens and it is IDENTICAL every time. Cached reads cost ~10% of fresh input
+ * tokens, so caching the prefix cuts the dominant cost of a long agent turn.
+ *
+ * The request prefix is ordered tools → system → messages, and a cache
+ * breakpoint caches everything up to and including the block it is on. So a
+ * SINGLE breakpoint on the system block caches both the tools and the system
+ * prompt. Below the model's minimum cacheable length the breakpoint is simply
+ * ignored (no error), so this is safe for small prompts too.
+ */
+function cachedSystem(system: string) {
+  return [
+    {
+      type: 'text',
+      text: system,
+      cache_control: { type: 'ephemeral' },
+    },
+  ];
+}
+
+/**
  * Tool-capable single model call (non-streaming) via the Bedrock bearer
  * endpoint — used by the agent tool loop. Falls back to api.anthropic.com
  * when only an Anthropic key is configured.
@@ -155,7 +179,8 @@ export async function callClaudeWithTools(a: {
       body: JSON.stringify({
         anthropic_version: 'bedrock-2023-05-31',
         max_tokens: maxTokens,
-        system: a.system,
+        // Cached prefix: tools + system prompt (see cachedSystem above).
+        system: cachedSystem(a.system),
         messages: a.messages,
         ...(a.tools.length > 0 ? { tools: a.tools } : {}),
       }),
@@ -181,7 +206,7 @@ export async function callClaudeWithTools(a: {
       body: JSON.stringify({
         model: ANTHROPIC_MODEL,
         max_tokens: maxTokens,
-        system: a.system,
+        system: cachedSystem(a.system),
         messages: a.messages,
         ...(a.tools.length > 0 ? { tools: a.tools } : {}),
       }),

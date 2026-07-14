@@ -66,6 +66,32 @@ async function resolveHeaders(
   return headers;
 }
 
+/**
+ * Some vendors put the API key in the URL PATH rather than a header — Firecrawl's
+ * hosted MCP is `https://mcp.firecrawl.dev/{key}/v2/mcp`. We must never store that
+ * key in `mcp_connections.url`, which is plaintext. So the catalog stores a URL
+ * TEMPLATE containing `{key}`, the secret lives in the vault like any other
+ * credential (under the reserved name `url`), and it is substituted here, at call
+ * time, in memory only.
+ */
+export const URL_SECRET_KEY = 'url';
+
+export function applyUrlSecret(
+  rawUrl: string,
+  headers: Record<string, string>,
+): { url: string; headers: Record<string, string> } {
+  const secret = headers[URL_SECRET_KEY];
+  if (!secret) {
+    return { url: rawUrl, headers };
+  }
+  // It's a URL segment, not a header — strip it so we never also send it.
+  const { [URL_SECRET_KEY]: _omit, ...rest } = headers;
+  return {
+    url: rawUrl.replace('{key}', encodeURIComponent(secret)),
+    headers: rest,
+  };
+}
+
 export async function buildTenantToolset(tenantId: string): Promise<TenantToolset> {
   const connections = await db
     .select()
@@ -97,12 +123,15 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
         }
 
         // Where the credential lives depends on the provider:
+        //  · noCredential (AgentCore browser) → none; it uses platform AWS keys
         //  · perConnection (WordPress) → the WORKSPACE's own credential + target
         //  · otherwise (Kie.ai)        → the PLATFORM credential on the catalog
         let credentialId: string | undefined;
         let target: string | undefined;
 
-        if (provider.perConnection) {
+        if (provider.noCredential) {
+          credentialId = undefined;
+        } else if (provider.perConnection) {
           const map = (conn.headerCredentials ?? {}) as Record<string, string>;
           credentialId = Object.values(map)[0];
           target = conn.url ?? undefined;
@@ -113,17 +142,20 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
         } else {
           credentialId = entry.credentialId ?? undefined;
         }
-        if (!credentialId) {
+        if (!credentialId && !provider.noCredential) {
           failedConnections.push(`${conn.name} (no credential configured)`);
           continue;
         }
 
-        const [cred] = await db.select().from(credentials).where(eq(credentials.id, credentialId)).limit(1);
-        if (!cred) {
-          failedConnections.push(`${conn.name} (credential missing)`);
-          continue;
+        let apiKey = '';
+        if (credentialId) {
+          const [cred] = await db.select().from(credentials).where(eq(credentials.id, credentialId)).limit(1);
+          if (!cred) {
+            failedConnections.push(`${conn.name} (credential missing)`);
+            continue;
+          }
+          apiKey = openSecret(cred.cipher);
         }
-        const apiKey = openSecret(cred.cipher);
         const rules = (entry.priceRules ?? {}) as Record<string, PriceRule>;
         const policyMap = (conn.toolPolicy ?? {}) as Record<string, ToolPolicy>;
 
@@ -191,7 +223,8 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
     }
     try {
       const headers = await resolveHeaders(conn.headerCredentials);
-      const client = new McpHttpClient(conn.url, headers);
+      const { url, headers: safeHeaders } = applyUrlSecret(conn.url, headers);
+      const client = new McpHttpClient(url, safeHeaders);
       const tools = await client.listTools();
       const policyMap = (conn.toolPolicy ?? {}) as Record<string, ToolPolicy>;
 
