@@ -26,7 +26,7 @@ const MAX_CHARS = 40_000;
  * content — and it runs inside Railway's private network next to Postgres.
  * Public http(s) only: no localhost, no RFC1918, no cloud metadata endpoint.
  */
-function assertPublicUrl(raw: string): URL {
+export function assertPublicUrl(raw: string): URL {
   let url: URL;
   try {
     url = new URL(raw);

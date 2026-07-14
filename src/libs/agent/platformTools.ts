@@ -7,10 +7,10 @@
 
 import type { AnthropicTool } from '@/libs/mcp/registry';
 import { and, asc, desc, eq } from 'drizzle-orm';
-import { buildWebTools } from '@/libs/agent/webTools';
+import { assertPublicUrl, buildWebTools } from '@/libs/agent/webTools';
 import { captureIssue } from '@/libs/support/issues';
 import { db } from '@/libs/DB';
-import { getFile, listFiles, saveFile } from '@/libs/storage/files';
+import { getFile, listFiles, saveFile, saveRemoteFile } from '@/libs/storage/files';
 import { dashboardPanels, datasets, scheduledTasks } from '@/models/Schema';
 
 export type PlatformExecutor = {
@@ -164,6 +164,18 @@ export function buildPlatformTools(tenantId: string): {
           content: { type: 'string' },
         },
         required: ['name', 'content'],
+      },
+    },
+    {
+      name: 'save_file_from_url',
+      description: 'Download a file from a public URL and save the ACTUAL FILE into the workspace library (R2) — images, PNGs, PDFs, video, CSVs, anything. Use this whenever you produce or find a binary asset the user should keep: a QR code, a chart, an export, a rendered image. save_note only stores text — it CANNOT store an image. The saved file gets a permanent public URL you can use in posts and on sites. Do not tell the user you cannot save binary files; use this.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          url: { type: 'string', description: 'Public http(s) URL of the file to fetch.' },
+          name: { type: 'string', description: 'Filename to save it as, with extension, e.g. "budgetsmart-qr-emerald.png".' },
+        },
+        required: ['url', 'name'],
       },
     },
     {
@@ -418,6 +430,32 @@ export function buildPlatformTools(tenantId: string): {
         source: 'agent',
       });
       return `Saved "${row?.name}" to the workspace library (id ${row?.id}).`;
+    },
+  });
+
+  executors.set('save_file_from_url', {
+    policy: 'auto', // writes only into this workspace's own storage
+    call: async (args) => {
+      // Same SSRF guard as fetch_url: the agent picks these URLs, sometimes
+      // from untrusted page content, and we run next to the private network.
+      const url = assertPublicUrl(String(args.url ?? ''));
+      const name = String(args.name ?? '').trim() || 'download';
+
+      const row = await saveRemoteFile({
+        tenantId,
+        url: url.toString(),
+        name,
+        source: 'agent',
+      });
+
+      return JSON.stringify({
+        saved: true,
+        id: row?.id,
+        name: row?.name,
+        sizeKb: Math.round((row?.sizeBytes ?? 0) / 1024),
+        url: row?.publicUrl,
+        note: 'The real file is now in the workspace Files library and will show up under Generated media. Use this URL when publishing — it is permanent.',
+      });
     },
   });
 

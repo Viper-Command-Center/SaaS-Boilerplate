@@ -209,6 +209,61 @@ export async function archiveGeneratedAssets(a: {
   return saved;
 }
 
+/** 100MB ceiling for an agent-initiated fetch — enough for media, not a DoS. */
+const MAX_REMOTE_BYTES = 100 * 1024 * 1024;
+
+/**
+ * Pull a file from a public URL straight into the workspace library.
+ *
+ * This is the "save the actual PNG, not a link to it" capability. Without it the
+ * agent could only write text notes, so anything binary it produced (a QR code,
+ * a chart, a rendered image from any API) died as a URL in a markdown file.
+ * Assets are public-URL'd so they can be used in posts and on sites.
+ */
+export async function saveRemoteFile(a: {
+  tenantId: string;
+  url: string;
+  name: string;
+  source?: string;
+  createdBy?: string;
+  meta?: Record<string, unknown>;
+}) {
+  if (!storageConfigured()) {
+    throw new Error('File storage is not configured (R2_* variables missing).');
+  }
+
+  // Size-check before pulling the whole thing into memory where we can.
+  const head = await fetch(a.url, { method: 'HEAD' }).catch(() => null);
+  const declared = Number(head?.headers.get('content-length') ?? 0);
+  if (declared > MAX_REMOTE_BYTES) {
+    throw new Error(`That file is ${Math.round(declared / (1024 * 1024))}MB — the limit is 100MB.`);
+  }
+
+  const key = keyFor(a.tenantId, a.name);
+  const { bytes, contentType } = await archiveRemote(a.url, key);
+  if (bytes > MAX_REMOTE_BYTES) {
+    await deleteObject(key).catch(() => {});
+    throw new Error('That file is larger than the 100MB limit.');
+  }
+
+  const [row] = await db
+    .insert(files)
+    .values({
+      tenantId: a.tenantId,
+      name: a.name.slice(0, 300),
+      kind: 'asset', // binary output → gets a public URL so it can be published
+      mime: contentType.slice(0, 120),
+      sizeBytes: bytes,
+      r2Key: key,
+      publicUrl: publicUrlFor(key),
+      source: (a.source ?? 'agent').slice(0, 40),
+      meta: { ...(a.meta ?? {}), sourceUrl: a.url },
+      createdBy: a.createdBy,
+    })
+    .returning();
+  return row;
+}
+
 export async function listFiles(tenantId: string, limit = 100) {
   return db
     .select({
