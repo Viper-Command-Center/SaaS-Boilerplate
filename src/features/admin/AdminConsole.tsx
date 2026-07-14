@@ -5,6 +5,7 @@ import type { AdminUser, Workspace as WsOption } from '@/features/admin/UsersTab
 import { useCallback, useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { CatalogTab } from '@/features/admin/CatalogTab';
+import { IssuesTab } from '@/features/admin/IssuesTab';
 import { UsersTab } from '@/features/admin/UsersTab';
 
 type Workspace = {
@@ -27,7 +28,8 @@ type Workspace = {
 const money = (n: number) => `$${n.toFixed(2)}`;
 
 export const AdminConsole = () => {
-  const [tab, setTab] = useState<'workspaces' | 'users' | 'catalog'>('workspaces');
+  const [tab, setTab] = useState<'workspaces' | 'users' | 'catalog' | 'issues'>('workspaces');
+  const [openIssues, setOpenIssues] = useState(0);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [totals, setTotals] = useState({ cost: 0, billed: 0, margin: 0, users: 0, workspaces: 0 });
   const [users, setUsers] = useState<AdminUser[]>([]);
@@ -52,6 +54,10 @@ export const AdminConsole = () => {
       setCatalog(d.catalog ?? []);
       setBuiltins(d.builtinProviders ?? []);
       setPresets(d.presets ?? []);
+    }).catch(() => {});
+    // Badge the tab so an escalation is visible without opening it.
+    fetch('/api/admin/issues?status=open').then(r => r.json()).then((d) => {
+      setOpenIssues((d.issues ?? []).filter((i: { kind: string }) => i.kind === 'platform').length);
     }).catch(() => {});
   }, []);
 
@@ -98,6 +104,18 @@ export const AdminConsole = () => {
         <button type="button" className={tabClass('workspaces')} onClick={() => setTab('workspaces')}>Workspaces</button>
         <button type="button" className={tabClass('users')} onClick={() => setTab('users')}>Users</button>
         <button type="button" className={tabClass('catalog')} onClick={() => setTab('catalog')}>Plugin catalog</button>
+        <button type="button" className={tabClass('issues')} onClick={() => setTab('issues')}>
+          Issues
+          {openIssues > 0 && (
+            <span className="
+              ml-1.5 rounded-full bg-rose-500/90 px-1.5 py-0.5 text-[10px]
+              font-semibold text-white
+            "
+            >
+              {openIssues}
+            </span>
+          )}
+        </button>
       </div>
 
       {tab === 'workspaces' && (
@@ -182,6 +200,8 @@ export const AdminConsole = () => {
       )}
 
       {tab === 'catalog' && <CatalogTab catalog={catalog} builtins={builtins} presets={presets} reload={reload} />}
+
+      {tab === 'issues' && <IssuesTab />}
     </div>
   );
 };

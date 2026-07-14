@@ -412,6 +412,37 @@ export const files = pgTable(
   t => [index('files_tenant_at_idx').on(t.tenantId, t.createdAt)],
 );
 
+// ─── Phase 14: issue triage + escalation ────────────────────────────────────
+// When something breaks mid-conversation, three things must happen: the client
+// gets an honest message, the platform captures WHY (not a guess), and anything
+// that needs a code change reaches Ryan without the client having to describe it.
+//
+// kind:
+//   config   — the client can fix it (wrong key, bad URL, expired token)
+//   provider — the third party is down / rejecting (their problem, retry later)
+//   platform — OUR bug. Escalated: emailed + shown in the admin Issues inbox
+//              with a diagnostic bundle ready to hand to an engineer.
+
+export const issues = pgTable(
+  'issues',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenantId: uuid('tenant_id').references(() => tenants.id, { onDelete: 'cascade' }),
+    kind: varchar('kind', { length: 20 }).notNull().default('platform'),
+    // where it happened: tool name, connection name, route…
+    source: varchar('source', { length: 160 }).notNull(),
+    // the REAL error text — never a paraphrase
+    message: text('message').notNull(),
+    // args (redacted), connection id, transport, stack, failed connections…
+    detail: jsonb('detail'),
+    status: varchar('status', { length: 20 }).notNull().default('open'), // open | resolved
+    // set when the agent escalated it rather than the server auto-capturing
+    reportedByAgent: boolean('reported_by_agent').notNull().default(false),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  t => [index('issues_status_at_idx').on(t.status, t.createdAt)],
+);
+
 // ─── Boilerplate demo table (kept because migration 0000 already created it) ─
 export const todoSchema = pgTable('todo', {
   id: serial('id').primaryKey(),

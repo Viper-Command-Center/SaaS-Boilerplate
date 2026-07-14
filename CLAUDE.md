@@ -208,6 +208,22 @@ Admin → Plugin catalog → Add plugin → "Built-in provider" → Kie.ai → T
   - Cloud browsers (Browserbase/Hyperbrowser/Steel) are only for AUTHENTICATED multi-step flows. We don't need them: Zernio/WordPress/GitHub/Duda/ads all have APIs or MCPs.
 - **Still missing: WEB SEARCH.** The agent can read a URL but cannot find one. Bigger day-one gap than JS rendering; fix with a search MCP (Brave/Exa/Firecrawl search).
 
+## Phase 12c — approvals ran only HTTP MCP, never built-ins (2026-07-14, no migration)
+- **Ryan's Kie.ai bug**: approving `mcp__kie-ai__generate_image` failed with "The tool connection is no longer available." Cause: `/api/approvals/[id]` was written in Phase 2 and re-implemented HTTP MCP calling inline, gated on `conn.transport === 'http'` — so EVERY built-in provider (Kie, WordPress) threw that misleading error on approval, and approved calls ALSO skipped metering + asset archiving (all of which live in the registry executor).
+- **Fix**: the route now runs the approved call through `buildTenantToolset(tenantId).resolve(toolName).call(args)` — the exact same executor the agent uses for auto calls. One code path → approved calls meter, archive Kie assets, and support every transport. `maxDuration = 300` (Kie video is slow). Error text is now accurate ("… not available … connections reporting problems: …").
+- **Agent behaviour**: it had confidently told Ryan to "reconnect Kie in the Tools panel" — a hallucinated fix, because it faithfully relayed the misleading hard-coded error. Prompt now instructs: on tool failure, relay the real error verbatim, admit it can't see platform code/logs, and NOT invent remediation steps the error doesn't state. The agent cannot self-repair the platform (no source/deploy access — and shouldn't have it).
+
+## Phase 14 — issue triage + escalation (2026-07-14, migration 0011)
+- **Problem it solves** (from the Kie incident): the platform threw a misleading error → the agent invented a plausible fix ("reconnect it in the Tools panel") → Ryan burned time on a dead end. Making the agent "smarter" is the wrong fix; making the platform TELL THE TRUTH and route the failure to whoever can act on it is the right one.
+- `src/libs/support/issues.ts`:
+  - **`classifyToolError()`** — who can actually fix this? `config` (client: bad key 401/403, bad URL 404/DNS, missing credential) · `provider` (429/402/5xx/timeout — their problem, retry) · `platform` (**anything we don't positively recognise** — conservative on purpose: silently blaming the client for our defect is the costliest failure).
+  - **`captureIssue()`** — writes an `issues` row with the REAL error + redacted args + stack, and **emails the operator ONLY for `platform` class** (config/provider noise would train Ryan to ignore the inbox). Never throws.
+  - **`buildBundle()`** — copy-pasteable markdown diagnostic (where/workspace/when/verbatim error/context JSON) so a bug is actionable without interviewing the client.
+- **Wired in**: `loop.ts` tool-failure path (agent is now handed the classification + an explicit "do NOT invent troubleshooting steps"), `/api/approvals/[id]` failure path (returns `kind`/`guidance`/`escalated`), and `report_issue` platform tool (policy `auto`) so the agent can escalate things no exception caught.
+- **Prevention beats triage**: `POST /api/mcp/test` + **"Test connection" button** in the Tools panel probes a hosted MCP server (initialize + tools/list) BEFORE saving and reports the real, classified error next to the field that caused it. Most "the tool is broken" reports are a wrong URL or bad key.
+- **Operator surface**: `/api/admin/issues` + **Admin → Issues** tab (`IssuesTab.tsx`) — red badge counts open `platform` bugs, colour-coded by who owns the fix, "Copy bundle" hands it straight to an engineer, Resolve closes it.
+- Schema: `issues` (tenantId nullable, kind, source, message, detail jsonb, status, reportedByAgent). Migration `0011_issues` — hand-written, idempotent.
+
 ## Gotchas
 - **Migration 0010 was hand-written** (SQL + `_journal.json`), because bash reads of the mounted repo are stale/truncated so drizzle-kit can't see the real `Schema.ts`. The SQL is idempotent (`IF NOT EXISTS` + `DO $$ … EXCEPTION WHEN duplicate_object`). If drizzle-kit ever regenerates from the last snapshot it may re-emit `files` — harmless, but delete the dupe.
 - **Bash cannot read mounted files reliably** (virtiofs returns NUL-padded or truncated content — `Schema.ts` read as 1KB when it's 15KB). Never typecheck/build/patch from bash on the mount; use Read/Grep/Edit/Write tools.

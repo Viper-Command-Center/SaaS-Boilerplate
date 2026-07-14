@@ -8,6 +8,7 @@
 import type { AnthropicTool } from '@/libs/mcp/registry';
 import { and, asc, desc, eq } from 'drizzle-orm';
 import { buildWebTools } from '@/libs/agent/webTools';
+import { captureIssue } from '@/libs/support/issues';
 import { db } from '@/libs/DB';
 import { getFile, listFiles, saveFile } from '@/libs/storage/files';
 import { dashboardPanels, datasets, scheduledTasks } from '@/models/Schema';
@@ -163,6 +164,18 @@ export function buildPlatformTools(tenantId: string): {
           content: { type: 'string' },
         },
         required: ['name', 'content'],
+      },
+    },
+    {
+      name: 'report_issue',
+      description: 'Escalate a problem to the Artivio operator (a human engineer). Use this when something is broken in a way the USER CANNOT FIX — a tool that should work but errors unexpectedly, a platform feature behaving wrongly, or repeated failures with no clear cause. Do NOT use it for things the user can fix themselves (wrong API key, missing credential, a capability we simply do not have). Tool failures are already reported automatically — use this for problems YOU notice that no exception captured. Tell the user you have escalated it.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          summary: { type: 'string', description: 'One line: what is broken.' },
+          detail: { type: 'string', description: 'What you tried, what happened, exact error text you saw, and what you expected.' },
+        },
+        required: ['summary', 'detail'],
       },
     },
   ];
@@ -405,6 +418,21 @@ export function buildPlatformTools(tenantId: string): {
         source: 'agent',
       });
       return `Saved "${row?.name}" to the workspace library (id ${row?.id}).`;
+    },
+  });
+
+  executors.set('report_issue', {
+    policy: 'auto', // escalating a problem must never itself need approval
+    call: async (args) => {
+      const summary = String(args.summary ?? '').slice(0, 300);
+      await captureIssue({
+        tenantId,
+        source: `agent-report: ${summary}`.slice(0, 160),
+        error: new Error(String(args.detail ?? summary)),
+        detail: { summary, reportedBy: 'agent' },
+        reportedByAgent: true,
+      });
+      return 'Reported to the Artivio operator with the full context. Tell the user it has been escalated and that they do not need to do anything — but be honest that it may take time to fix, and do not promise a timeline.';
     },
   });
 

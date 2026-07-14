@@ -14,6 +14,7 @@ import type { TenantToolset } from '@/libs/mcp/registry';
 import { callClaudeWithTools } from '@/libs/agent/anthropic';
 import { checkSpend, meterLlm } from '@/libs/billing/meter';
 import { db } from '@/libs/DB';
+import { captureIssue } from '@/libs/support/issues';
 import { approvals, auditLog } from '@/models/Schema';
 
 const MAX_ITERATIONS = 8;
@@ -119,9 +120,32 @@ export async function runToolLoop(a: {
           resultText = await resolved.call(args as Record<string, unknown>);
           await audit(a.tenantId, 'tool.call', name, { args, ok: true });
         } catch (err) {
-          resultText = `Tool failed: ${err instanceof Error ? err.message : 'unknown error'}`;
+          // Triage the failure instead of handing the model a bare string to
+          // speculate about. captureIssue records the REAL error, decides who
+          // can actually fix it, and escalates platform bugs to the operator
+          // by email — the client never has to describe the problem.
+          const triaged = await captureIssue({
+            tenantId: a.tenantId,
+            source: name,
+            error: err,
+            detail: { args, connection: resolved.connectionName, tool: resolved.toolName },
+          });
+
           isError = true;
-          await audit(a.tenantId, 'tool.call', name, { args, ok: false, error: resultText.slice(0, 300) });
+          resultText = [
+            `Tool failed (${triaged.kind}): ${err instanceof Error ? err.message : 'unknown error'}`,
+            triaged.clientMessage,
+            triaged.escalate
+              ? 'This is a platform bug. It has ALREADY been reported to the Artivio operator automatically. Tell the user plainly that it is not something they can fix and that it has been escalated. Do NOT invent troubleshooting steps.'
+              : 'Relay this to the user as-is. Do NOT invent troubleshooting steps beyond what this error states.',
+          ].join('\n');
+
+          await audit(a.tenantId, 'tool.call', name, {
+            args,
+            ok: false,
+            kind: triaged.kind,
+            error: (err instanceof Error ? err.message : 'unknown').slice(0, 300),
+          });
         }
       }
 

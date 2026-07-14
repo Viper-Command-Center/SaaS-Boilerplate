@@ -5,20 +5,20 @@
  * Roles: owner/admin/editor (or platform admin).
  */
 
-import { eq, inArray } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getCurrentUser } from '@/libs/auth/session';
 import { db } from '@/libs/DB';
-import { McpHttpClient } from '@/libs/mcp/client';
+import { buildTenantToolset } from '@/libs/mcp/registry';
+import { captureIssue } from '@/libs/support/issues';
 import { getUserTenants } from '@/libs/tenants';
-import { openSecret } from '@/libs/vault';
-import { approvals, auditLog, credentials, mcpConnections } from '@/models/Schema';
+import { approvals, auditLog } from '@/models/Schema';
 
 export const dynamic = 'force-dynamic';
+export const maxDuration = 300; // built-in media jobs (Kie video) can be slow
 
 const DECIDER_ROLES = ['owner', 'admin', 'editor'];
-const NAME_RE = /^mcp__([a-z0-9-]+)__(.+)$/i;
 
 const BodySchema = z.object({ decision: z.enum(['approve', 'reject']) });
 
@@ -64,53 +64,57 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
     .where(eq(approvals.id, id));
 
   try {
-    const [conn] = approval.connectionId
-      ? await db.select().from(mcpConnections).where(eq(mcpConnections.id, approval.connectionId)).limit(1)
-      : [undefined];
-    if (!conn || !conn.enabled || conn.transport !== 'http' || !conn.url) {
-      throw new Error('The tool connection is no longer available.');
+    // Execute through the SAME toolset the agent uses. This route used to
+    // re-implement HTTP MCP calling itself, which meant:
+    //   · built-in providers (Kie.ai, WordPress) could never be approved — they
+    //     failed with "the tool connection is no longer available", and
+    //   · approved calls skipped metering and asset archiving entirely.
+    // One code path, so an approved call behaves exactly like an auto one.
+    const toolset = await buildTenantToolset(approval.tenantId);
+    const executor = toolset.resolve(approval.toolName);
+
+    if (!executor) {
+      const detail = toolset.failedConnections.length > 0
+        ? ` Connections reporting problems: ${toolset.failedConnections.join('; ')}`
+        : ' Check that the plugin is still enabled in the Tools panel.';
+      throw new Error(`"${approval.toolName}" is not available in this workspace right now.${detail}`);
     }
 
-    // Decrypt the connection's header credentials.
-    const headerMap = (conn.headerCredentials ?? {}) as Record<string, string>;
-    const credIds = Object.values(headerMap).filter(Boolean);
-    const rows = credIds.length > 0
-      ? await db.select({ id: credentials.id, cipher: credentials.cipher }).from(credentials).where(inArray(credentials.id, credIds))
-      : [];
-    const byId = new Map(rows.map(r => [r.id, r.cipher]));
-    const headers: Record<string, string> = {};
-    for (const [header, credId] of Object.entries(headerMap)) {
-      const cipher = byId.get(credId);
-      if (cipher) {
-        headers[header] = openSecret(cipher);
-      }
-    }
-
-    const match = NAME_RE.exec(approval.toolName);
-    const rawToolName = match?.[2] ?? approval.toolName;
-
-    const client = new McpHttpClient(conn.url, headers);
-    const result = await client.callTool(rawToolName, approval.args as Record<string, unknown>);
-    const text = result.content
-      .map(c => (c.type === 'text' ? c.text ?? '' : `[${c.type}]`))
-      .join('\n')
-      .slice(0, 20_000);
+    const text = (await executor.call((approval.args ?? {}) as Record<string, unknown>)).slice(0, 20_000);
 
     await db
       .update(approvals)
-      .set({ status: result.isError ? 'failed' : 'executed', result: { text } })
+      .set({ status: 'executed', result: { text } })
       .where(eq(approvals.id, id));
     await audit(approval.tenantId, user.id, 'tool.approved_executed', approval.toolName);
 
-    return NextResponse.json({ ok: true, status: result.isError ? 'failed' : 'executed', result: text.slice(0, 2000) });
+    return NextResponse.json({ ok: true, status: 'executed', result: text.slice(0, 2000) });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Execution failed';
+
+    // Triage: tell the user who can actually fix this, and escalate our bugs
+    // automatically rather than leaving them to describe the symptom.
+    const triaged = await captureIssue({
+      tenantId: approval.tenantId,
+      source: `approval:${approval.toolName}`,
+      error: err,
+      detail: { args: approval.args, approvalId: id },
+    });
+
     await db
       .update(approvals)
-      .set({ status: 'failed', result: { error: message.slice(0, 500) } })
+      .set({ status: 'failed', result: { error: message.slice(0, 500), kind: triaged.kind } })
       .where(eq(approvals.id, id));
     await audit(approval.tenantId, user.id, 'tool.approved_failed', approval.toolName);
-    return NextResponse.json({ ok: false, status: 'failed', error: message }, { status: 502 });
+
+    return NextResponse.json({
+      ok: false,
+      status: 'failed',
+      error: message,
+      kind: triaged.kind,
+      guidance: triaged.clientMessage,
+      escalated: triaged.escalate,
+    }, { status: 502 });
   }
 }
 

@@ -48,6 +48,8 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
   const [keyFor, setKeyFor] = useState<string | null>(null);
   const [keyValue, setKeyValue] = useState('');
   const [siteUrl, setSiteUrl] = useState('');
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
 
   const reload = useCallback(() => {
     fetch(`/api/mcp/connections?tenant=${encodeURIComponent(props.tenantSlug)}`)
@@ -95,6 +97,38 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
     setKeyValue('');
     setSiteUrl('');
     reload();
+  };
+
+  /**
+   * Probe the server BEFORE saving. Most "the agent says the tool is broken"
+   * reports are a wrong URL or a bad key — this surfaces that next to the field
+   * that caused it, instead of mid-conversation three days later.
+   */
+  const test = async () => {
+    setTestResult(null);
+    setError(null);
+    setTesting(true);
+    try {
+      const res = await fetch('/api/mcp/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tenantSlug: props.tenantSlug,
+          url: url.trim(),
+          ...(headerValue.trim()
+            ? { headerName: headerName.trim() || 'Authorization', headerValue: headerValue.trim() }
+            : {}),
+        }),
+      });
+      const data = await res.json().catch(() => null);
+      setTestResult(data?.ok
+        ? { ok: true, message: data.message ?? 'Connected.' }
+        : { ok: false, message: data?.guidance ?? data?.error ?? 'Could not reach the server.' });
+    } catch {
+      setTestResult({ ok: false, message: 'Network error while testing.' });
+    } finally {
+      setTesting(false);
+    }
   };
 
   const add = async (e: React.FormEvent) => {
@@ -198,9 +232,27 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
             <input className={inputClass} value={headerName} onChange={e => setHeaderName(e.target.value)} placeholder="Auth header" />
             <input className={inputClass} type="password" value={headerValue} onChange={e => setHeaderValue(e.target.value)} placeholder="Bearer sk_… (encrypted)" />
           </div>
-          <Button type="submit" size="sm" disabled={busy}>
-            {busy ? 'Adding…' : 'Add server'}
-          </Button>
+          {testResult && (
+            <p className={`text-xs ${testResult.ok ? 'text-emerald-300' : 'text-rose-300'}`} role="status">
+              {testResult.ok ? '✓ ' : '✗ '}
+              {testResult.message}
+            </p>
+          )}
+
+          <div className="flex gap-2">
+            <Button type="submit" size="sm" disabled={busy}>
+              {busy ? 'Adding…' : 'Add server'}
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={testing || !url.trim()}
+              onClick={test}
+            >
+              {testing ? 'Testing…' : 'Test connection'}
+            </Button>
+          </div>
         </form>
       )}
 
