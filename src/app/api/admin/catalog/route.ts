@@ -25,7 +25,8 @@ import { credentials, pluginCatalog } from '@/models/Schema';
 export const dynamic = 'force-dynamic';
 
 const PriceRuleSchema = z.object({
-  unit: z.enum(['call', 'arg']),
+  // 'usage' = the provider reports units it consumed (e.g. Kie credits).
+  unit: z.enum(['call', 'arg', 'usage']),
   argField: z.string().max(60).optional(),
   costUsd: z.number().min(0),
   markup: z.number().min(1).max(20).optional(),

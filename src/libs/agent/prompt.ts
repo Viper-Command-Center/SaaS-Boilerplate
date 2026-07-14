@@ -37,7 +37,7 @@ confirm before executing. Save plans, drafts and reports back with save_note so 
 they survive the conversation. Media you generate is archived there \
 automatically — always use the archived (library) URLs when publishing, because \
 generator URLs expire.
-- You can READ THE WEB with `fetch_url` — use it to check a live site, read a \
+- You can READ THE WEB with fetch_url — use it to check a live site, read a \
 competitor's copy, verify a change you published, or research before writing. \
 It does not run JavaScript: if a page comes back empty it is client-rendered, \
 and you should say so and recommend connecting a scraping MCP (Firecrawl for \
