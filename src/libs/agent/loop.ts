@@ -14,7 +14,7 @@ import type { TenantToolset } from '@/libs/mcp/registry';
 import { callClaudeWithTools } from '@/libs/agent/anthropic';
 import { checkSpend, meterLlm } from '@/libs/billing/meter';
 import { db } from '@/libs/DB';
-import { captureIssue } from '@/libs/support/issues';
+import { captureIssue, redact } from '@/libs/support/issues';
 import { approvals, auditLog } from '@/models/Schema';
 
 const MAX_ITERATIONS = 8;
@@ -100,7 +100,7 @@ export async function runToolLoop(a: {
       } else if (resolved.policy === 'deny') {
         resultText = 'This tool is not permitted in this workspace (policy: deny).';
         isError = true;
-        await audit(a.tenantId, 'tool.denied', name, { args });
+        await audit(a.tenantId, 'tool.denied', name, { args: redact(args) });
       } else if (resolved.policy === 'approval') {
         const [row] = await db
           .insert(approvals)
@@ -116,12 +116,12 @@ export async function runToolLoop(a: {
         resultText = 'This action requires human approval and has been queued in the Approvals inbox. '
           + 'Tell the user it is awaiting their approval; the result will appear in the inbox once decided. '
           + 'Do not retry the same call.';
-        await audit(a.tenantId, 'tool.queued_approval', name, { args, approvalId: row?.id });
+        await audit(a.tenantId, 'tool.queued_approval', name, { args: redact(args), approvalId: row?.id });
       } else {
         a.onDelta(`\n\n[tool] calling ${name}…\n`);
         try {
           resultText = await resolved.call(args as Record<string, unknown>);
-          await audit(a.tenantId, 'tool.call', name, { args, ok: true });
+          await audit(a.tenantId, 'tool.call', name, { args: redact(args), ok: true });
         } catch (err) {
           // Triage the failure instead of handing the model a bare string to
           // speculate about. captureIssue records the REAL error, decides who
@@ -144,7 +144,7 @@ export async function runToolLoop(a: {
           ].join('\n');
 
           await audit(a.tenantId, 'tool.call', name, {
-            args,
+            args: redact(args),
             ok: false,
             kind: triaged.kind,
             error: (err instanceof Error ? err.message : 'unknown').slice(0, 300),

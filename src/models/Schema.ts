@@ -443,6 +443,36 @@ export const issues = pgTable(
   t => [index('issues_status_at_idx').on(t.status, t.createdAt)],
 );
 
+// ─── Phase 19: messaging consent (WhatsApp / RCS / SMS via Twilio) ───────────
+// Carriers require verifiable opt-in BEFORE any message and honored opt-out.
+// This table is the record of consent: what channel, what number, the exact
+// text they agreed to, when, and whether they later opted out. No message is
+// ever sent to a number without a matching row where optedOutAt IS NULL and
+// (for double opt-in) confirmedAt IS NOT NULL.
+
+export const messagingConsents = pgTable(
+  'messaging_consents',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    // Optional — a consent can exist before we know which workspace/user it maps to.
+    tenantId: uuid('tenant_id').references(() => tenants.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }),
+    channel: varchar('channel', { length: 20 }).notNull().default('whatsapp'), // whatsapp | sms | rcs
+    // E.164 phone, normalized (+15551234567)
+    phone: varchar('phone', { length: 24 }).notNull(),
+    // The exact wording the person agreed to — kept for compliance evidence.
+    consentText: text('consent_text').notNull(),
+    source: varchar('source', { length: 40 }).notNull().default('web-optin'),
+    // Double opt-in: set when they reply YES to the confirmation message.
+    confirmedAt: timestamp('confirmed_at', { withTimezone: true }),
+    optedOutAt: timestamp('opted_out_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  t => [
+    index('messaging_consents_phone_idx').on(t.phone, t.channel),
+  ],
+);
+
 // ─── Boilerplate demo table (kept because migration 0000 already created it) ─
 export const todoSchema = pgTable('todo', {
   id: serial('id').primaryKey(),

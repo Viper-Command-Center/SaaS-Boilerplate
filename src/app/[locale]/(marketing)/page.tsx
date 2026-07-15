@@ -199,7 +199,9 @@ export default async function Index(props: IndexProps) {
             {' '}
             Artivio
           </span>
-          <div className="flex gap-5">
+          <div className="flex flex-wrap gap-5">
+            <Link href="/terms" className="hover:text-slate-900">Terms</Link>
+            <Link href="/privacy" className="hover:text-slate-900">Privacy</Link>
             <Link href="/sign-in" className="hover:text-slate-900">Sign in</Link>
             <a href="mailto:hello@artivio.ai" className="hover:text-slate-900">Contact</a>
           </div>

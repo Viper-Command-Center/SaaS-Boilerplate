@@ -226,6 +226,12 @@ export async function callClaudeWithTools(a: {
   );
 }
 
+/**
+ * ⚠️ UNMETERED, currently UNUSED. This streaming path makes real model calls but
+ * does not return token usage, so it is NOT billed. Do not wire it into a route
+ * without first routing its cost through meterLlm — an unmetered LLM call is a
+ * silent money leak. The agent uses callClaudeWithTools (metered) instead.
+ */
 export async function* streamClaude(a: {
   system: string;
   messages: ChatMessage[];

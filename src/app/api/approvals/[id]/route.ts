@@ -9,6 +9,7 @@ import { eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getCurrentUser } from '@/libs/auth/session';
+import { checkSpend } from '@/libs/billing/meter';
 import { db } from '@/libs/DB';
 import { buildTenantToolset } from '@/libs/mcp/registry';
 import { captureIssue } from '@/libs/support/issues';
@@ -55,6 +56,17 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
       .where(eq(approvals.id, id));
     await audit(approval.tenantId, user.id, 'tool.rejected', approval.toolName);
     return NextResponse.json({ ok: true, status: 'rejected' });
+  }
+
+  // The spend guard must apply HERE too, not just inside the agent loop.
+  // Approving is a spending action: a queued Kie video would otherwise run even
+  // if the workspace is paused (kill switch) or already over its daily cap.
+  const spend = await checkSpend(approval.tenantId);
+  if (!spend.allowed) {
+    return NextResponse.json(
+      { error: `Cannot run this action: ${spend.reason}`, blocked: true },
+      { status: 402 },
+    );
   }
 
   // Approve → execute the stored call now.

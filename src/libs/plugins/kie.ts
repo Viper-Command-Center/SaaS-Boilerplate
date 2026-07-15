@@ -31,7 +31,11 @@ import type { BuiltinProvider, BuiltinResult } from '@/libs/plugins/types';
 
 const BASE = (process.env.KIE_BASE_URL || 'https://api.kie.ai').replace(/\/$/, '');
 const POLL_INTERVAL_MS = 3000;
-const MAX_POLL_MS = 240_000; // 4 minutes — video can be slow
+// Poll close to the serverless request budget (routes cap at 300s) so nearly
+// every job — including video — finishes in-band and is billed on its real
+// creditsConsumed. Genuine overflows are flagged for reconciliation, not
+// silently billed $0.
+const MAX_POLL_MS = 285_000;
 export const MAX_KEYS = 20;
 
 /** $ per Kie credit — flat across every model on kie.ai/pricing. */
@@ -175,8 +179,12 @@ async function runJob(
       output: JSON.stringify({
         taskId,
         state: 'still_running',
-        note: 'The job is taking longer than 4 minutes. It is still running on Kie.ai — check the task id later at kie.ai/logs.',
+        note: 'The job is still running on Kie.ai after the poll window. It may complete later; the credits it consumes are NOT yet billed. Tell the user it is still processing and check kie.ai/logs with this task id.',
       }),
+      // Signals the registry to flag this for reconciliation — Kie WILL charge
+      // us for a job that eventually completes, so an unbilled overflow must be
+      // visible in the Issues inbox, never a silent $0.
+      pendingReconcile: taskId,
     };
   });
 }

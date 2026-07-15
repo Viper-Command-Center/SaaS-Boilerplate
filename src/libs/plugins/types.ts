@@ -29,6 +29,12 @@ export type BuiltinResult = {
   units?: number;
   /** Media the platform should archive (provider URLs expire). */
   assetUrls?: string[];
+  /**
+   * An async job that outran our poll window. The provider WILL still bill us
+   * when it finishes, so the registry flags this for reconciliation (Issues
+   * inbox) rather than recording a silent $0.
+   */
+  pendingReconcile?: string;
 };
 
 /**

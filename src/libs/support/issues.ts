@@ -16,8 +16,9 @@
  */
 
 import { db } from '@/libs/DB';
-import { sendEmail } from '@/libs/email';
 import { issues } from '@/models/Schema';
+import { notifyOperator } from './notify';
+
 
 export type IssueKind = 'config' | 'provider' | 'platform';
 
@@ -88,18 +89,32 @@ export function classifyToolError(err: unknown): Classified {
   };
 }
 
-/** Never let an argument value leak a secret into the issue log. */
-function redact(args: unknown): unknown {
-  if (!args || typeof args !== 'object') {
-    return args;
+const SECRET_KEY_RE = /key|token|secret|password|authorization|credential|apikey|bearer/i;
+
+/**
+ * Never let a value leak a secret into a log or an email. RECURSES into nested
+ * objects/arrays — a secret is just as dangerous one level down (e.g.
+ * `{ headers: { Authorization: '…' } }`), and the shallow version missed it.
+ * Exported so the audit log uses the exact same redaction as issue capture.
+ */
+export function redact(value: unknown, depth = 0): unknown {
+  if (depth > 6 || value == null) {
+    return value;
   }
-  const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(args as Record<string, unknown>)) {
-    out[k] = /key|token|secret|password|authorization|credential/i.test(k)
-      ? '[redacted]'
-      : typeof v === 'string' && v.length > 300 ? `${v.slice(0, 300)}…` : v;
+  if (typeof value === 'string') {
+    return value.length > 300 ? `${value.slice(0, 300)}…` : value;
   }
-  return out;
+  if (Array.isArray(value)) {
+    return value.slice(0, 50).map(v => redact(v, depth + 1));
+  }
+  if (typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      out[k] = SECRET_KEY_RE.test(k) ? '[redacted]' : redact(v, depth + 1);
+    }
+    return out;
+  }
+  return value;
 }
 
 export type CaptureInput = {
@@ -109,6 +124,8 @@ export type CaptureInput = {
   error: unknown;
   detail?: Record<string, unknown>;
   reportedByAgent?: boolean;
+  /** Force the class (e.g. a known-benign reconciliation flag → 'provider', so it logs without emailing). */
+  forceKind?: IssueKind;
 };
 
 /**
@@ -116,15 +133,19 @@ export type CaptureInput = {
  * capture must not be able to break the thing it is reporting on.
  */
 export async function captureIssue(input: CaptureInput): Promise<Classified> {
-  const classified = classifyToolError(input.error);
+  const classified = input.forceKind
+    ? { ...classifyToolError(input.error), kind: input.forceKind, escalate: input.forceKind === 'platform' }
+    : classifyToolError(input.error);
   const message = input.error instanceof Error ? input.error.message : String(input.error ?? 'Unknown error');
 
   try {
+    // Redact the ENTIRE detail object, not just detail.args — a secret in any
+    // field (headers, config, a nested credential) must never reach the log or
+    // the escalation email.
     const detail = {
-      ...(input.detail ?? {}),
+      ...(redact(input.detail ?? {}) as Record<string, unknown>),
       workspace: input.tenantSlug,
       stack: input.error instanceof Error ? input.error.stack?.slice(0, 2000) : undefined,
-      args: redact((input.detail as Record<string, unknown> | undefined)?.args),
     };
 
     await db.insert(issues).values({
@@ -136,22 +157,16 @@ export async function captureIssue(input: CaptureInput): Promise<Classified> {
       reportedByAgent: Boolean(input.reportedByAgent),
     });
 
-    // Only OUR bugs page a human. Config and provider noise would train the
-    // operator to ignore the inbox, which defeats the point.
+    // Only OUR bugs page a human — anything that could affect all clients gets
+    // oversight (Ryan's rule). Config and provider noise would train the
+    // operator to ignore the inbox, so those are logged but never pushed.
     if (classified.escalate) {
-      const bundle = buildBundle({
-        source: input.source,
-        workspace: input.tenantSlug ?? input.tenantId ?? 'unknown',
-        message,
-        detail,
-      });
-      await sendEmail({
-        to: process.env.EMAIL_FROM || 'hello@artivio.ai',
-        subject: `[Artivio] Platform issue: ${input.source}`.slice(0, 120),
-        text: bundle,
-        html: `<pre style="font:13px/1.5 ui-monospace,monospace;white-space:pre-wrap">${
-          bundle.replace(/[<>&]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c] ?? c))
-        }</pre>`,
+      const workspace = input.tenantSlug ?? input.tenantId ?? 'unknown';
+      const bundle = buildBundle({ source: input.source, workspace, message, detail });
+      await notifyOperator({
+        subject: `[Artivio] Platform issue: ${input.source}`,
+        short: `${message.slice(0, 200)}\n(workspace: ${workspace})`,
+        full: bundle,
       }).catch(() => {});
     }
   } catch {

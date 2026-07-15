@@ -168,7 +168,7 @@ export async function POST(request: Request) {
       .values({
         tenantId: tenant.id,
         provider: plugin.slug,
-        label: `${plugin.slug} · ${plugin.authHeader ?? 'credential'}`,
+        label: `${plugin.slug} · ${plugin.authHeader ?? 'credential'}`.slice(0, 120),
         cipher: sealSecret(body.credentialValue),
       })
       .returning({ id: credentials.id });

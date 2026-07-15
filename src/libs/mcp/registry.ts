@@ -11,6 +11,7 @@ import { db } from '@/libs/DB';
 import { McpHttpClient } from '@/libs/mcp/client';
 import { getBuiltinProvider } from '@/libs/plugins';
 import { archiveGeneratedAssets } from '@/libs/storage/files';
+import { captureIssue } from '@/libs/support/issues';
 import { openSecret } from '@/libs/vault';
 import { credentials, mcpConnections, pluginCatalog } from '@/models/Schema';
 
@@ -175,11 +176,24 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
               const raw = await provider.call(tool.name, args, apiKey, target);
               const result = typeof raw === 'string' ? { output: raw } : raw;
 
+              // An async job that outran our poll window WILL still be billed
+              // by the provider — flag it (Issues inbox, provider-class so it
+              // logs without emailing) instead of recording a silent $0.
+              if (result.pendingReconcile) {
+                await captureIssue({
+                  tenantId,
+                  source: `${entry.slug}:${tool.name} (unbilled — job still running)`,
+                  error: new Error(`Kie job ${result.pendingReconcile} exceeded the poll window; credits consumed are not yet billed. Reconcile via recordInfo.`),
+                  detail: { taskId: result.pendingReconcile, slug: entry.slug, tool: tool.name },
+                  forceKind: 'provider', // log it, but don't email — it's expected, not a bug
+                }).catch(() => {});
+              }
+
               // Meter AFTER a successful call (failed jobs aren't charged).
               // `units` = what the provider says it actually consumed (Kie.ai
               // returns creditsConsumed), so usage-priced plugins bill exactly.
               const rule = rules[tool.name];
-              if (rule) {
+              if (rule && result.units !== undefined) {
                 await meterPlugin({
                   tenantId,
                   slug: entry.slug,
@@ -228,6 +242,23 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
       const tools = await client.listTools();
       const policyMap = (conn.toolPolicy ?? {}) as Record<string, ToolPolicy>;
 
+      // A tier-1 HTTP plugin (our key, resold with markup) can carry priceRules
+      // on its catalog entry. Load them so paid HTTP tools meter exactly like
+      // built-in ones — otherwise a resold HTTP MCP would run for free.
+      let httpRules: Record<string, PriceRule> = {};
+      let httpSlug = conn.name;
+      if (conn.catalogId) {
+        const [catEntry] = await db
+          .select({ slug: pluginCatalog.slug, priceRules: pluginCatalog.priceRules })
+          .from(pluginCatalog)
+          .where(eq(pluginCatalog.id, conn.catalogId))
+          .limit(1);
+        if (catEntry) {
+          httpRules = (catEntry.priceRules ?? {}) as Record<string, PriceRule>;
+          httpSlug = catEntry.slug;
+        }
+      }
+
       for (const tool of tools) {
         const namespaced = `mcp__${sanitize(conn.name)}__${tool.name}`;
         anthropicTools.push({
@@ -249,6 +280,11 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
               .slice(0, 20_000);
             if (result.isError) {
               throw new Error(text || 'Tool reported an error.');
+            }
+            // Meter AFTER success (a thrown error above is never billed).
+            const rule = httpRules[tool.name];
+            if (rule) {
+              await meterPlugin({ tenantId, slug: httpSlug, tool: tool.name, rule, args });
             }
             return text || '(no output)';
           },

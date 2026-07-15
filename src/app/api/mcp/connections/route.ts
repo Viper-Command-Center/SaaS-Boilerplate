@@ -98,7 +98,7 @@ export async function POST(request: Request) {
       .values({
         tenantId: tenant.id,
         provider: body.name,
-        label: `${body.name} · ${header}`,
+        label: `${body.name} · ${header}`.slice(0, 120), // column is varchar(120)
         cipher: sealSecret(value),
       })
       .returning({ id: credentials.id });
