@@ -278,6 +278,30 @@ export const datasets = pgTable(
   t => [index('datasets_tenant_key_at_idx').on(t.tenantId, t.key, t.capturedAt)],
 );
 
+// ─── Phase 21: dashboard layout ──────────────────────────────────────────────
+// A view is a TAB. This is the primitive that keeps the dashboard usable once
+// several MCPs are connected: without it, analytics + social + content + ops
+// pile onto one page and no amount of styling saves it. Panels belong to a
+// view; within a view they group under an optional `section` (a collapsible
+// header) and claim `width` columns. Before this existed the agent had no
+// vocabulary for layout, so it faked section headers with markdown panels.
+
+export const dashboardViews = pgTable(
+  'dashboard_views',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+    name: varchar('name', { length: 60 }).notNull(),
+    // Short emoji/glyph shown on the tab. Cosmetic.
+    icon: varchar('icon', { length: 8 }),
+    position: integer('position').notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  t => [index('dashboard_views_tenant_idx').on(t.tenantId, t.position)],
+);
+
 export const dashboardPanels = pgTable(
   'dashboard_panels',
   {
@@ -285,15 +309,26 @@ export const dashboardPanels = pgTable(
     tenantId: uuid('tenant_id')
       .notNull()
       .references(() => tenants.id, { onDelete: 'cascade' }),
+    // Nullable = "unfiled"; the API surfaces these in the first view so a panel
+    // can never become invisible by losing its tab.
+    viewId: uuid('view_id').references(() => dashboardViews.id, { onDelete: 'set null' }),
     type: varchar('type', { length: 20 }).notNull(), // kpi | timeseries | table | markdown
     title: text('title').notNull(),
     // kpi: { datasetKey, valueField, label? } · timeseries: { datasetKey, valueField }
     // table: { datasetKey, columns?, limit? } · markdown: { text }
     config: jsonb('config').notNull(),
+    // Collapsible group label within a view. Null = ungrouped (renders first).
+    section: varchar('section', { length: 60 }),
+    // Grid columns claimed, 1–3. A 4-column table in 1/3 of the screen is why
+    // the dashboard felt cramped; create_panel now picks a sane default by type.
+    width: integer('width').notNull().default(1),
     position: integer('position').notNull().default(0),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  t => [index('dashboard_panels_tenant_idx').on(t.tenantId, t.position)],
+  t => [
+    index('dashboard_panels_tenant_idx').on(t.tenantId, t.position),
+    index('dashboard_panels_view_idx').on(t.viewId, t.position),
+  ],
 );
 
 // ─── Phase 4b: scheduled agent tasks ─────────────────────────────────────────

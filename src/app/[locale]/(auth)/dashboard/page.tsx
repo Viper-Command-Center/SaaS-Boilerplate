@@ -70,8 +70,8 @@ export default async function DashboardIndexPage(props: {
         </span>
       </div>
 
-      {/* Panels the agent built */}
-      <PanelsGrid tenantSlug={tenant.slug} />
+      {/* Panels the agent built — draggable for editors and up */}
+      <PanelsGrid tenantSlug={tenant.slug} canEdit={canApprove} />
 
       {/* Agent + side rail */}
       <div className="

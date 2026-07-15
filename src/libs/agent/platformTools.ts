@@ -11,7 +11,7 @@ import { assertPublicUrl, buildWebTools } from '@/libs/agent/webTools';
 import { captureIssue } from '@/libs/support/issues';
 import { db } from '@/libs/DB';
 import { getFile, listFiles, saveFile, saveRemoteFile } from '@/libs/storage/files';
-import { dashboardPanels, datasets, scheduledTasks } from '@/models/Schema';
+import { dashboardPanels, dashboardViews, datasets, scheduledTasks } from '@/models/Schema';
 
 export type PlatformExecutor = {
   policy: 'auto';
@@ -19,6 +19,48 @@ export type PlatformExecutor = {
 };
 
 const PANEL_TYPES = ['kpi', 'timeseries', 'table', 'markdown'];
+
+/**
+ * Sane width by type, so a dashboard is readable WITHOUT anyone tidying it
+ * afterwards. A 4-column table in 1/3 of the screen is the single biggest
+ * source of visual mess; a lone KPI number does not need more than 1.
+ */
+const DEFAULT_WIDTH: Record<string, number> = {
+  kpi: 1,
+  timeseries: 2,
+  table: 3,
+  markdown: 2,
+};
+
+const clampWidth = (w: unknown, type: string): number => {
+  if (typeof w !== 'number' || !Number.isFinite(w)) {
+    return DEFAULT_WIDTH[type] ?? 1;
+  }
+  return Math.min(3, Math.max(1, Math.round(w)));
+};
+
+/** Resolve a view by id or by name (agents reason in names, not uuids). */
+async function resolveViewId(tenantId: string, ref: unknown): Promise<string | null> {
+  const value = typeof ref === 'string' ? ref.trim() : '';
+  if (!value) {
+    return null;
+  }
+  const rows = await db
+    .select({ id: dashboardViews.id, name: dashboardViews.name })
+    .from(dashboardViews)
+    .where(eq(dashboardViews.tenantId, tenantId));
+  const byId = rows.find(v => v.id === value);
+  if (byId) {
+    return byId.id;
+  }
+  const byName = rows.find(v => v.name.toLowerCase() === value.toLowerCase());
+  if (!byName) {
+    throw new Error(
+      `No dashboard tab called "${value}". Existing tabs: ${rows.map(v => v.name).join(', ') || 'none yet'}. Create it with create_view first.`,
+    );
+  }
+  return byName.id;
+}
 
 export function buildPlatformTools(tenantId: string): {
   anthropicTools: AnthropicTool[];
@@ -28,19 +70,66 @@ export function buildPlatformTools(tenantId: string): {
 
   const anthropicTools: AnthropicTool[] = [
     {
-      name: 'list_panels',
-      description: 'List the dashboard panels currently configured in this workspace, with their ids, types and configs.',
+      name: 'list_views',
+      description: 'List the dashboard tabs (views) in this workspace with their ids, names and how many panels each holds. Call this before creating panels so related panels land on the same tab instead of piling onto one page.',
       input_schema: { type: 'object', properties: {} },
     },
     {
+      name: 'create_view',
+      description: 'Create a dashboard tab. Tabs are the top-level organiser — group panels by domain (e.g. Analytics, Social, Content, Ops) so the dashboard stays readable as more tools are connected.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: 'Short tab label, e.g. Analytics' },
+          icon: { type: 'string', description: 'Optional single emoji for the tab, e.g. 📊' },
+          position: { type: 'number', description: 'Left-to-right order. Lower is further left.' },
+        },
+        required: ['name'],
+      },
+    },
+    {
+      name: 'update_view',
+      description: 'Rename a dashboard tab, change its icon, or reorder it.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          viewId: { type: 'string', description: 'Tab id or exact current name.' },
+          name: { type: 'string' },
+          icon: { type: 'string' },
+          position: { type: 'number' },
+        },
+        required: ['viewId'],
+      },
+    },
+    {
+      name: 'delete_view',
+      description: 'Delete a dashboard tab. Its panels are NOT deleted — they become unfiled and appear on the first tab. Move them first if they belong somewhere specific.',
+      input_schema: {
+        type: 'object',
+        properties: { viewId: { type: 'string', description: 'Tab id or exact name.' } },
+        required: ['viewId'],
+      },
+    },
+    {
+      name: 'list_panels',
+      description: 'List the dashboard panels in this workspace with their ids, types, configs, and layout (which tab, which section, width, position). Optionally filter to one tab.',
+      input_schema: {
+        type: 'object',
+        properties: { viewId: { type: 'string', description: 'Optional tab id or name to filter by.' } },
+      },
+    },
+    {
       name: 'create_panel',
-      description: 'Create a dashboard panel. Types: kpi (config: datasetKey, valueField, label?), timeseries (config: datasetKey, valueField), table (config: datasetKey, columns?: string[], limit?: number), markdown (config: text). Panels render on the workspace dashboard immediately.',
+      description: 'Create a dashboard panel. Types: kpi (config: datasetKey, valueField, label?), timeseries (config: datasetKey, valueField), table (config: datasetKey, columns?: string[], limit?: number), markdown (config: text). Put it on a tab with viewId and group it with section. Do NOT create a markdown panel purely to act as a section heading — use the section field, which renders a real collapsible header.',
       input_schema: {
         type: 'object',
         properties: {
           type: { type: 'string', enum: PANEL_TYPES },
           title: { type: 'string' },
           config: { type: 'object' },
+          viewId: { type: 'string', description: 'Tab id or name. Defaults to the first tab.' },
+          section: { type: 'string', description: 'Optional collapsible group label within the tab, e.g. "Traffic".' },
+          width: { type: 'number', description: 'Grid columns 1-3. Omit for a sensible default (kpi 1, timeseries 2, markdown 2, table 3).' },
           position: { type: 'number' },
         },
         required: ['type', 'title', 'config'],
@@ -48,16 +137,44 @@ export function buildPlatformTools(tenantId: string): {
     },
     {
       name: 'update_panel',
-      description: 'Update an existing dashboard panel by id (title, config, position).',
+      description: 'Update an existing dashboard panel by id: title, config, or layout (viewId, section, width, position).',
       input_schema: {
         type: 'object',
         properties: {
           panelId: { type: 'string' },
           title: { type: 'string' },
           config: { type: 'object' },
+          viewId: { type: 'string', description: 'Tab id or name to move it to.' },
+          section: { type: 'string', description: 'Group label. Pass an empty string to ungroup.' },
+          width: { type: 'number', description: 'Grid columns 1-3.' },
           position: { type: 'number' },
         },
         required: ['panelId'],
+      },
+    },
+    {
+      name: 'move_panels',
+      description: 'Reorganise MANY panels at once — the efficient way to answer "tidy up my dashboard". Give each panel its target tab, section, width and position in one call rather than calling update_panel repeatedly.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          moves: {
+            type: 'array',
+            description: 'One entry per panel to move.',
+            items: {
+              type: 'object',
+              properties: {
+                panelId: { type: 'string' },
+                viewId: { type: 'string', description: 'Tab id or name.' },
+                section: { type: 'string' },
+                width: { type: 'number' },
+                position: { type: 'number' },
+              },
+              required: ['panelId'],
+            },
+          },
+        },
+        required: ['moves'],
       },
     },
     {
@@ -192,15 +309,151 @@ export function buildPlatformTools(tenantId: string): {
     },
   ];
 
-  executors.set('list_panels', {
+  /** The tab a panel lands on when none is named: the leftmost, created on demand. */
+  const defaultViewId = async (): Promise<string | null> => {
+    const [first] = await db
+      .select({ id: dashboardViews.id })
+      .from(dashboardViews)
+      .where(eq(dashboardViews.tenantId, tenantId))
+      .orderBy(asc(dashboardViews.position), asc(dashboardViews.createdAt))
+      .limit(1);
+    if (first) {
+      return first.id;
+    }
+    const [created] = await db
+      .insert(dashboardViews)
+      .values({ tenantId, name: 'Overview', icon: '🏠', position: 0 })
+      .returning({ id: dashboardViews.id });
+    return created?.id ?? null;
+  };
+
+  executors.set('list_views', {
     policy: 'auto',
     call: async () => {
+      const views = await db
+        .select()
+        .from(dashboardViews)
+        .where(eq(dashboardViews.tenantId, tenantId))
+        .orderBy(asc(dashboardViews.position));
+      const panels = await db
+        .select({ viewId: dashboardPanels.viewId })
+        .from(dashboardPanels)
+        .where(eq(dashboardPanels.tenantId, tenantId));
+      return JSON.stringify(
+        views.map(v => ({
+          id: v.id,
+          name: v.name,
+          icon: v.icon,
+          position: v.position,
+          panelCount: panels.filter(p => p.viewId === v.id).length,
+        })),
+      );
+    },
+  });
+
+  executors.set('create_view', {
+    policy: 'auto',
+    call: async (args) => {
+      const name = String(args.name ?? '').trim();
+      if (!name) {
+        throw new Error('A tab needs a name.');
+      }
+      const existing = await db
+        .select({ id: dashboardViews.id, name: dashboardViews.name })
+        .from(dashboardViews)
+        .where(eq(dashboardViews.tenantId, tenantId));
+      const dupe = existing.find(v => v.name.toLowerCase() === name.toLowerCase());
+      if (dupe) {
+        return `A tab called "${name}" already exists (id ${dupe.id}) — use that one instead of creating a duplicate.`;
+      }
+      const [row] = await db
+        .insert(dashboardViews)
+        .values({
+          tenantId,
+          name: name.slice(0, 60),
+          icon: args.icon ? String(args.icon).slice(0, 8) : null,
+          position: typeof args.position === 'number' ? args.position : existing.length,
+        })
+        .returning({ id: dashboardViews.id });
+      return `Tab "${name}" created (id ${row?.id}). Put panels on it with create_panel viewId, or move existing ones with move_panels.`;
+    },
+  });
+
+  executors.set('update_view', {
+    policy: 'auto',
+    call: async (args) => {
+      const viewId = await resolveViewId(tenantId, args.viewId);
+      if (!viewId) {
+        throw new Error('Which tab? Pass viewId (id or exact name).');
+      }
+      await db
+        .update(dashboardViews)
+        .set({
+          ...(args.name !== undefined ? { name: String(args.name).slice(0, 60) } : {}),
+          ...(args.icon !== undefined ? { icon: String(args.icon).slice(0, 8) } : {}),
+          ...(typeof args.position === 'number' ? { position: args.position } : {}),
+        })
+        .where(and(eq(dashboardViews.id, viewId), eq(dashboardViews.tenantId, tenantId)));
+      return 'Tab updated.';
+    },
+  });
+
+  executors.set('delete_view', {
+    policy: 'auto',
+    call: async (args) => {
+      const viewId = await resolveViewId(tenantId, args.viewId);
+      if (!viewId) {
+        throw new Error('Which tab? Pass viewId (id or exact name).');
+      }
+      // Panels survive (FK is ON DELETE set null) and resurface on the first
+      // tab — losing a tab must never silently lose the client's panels.
+      const orphaned = await db
+        .select({ id: dashboardPanels.id })
+        .from(dashboardPanels)
+        .where(and(eq(dashboardPanels.viewId, viewId), eq(dashboardPanels.tenantId, tenantId)));
+      const result = await db
+        .delete(dashboardViews)
+        .where(and(eq(dashboardViews.id, viewId), eq(dashboardViews.tenantId, tenantId)))
+        .returning({ id: dashboardViews.id });
+      if (result.length === 0) {
+        throw new Error('Tab not found in this workspace.');
+      }
+      return orphaned.length > 0
+        ? `Tab deleted. Its ${orphaned.length} panel(s) were not deleted — they are now unfiled and show on the first tab.`
+        : 'Tab deleted.';
+    },
+  });
+
+  executors.set('list_panels', {
+    policy: 'auto',
+    call: async (args) => {
+      const filterView = args.viewId ? await resolveViewId(tenantId, args.viewId) : null;
       const rows = await db
         .select()
         .from(dashboardPanels)
-        .where(eq(dashboardPanels.tenantId, tenantId))
+        .where(
+          filterView
+            ? and(eq(dashboardPanels.tenantId, tenantId), eq(dashboardPanels.viewId, filterView))
+            : eq(dashboardPanels.tenantId, tenantId),
+        )
         .orderBy(asc(dashboardPanels.position));
-      return JSON.stringify(rows.map(r => ({ id: r.id, type: r.type, title: r.title, config: r.config, position: r.position })));
+      const views = await db
+        .select({ id: dashboardViews.id, name: dashboardViews.name })
+        .from(dashboardViews)
+        .where(eq(dashboardViews.tenantId, tenantId));
+      return JSON.stringify(
+        rows.map(r => ({
+          id: r.id,
+          type: r.type,
+          title: r.title,
+          config: r.config,
+          view: views.find(v => v.id === r.viewId)?.name ?? null,
+          viewId: r.viewId,
+          section: r.section,
+          width: r.width,
+          position: r.position,
+        })),
+      );
     },
   });
 
@@ -211,13 +464,17 @@ export function buildPlatformTools(tenantId: string): {
       if (!PANEL_TYPES.includes(type)) {
         throw new Error(`Invalid panel type. Use one of: ${PANEL_TYPES.join(', ')}`);
       }
+      const viewId = args.viewId ? await resolveViewId(tenantId, args.viewId) : await defaultViewId();
       const [row] = await db
         .insert(dashboardPanels)
         .values({
           tenantId,
+          viewId,
           type,
           title: String(args.title ?? 'Untitled'),
           config: args.config ?? {},
+          section: args.section ? String(args.section).slice(0, 60) : null,
+          width: clampWidth(args.width, type),
           position: typeof args.position === 'number' ? args.position : 0,
         })
         .returning({ id: dashboardPanels.id });
@@ -229,19 +486,83 @@ export function buildPlatformTools(tenantId: string): {
     policy: 'auto',
     call: async (args) => {
       const panelId = String(args.panelId ?? '');
-      const result = await db
+      const [current] = await db
+        .select({ type: dashboardPanels.type })
+        .from(dashboardPanels)
+        .where(and(eq(dashboardPanels.id, panelId), eq(dashboardPanels.tenantId, tenantId)))
+        .limit(1);
+      if (!current) {
+        throw new Error('Panel not found in this workspace.');
+      }
+      const viewId = args.viewId !== undefined ? await resolveViewId(tenantId, args.viewId) : undefined;
+      await db
         .update(dashboardPanels)
         .set({
           ...(args.title !== undefined ? { title: String(args.title) } : {}),
           ...(args.config !== undefined ? { config: args.config } : {}),
+          ...(viewId !== undefined ? { viewId } : {}),
+          // Empty string is a deliberate "ungroup", not a no-op.
+          ...(args.section !== undefined ? { section: String(args.section).slice(0, 60) || null } : {}),
+          ...(args.width !== undefined ? { width: clampWidth(args.width, current.type) } : {}),
           ...(typeof args.position === 'number' ? { position: args.position } : {}),
         })
-        .where(and(eq(dashboardPanels.id, panelId), eq(dashboardPanels.tenantId, tenantId)))
-        .returning({ id: dashboardPanels.id });
-      if (result.length === 0) {
-        throw new Error('Panel not found in this workspace.');
-      }
+        .where(and(eq(dashboardPanels.id, panelId), eq(dashboardPanels.tenantId, tenantId)));
       return 'Panel updated.';
+    },
+  });
+
+  executors.set('move_panels', {
+    policy: 'auto',
+    call: async (args) => {
+      const moves = Array.isArray(args.moves) ? args.moves : [];
+      if (moves.length === 0) {
+        throw new Error('No moves given.');
+      }
+      // Resolve tab names once — a reorganise usually targets a handful of tabs.
+      const viewCache = new Map<string, string | null>();
+      let moved = 0;
+      const problems: string[] = [];
+
+      for (const raw of moves) {
+        const m = raw as Record<string, unknown>;
+        const panelId = String(m.panelId ?? '');
+        try {
+          const [current] = await db
+            .select({ type: dashboardPanels.type })
+            .from(dashboardPanels)
+            .where(and(eq(dashboardPanels.id, panelId), eq(dashboardPanels.tenantId, tenantId)))
+            .limit(1);
+          if (!current) {
+            problems.push(`${panelId}: not found in this workspace`);
+            continue;
+          }
+          let viewId: string | null | undefined;
+          if (m.viewId !== undefined) {
+            const key = String(m.viewId);
+            if (!viewCache.has(key)) {
+              viewCache.set(key, await resolveViewId(tenantId, key));
+            }
+            viewId = viewCache.get(key) ?? null;
+          }
+          await db
+            .update(dashboardPanels)
+            .set({
+              ...(viewId !== undefined ? { viewId } : {}),
+              ...(m.section !== undefined ? { section: String(m.section).slice(0, 60) || null } : {}),
+              ...(m.width !== undefined ? { width: clampWidth(m.width, current.type) } : {}),
+              ...(typeof m.position === 'number' ? { position: m.position } : {}),
+            })
+            .where(and(eq(dashboardPanels.id, panelId), eq(dashboardPanels.tenantId, tenantId)));
+          moved += 1;
+        } catch (err) {
+          problems.push(`${panelId}: ${err instanceof Error ? err.message : 'failed'}`);
+        }
+      }
+
+      // Report partial failure honestly rather than claiming a clean tidy-up.
+      return problems.length > 0
+        ? `Moved ${moved} of ${moves.length} panels. Problems: ${problems.join('; ')}`
+        : `Moved ${moved} panel(s). The dashboard updates within 30 seconds.`;
     },
   });
 
