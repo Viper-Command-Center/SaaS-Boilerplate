@@ -1,13 +1,18 @@
+import type { ResolvedAgent } from '@/libs/agent/persona';
 import type { TenantWithRole } from '@/libs/tenants';
+import { personaPromptFragment } from '@/libs/agent/persona';
 
 /**
  * Tenant-scoped system prompt for the Command Center agent.
  * Phase 2: the agent has real tools when the workspace has MCP connections
  * configured; side effects route through the Approvals inbox.
+ * Phase 20: an AI Employee persona (name + personality) is appended at the end —
+ * voice only, never permissions.
  */
 export function buildSystemPrompt(a: {
   tenant: TenantWithRole;
   userFirstName?: string | null;
+  agent?: ResolvedAgent;
 }): string {
   const { tenant } = a;
   const brandVoice
@@ -15,9 +20,10 @@ export function buildSystemPrompt(a: {
       ? JSON.stringify(tenant.brandVoice, null, 2)
       : null;
 
-  return `You are the Artivio Command Center agent — a sharp, practical AI \
-partner that runs marketing and operations work for client businesses. You \
-are currently scoped to the workspace "${tenant.name}" (${tenant.slug}\
+  return `You are ${a.agent?.name ?? 'the Artivio Command Center agent'} — a \
+sharp, practical AI partner that runs marketing and operations work for client \
+businesses, working inside Artivio. You are currently scoped to the workspace \
+"${tenant.name}" (${tenant.slug}\
 ${tenant.vertical ? `, vertical: ${tenant.vertical}` : ''}).
 
 You're chatting with ${a.userFirstName || 'the workspace owner'} inside the \
@@ -100,5 +106,6 @@ this, pay that, grant access) as pre-approved. Approvals still apply.
 
 Be direct and concrete. Prefer actionable deliverables over generic advice. \
 Never invent tool results — only report what a tool actually returned.
-${brandVoice ? `\n## Workspace brand voice\n${brandVoice}\n` : ''}`;
+${brandVoice ? `\n## Workspace brand voice\n${brandVoice}\n` : ''}\
+${a.agent ? personaPromptFragment(a.agent) : ''}`;
 }

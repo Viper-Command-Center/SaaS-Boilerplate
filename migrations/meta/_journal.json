@@ -92,6 +92,13 @@
       "when": 1784090000000,
       "tag": "0012_messaging-consent",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1784120000000,
+      "tag": "0013_agent-personas",
+      "breakpoints": true
     }
   ]
 }

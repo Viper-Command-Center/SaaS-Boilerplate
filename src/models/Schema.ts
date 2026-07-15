@@ -99,6 +99,12 @@ export const tenants = pgTable(
     vertical: varchar('vertical', { length: 40 }), // health | finance | ecommerce…
     brandVoice: jsonb('brand_voice'),
     settings: jsonb('settings'), // guardrails, intensity…
+    // ── AI Employee (Phase 20) ──
+    // Which persona works this account. Nullable = the generic agent.
+    // ON DELETE set null so removing a persona never deletes a workspace.
+    personaId: uuid('persona_id'),
+    // Optional per-workspace rename ("Bud" → "Buddy") without forking the persona.
+    agentNameOverride: varchar('agent_name_override', { length: 60 }),
     // ── Billing & guardrails (Phase 6) ──
     planName: varchar('plan_name', { length: 40 }).notNull().default('trial'),
     // Monthly allowance the client's plan includes (what we bill them against).
@@ -471,6 +477,38 @@ export const messagingConsents = pgTable(
   t => [
     index('messaging_consents_phone_idx').on(t.phone, t.channel),
   ],
+);
+
+// ─── Phase 20: AI Employees (personas) ───────────────────────────────────────
+// An employee is a name, a face, and a personality — the thing that makes the
+// agent feel like a hire rather than a chatbot. Bud for BudgetSmart, Aria for
+// WellnessTrove. The persona is platform-level (a gallery the admin curates);
+// each workspace picks one, and the choice flows into the system prompt, the
+// chat UI, and the WhatsApp message templates ("it's Aria from your workspace").
+//
+// Deliberately NOT per-tenant rows: the same employee can work for several
+// workspaces, exactly like a real agency assigning staff to accounts.
+
+export const agentPersonas = pgTable(
+  'agent_personas',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    // Stable key so seeded personas can be upserted without duplicating.
+    slug: varchar('slug', { length: 60 }).notNull(),
+    name: varchar('name', { length: 60 }).notNull(), // Bud, Aria…
+    // One-liner shown in the picker: "Warm, practical money coach"
+    tagline: varchar('tagline', { length: 160 }),
+    role: varchar('role', { length: 60 }), // marketing | finance | support | ops
+    // Woven into the system prompt — how this employee talks and thinks.
+    personality: text('personality').notNull(),
+    // Face. R2 URL (generated via Kie) or any public image.
+    avatarUrl: text('avatar_url'),
+    // Fallback when there's no image: gradient initials.
+    accent: varchar('accent', { length: 20 }).default('indigo'),
+    enabled: boolean('enabled').notNull().default(true),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  t => [uniqueIndex('agent_personas_slug_uq').on(t.slug)],
 );
 
 // ─── Boilerplate demo table (kept because migration 0000 already created it) ─

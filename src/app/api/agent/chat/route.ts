@@ -11,6 +11,7 @@ import { and, asc, eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { runToolLoop } from '@/libs/agent/loop';
+import { resolveAgentForTenant } from '@/libs/agent/persona';
 import { buildPlatformTools } from '@/libs/agent/platformTools';
 import { buildSystemPrompt } from '@/libs/agent/prompt';
 import { getCurrentUser } from '@/libs/auth/session';
@@ -104,7 +105,9 @@ export async function POST(request: Request) {
     },
   };
 
-  let system = buildSystemPrompt({ tenant, userFirstName: user.firstName });
+  // Which AI Employee works this account (name + personality → the prompt).
+  const agent = await resolveAgentForTenant(tenant.id);
+  let system = buildSystemPrompt({ tenant, userFirstName: user.firstName, agent });
   if (toolset.failedConnections.length > 0) {
     system += `\n\nNote: these configured tool servers are currently unavailable: ${toolset.failedConnections.join('; ')}.`;
   }

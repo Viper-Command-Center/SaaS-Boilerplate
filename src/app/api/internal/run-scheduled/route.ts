@@ -11,6 +11,7 @@
 import { and, asc, eq, lte } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { runToolLoop } from '@/libs/agent/loop';
+import { resolveAgentForTenant } from '@/libs/agent/persona';
 import { buildPlatformTools } from '@/libs/agent/platformTools';
 import { buildSystemPrompt } from '@/libs/agent/prompt';
 import { db } from '@/libs/DB';
@@ -71,7 +72,9 @@ export async function POST(request: Request) {
         },
       };
 
-      const system = `${buildSystemPrompt({ tenant: { ...tenant, role: 'owner' } })}
+      // Same employee runs the 3am mission as runs the chat.
+      const agent = await resolveAgentForTenant(tenant.id);
+      const system = `${buildSystemPrompt({ tenant: { ...tenant, role: 'owner' }, agent })}
 
 This is an AUTOMATED SCHEDULED RUN of your standing task "${task.name}" — no
 human is watching live. Do the work now with your tools. Anything requiring
