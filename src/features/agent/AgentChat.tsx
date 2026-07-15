@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { BrandMark } from '@/components/BrandLogo';
+import { AgentAvatar } from '@/features/agent/AgentAvatar';
 
 type Msg = { role: 'user' | 'assistant'; content: string };
 
@@ -74,7 +74,14 @@ const MessageBody = ({ text }: { text: string }) => (
  * The agent console. Glass surface, gradient composer, tool activity shown as
  * live status chips rather than raw text.
  */
-export const AgentChat = (props: { tenantSlug: string; tenantName: string }) => {
+export const AgentChat = (props: {
+  tenantSlug: string;
+  tenantName: string;
+  agentName?: string;
+  agentAvatarUrl?: string | null;
+  agentAccent?: string;
+}) => {
+  const agentName = props.agentName || 'Agent';
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
@@ -185,8 +192,8 @@ export const AgentChat = (props: { tenantSlug: string; tenantName: string }) => 
         flex items-center gap-2 border-b border-white/8 px-4 py-3
       "
       >
-        <BrandMark size={18} />
-        <span className="text-sm font-semibold text-white">Agent</span>
+        <AgentAvatar name={agentName} avatarUrl={props.agentAvatarUrl} accent={props.agentAccent} size={18} />
+        <span className="text-sm font-semibold text-white">{agentName}</span>
         <span className="text-xs text-white/35">
           ·
           {' '}
@@ -224,13 +231,21 @@ export const AgentChat = (props: { tenantSlug: string; tenantName: string }) => 
         {loaded && msgs.length === 0 && (
           <div className="flex h-full flex-col items-center justify-center gap-4 text-center">
             <span className="glow-ring rounded-2xl">
-              <BrandMark size={44} />
+              <AgentAvatar name={agentName} avatarUrl={props.agentAvatarUrl} accent={props.agentAccent} size={44} />
             </span>
             <div>
-              <p className="text-sm font-semibold text-white">Brief your agent</p>
+              <p className="text-sm font-semibold text-white">
+                Brief
+                {' '}
+                {agentName === 'Agent' ? 'your agent' : agentName}
+              </p>
               <p className="mt-1 max-w-sm text-sm text-white/45">
-                It knows this workspace, its tools and its guardrails. Give it a
-                goal the way you would a colleague.
+                {agentName === 'Agent' ? 'It' : `${agentName}`}
+                {' '}
+                knows this workspace, its tools and its guardrails. Give
+                {agentName === 'Agent' ? ' it' : ' them'}
+                {' '}
+                a goal the way you would a colleague.
               </p>
             </div>
             <div className="flex flex-wrap justify-center gap-2">
@@ -260,7 +275,7 @@ export const AgentChat = (props: { tenantSlug: string; tenantName: string }) => 
           >
             {m.role === 'assistant' && (
               <span className="mt-0.5 shrink-0">
-                <BrandMark size={22} />
+                <AgentAvatar name={agentName} avatarUrl={props.agentAvatarUrl} accent={props.agentAccent} size={22} />
               </span>
             )}
             <div
@@ -303,7 +318,7 @@ export const AgentChat = (props: { tenantSlug: string; tenantName: string }) => 
               grow();
             }}
             onKeyDown={onKeyDown}
-            placeholder="Message the agent…  (Enter to send, Shift+Enter for a new line)"
+            placeholder={`Message ${agentName === 'Agent' ? 'the agent' : agentName}…  (Enter to send, Shift+Enter for a new line)`}
             className="
               max-h-40 flex-1 resize-none bg-transparent py-1 text-sm
               text-white/90 outline-none

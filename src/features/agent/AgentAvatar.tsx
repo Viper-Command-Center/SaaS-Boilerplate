@@ -2,6 +2,8 @@
 
 import { BrandMark } from '@/components/BrandLogo';
 
+const FALLBACK_ACCENT = 'from-indigo-500 to-violet-600';
+
 const ACCENTS: Record<string, string> = {
   indigo: 'from-indigo-500 to-violet-600',
   violet: 'from-violet-500 to-fuchsia-600',
@@ -43,7 +45,7 @@ export const AgentAvatar = (props: {
     return <BrandMark size={size} />;
   }
 
-  const grad = ACCENTS[props.accent ?? 'indigo'] ?? ACCENTS.indigo;
+  const grad = ACCENTS[props.accent ?? 'indigo'] ?? FALLBACK_ACCENT;
   return (
     <span
       className={`flex shrink-0 items-center justify-center rounded-lg bg-gradient-to-br ${grad} font-semibold text-white ring-1 ring-white/15`}

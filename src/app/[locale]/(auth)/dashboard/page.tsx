@@ -1,9 +1,11 @@
 import { setRequestLocale } from 'next-intl/server';
 import { AgentChat } from '@/features/agent/AgentChat';
 import { ApprovalsPanel } from '@/features/agent/ApprovalsPanel';
+import { EmployeePanel } from '@/features/agent/EmployeePanel';
 import { PanelsGrid } from '@/features/agent/PanelsGrid';
 import { ToolsPanel } from '@/features/agent/ToolsPanel';
 import { WorkspacePanel } from '@/features/agent/WorkspacePanel';
+import { resolveAgentForTenant } from '@/libs/agent/persona';
 import { getCurrentUser } from '@/libs/auth/session';
 import { ensureDefaultTenant } from '@/libs/tenants';
 
@@ -35,6 +37,8 @@ export default async function DashboardIndexPage(props: {
     );
   }
 
+  const agent = await resolveAgentForTenant(tenant.id);
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -54,7 +58,7 @@ export default async function DashboardIndexPage(props: {
           </h1>
           <p className="mt-1 text-sm text-white/45">
             {user?.firstName ? `Welcome back, ${user.firstName}. ` : ''}
-            Your agent is standing by.
+            {agent.persona ? `${agent.name} is standing by.` : 'Your agent is standing by.'}
           </p>
         </div>
         <span className="
@@ -76,9 +80,16 @@ export default async function DashboardIndexPage(props: {
       "
       >
         <div className="lg:col-span-2">
-          <AgentChat tenantSlug={tenant.slug} tenantName={tenant.name} />
+          <AgentChat
+            tenantSlug={tenant.slug}
+            tenantName={tenant.name}
+            agentName={agent.name}
+            agentAvatarUrl={agent.avatarUrl}
+            agentAccent={agent.accent}
+          />
         </div>
         <div className="space-y-6">
+          {canManage && <EmployeePanel tenantSlug={tenant.slug} />}
           {canApprove && <ApprovalsPanel tenantSlug={tenant.slug} />}
           {canManage && <ToolsPanel tenantSlug={tenant.slug} />}
         </div>
