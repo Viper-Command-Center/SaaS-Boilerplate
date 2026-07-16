@@ -28,7 +28,7 @@ const SPAN: Record<number, string> = {
 /** Per-user, per-workspace UI preference. Not worth a DB round-trip. */
 function usePrefs(tenantSlug: string) {
   const key = `artivio:dash:${tenantSlug}`;
-  const read = (): { view?: string; collapsed?: string[] } => {
+  const read = (): { view?: string; collapsed?: string[]; foldedPanels?: string[] } => {
     try {
       return JSON.parse(localStorage.getItem(key) ?? '{}');
     } catch {
@@ -59,6 +59,12 @@ export const PanelsGrid = (props: { tenantSlug: string; canEdit?: boolean }) => 
   const [loaded, setLoaded] = useState(false);
   const [activeView, setActiveView] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  // Individually folded panels. A per-USER preference (localStorage), not a DB
+  // field: hiding the "what this tab is" blurb is a personal view choice, and
+  // two people sharing a workspace shouldn't fight over it. Anyone can fold —
+  // it changes nothing for anyone else — unlike moving a panel, which is
+  // editor+ because it mutates shared state.
+  const [folded, setFolded] = useState<Set<string>>(new Set());
   const [dragId, setDragId] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const prefs = usePrefs(props.tenantSlug);
@@ -94,6 +100,7 @@ export const PanelsGrid = (props: { tenantSlug: string; canEdit?: boolean }) => 
   useEffect(() => {
     const saved = prefs.read();
     setCollapsed(new Set(saved.collapsed ?? []));
+    setFolded(new Set(saved.foldedPanels ?? []));
     setActiveView(saved.view ?? null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.tenantSlug]);
@@ -140,15 +147,38 @@ export const PanelsGrid = (props: { tenantSlug: string; canEdit?: boolean }) => 
     prefs.write({ view: id });
   };
 
-  /** Apply a move locally, then persist. Optimistic — a drag must feel instant. */
+  /** Fold/unfold a single panel's body. Personal view state, saved per user. */
+  const toggleFold = (panelId: string) => {
+    const next = new Set(folded);
+    if (next.has(panelId)) {
+      next.delete(panelId);
+    } else {
+      next.add(panelId);
+    }
+    setFolded(next);
+    prefs.write({ foldedPanels: [...next] });
+  };
+
+  /**
+   * Apply a move locally, then persist. Optimistic — a drag must feel instant.
+   *
+   * CRITICAL (fixed 2026-07-15): the local `position` values MUST be renumbered
+   * to match the new array order. This originally reordered the array and sent
+   * fresh positions to the server, but left every local `position` field at its
+   * old value — and `visible` sorts by `position`. So the sort instantly undid
+   * the move, and it only appeared to "take" ~30s later when the poll fetched
+   * the server's truth. That's what made the arrows feel hit-and-miss and made
+   * drag look like it did nothing.
+   */
   const persist = async (next: Panel[]) => {
     frozen.current = true;
-    setPanels(next);
-    const moves = next.map((p, i) => ({
+    const renumbered = next.map((p, i) => ({ ...p, position: i }));
+    setPanels(renumbered);
+    const moves = renumbered.map(p => ({
       id: p.id,
       viewId: p.viewId,
       section: p.section,
-      position: i,
+      position: p.position,
     }));
     try {
       await fetch(`/api/panels?tenant=${encodeURIComponent(props.tenantSlug)}`, {
@@ -382,11 +412,19 @@ export const PanelsGrid = (props: { tenantSlug: string; canEdit?: boolean }) => 
                   <div
                     key={panel.id}
                     draggable={canEdit}
-                    onDragStart={() => setDragId(panel.id)}
+                    onDragStart={(e) => {
+                      // setData is NOT optional: without it Firefox refuses to
+                      // start the drag at all and Chrome is inconsistent. This
+                      // is why dragging did nothing.
+                      e.dataTransfer.setData('text/plain', panel.id);
+                      e.dataTransfer.effectAllowed = 'move';
+                      setDragId(panel.id);
+                    }}
                     onDragEnd={endDrag}
                     onDragOver={(e) => {
                       if (dragId && dragId !== panel.id) {
                         e.preventDefault();
+                        e.dataTransfer.dropEffect = 'move';
                         setDropTarget(panel.id);
                       }
                     }}
@@ -466,10 +504,33 @@ export const PanelsGrid = (props: { tenantSlug: string; canEdit?: boolean }) => 
                             </button>
                           </>
                         )}
+                        {/* Fold is available to EVERYONE, including viewers —
+                            it only changes your own view of the board. */}
+                        <button
+                          type="button"
+                          draggable={false}
+                          onClick={() => toggleFold(panel.id)}
+                          title={folded.has(panel.id) ? 'Show this panel' : 'Hide this panel'}
+                          aria-label={folded.has(panel.id) ? `Show ${panel.title}` : `Hide ${panel.title}`}
+                          aria-expanded={!folded.has(panel.id)}
+                          className="
+                            mr-1 rounded p-0.5 text-white/35 transition
+                            hover:bg-white/10 hover:text-white
+                          "
+                        >
+                          <svg
+                            viewBox="0 0 24 24"
+                            className={`size-3 fill-none stroke-current stroke-[3] transition-transform ${folded.has(panel.id) ? '-rotate-90' : ''}`}
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          >
+                            <path d="M6 9l6 6 6-6" />
+                          </svg>
+                        </button>
                         <span className="pulse-dot size-1.5 rounded-full bg-indigo-400" />
                       </span>
                     </div>
-                    <PanelBody panel={panel} />
+                    {!folded.has(panel.id) && <PanelBody panel={panel} />}
                   </div>
                 ))}
               </div>
