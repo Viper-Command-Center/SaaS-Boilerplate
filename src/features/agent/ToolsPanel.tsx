@@ -115,6 +115,19 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
   const test = async () => {
     setTestResult(null);
     setError(null);
+
+    // The stored secret CANNOT be read back (that's the point of the vault), so
+    // a test on an edit with a blank key field sends no credential at all — the
+    // server 401s and it looks like the saved key vanished. It hasn't. Refuse
+    // the test instead of reporting a failure we manufactured ourselves.
+    if (editing?.hasSecret && !headerValue.trim()) {
+      setTestResult({
+        ok: false,
+        message: 'Can’t test without re-entering the key — the stored one is encrypted and can’t be read back. Paste the key to test it, or just Save (your existing key is kept).',
+      });
+      return;
+    }
+
     setTesting(true);
     try {
       const res = await fetch('/api/mcp/test', {
@@ -272,7 +285,10 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
               Editing
               {' '}
               <span className="text-white/80">{editing.name}</span>
-              . Leave the key blank to keep the current one.
+              .
+              {editing.hasSecret
+                ? ' A key is stored and will be kept — leave the field blank unless you want to replace it.'
+                : ' No key is stored for this connection.'}
             </p>
           )}
           <div className="
