@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { AgentAvatar } from '@/features/agent/AgentAvatar';
 
 type Msg = { role: 'user' | 'assistant'; content: string };
@@ -89,8 +89,10 @@ export const AgentChat = (props: {
   const bottomRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
 
-  useEffect(() => {
-    setLoaded(false);
+  const loadHistory = useCallback((showSpinner: boolean) => {
+    if (showSpinner) {
+      setLoaded(false);
+    }
     fetch(`/api/agent/history?tenant=${encodeURIComponent(props.tenantSlug)}`)
       .then(r => (r.ok ? r.json() : { messages: [] }))
       .then((data) => {
@@ -99,6 +101,20 @@ export const AgentChat = (props: {
       })
       .catch(() => setLoaded(true));
   }, [props.tenantSlug]);
+
+  useEffect(() => {
+    loadHistory(true);
+  }, [loadHistory]);
+
+  // Approving a queued call runs the tool and lets the agent continue — the
+  // reply is written server-side, so pull it in when the Approvals panel says
+  // a decision landed. Without this the agent's continuation stays invisible
+  // and it looks like approving does nothing (which is how it behaved).
+  useEffect(() => {
+    const onUpdate = () => loadHistory(false);
+    window.addEventListener('artivio:conversation-updated', onUpdate);
+    return () => window.removeEventListener('artivio:conversation-updated', onUpdate);
+  }, [loadHistory]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });

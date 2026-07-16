@@ -42,6 +42,11 @@ export const ApprovalsPanel = (props: { tenantSlug: string }) => {
     }).catch(() => {});
     setBusyId(null);
     reload();
+    // Approving now runs the tool AND lets the agent carry on, appending its
+    // reply to the conversation server-side. The chat is a sibling component
+    // with no shared state, so tell it to re-read rather than leaving the
+    // continuation invisible until the next page load.
+    window.dispatchEvent(new CustomEvent('artivio:conversation-updated'));
   };
 
   const pending = items.filter(i => i.status === 'pending');

@@ -171,7 +171,11 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
             connectionId: conn.id,
             connectionName: conn.name,
             toolName: tool.name,
-            policy: policyMap[tool.name] ?? 'approval',
+            // Per-tool wins; `*` is the connection-wide default; approval is the
+          // fallback. The wildcard exists because per-tool config is unusable
+          // at scale — Zernio alone exposes 51 tools, and nobody is setting 51
+          // switches to say "I trust this vendor".
+          policy: policyMap[tool.name] ?? policyMap['*'] ?? 'approval',
             call: async (args) => {
               const raw = await provider.call(tool.name, args, apiKey, target);
               const result = typeof raw === 'string' ? { output: raw } : raw;
@@ -271,7 +275,11 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
           connectionName: conn.name,
           toolName: tool.name,
           // Safe by default: tools without an explicit policy need approval.
-          policy: policyMap[tool.name] ?? 'approval',
+          // Per-tool wins; `*` is the connection-wide default; approval is the
+          // fallback. The wildcard exists because per-tool config is unusable
+          // at scale — Zernio alone exposes 51 tools, and nobody is setting 51
+          // switches to say "I trust this vendor".
+          policy: policyMap[tool.name] ?? policyMap['*'] ?? 'approval',
           call: async (args) => {
             const result = await client.callTool(tool.name, args);
             const text = result.content

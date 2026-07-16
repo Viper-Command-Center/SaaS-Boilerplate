@@ -231,6 +231,26 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
     reload();
   };
 
+  /**
+   * Connection-wide approval policy, stored under the `*` key.
+   *
+   * The mechanism has existed since Phase 2 — toolPolicy, the loop's permission
+   * gateway, the audit trail — with no way to set it. So every tool defaulted
+   * to `approval` forever, and the agent kept advising people to "find the
+   * auto-approve setting", which didn't exist.
+   *
+   * Per-tool overrides still win; this is just the default for the connection.
+   */
+  const setPolicy = async (conn: Connection, policy: 'auto' | 'approval' | 'deny') => {
+    const next = { ...(conn.toolPolicy ?? {}), '*': policy };
+    await fetch(`/api/mcp/connections/${conn.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ toolPolicy: next }),
+    }).catch(() => {});
+    reload();
+  };
+
   const remove = async (conn: Connection) => {
     // eslint-disable-next-line no-alert
     if (!window.confirm(`Remove "${conn.name}" and its stored credentials?`)) {
@@ -446,6 +466,41 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
               <p className="truncate pl-3.5 text-xs text-white/35">
                 {conn.transport === 'builtin' ? 'built-in plugin' : conn.url}
               </p>
+              {/* Approval policy. Deliberately three explicit words rather than
+                  an on/off switch — "Ask" is the safe default and should look
+                  like a choice, not an absence. */}
+              <div className="mt-1.5 flex items-center gap-1 pl-3.5">
+                {(['auto', 'approval', 'deny'] as const).map((p) => {
+                  const current = (conn.toolPolicy?.['*'] as string | undefined) ?? 'approval';
+                  const active = current === p;
+                  const label = p === 'auto' ? 'Auto-run' : p === 'approval' ? 'Ask first' : 'Blocked';
+                  return (
+                    <button
+                      key={p}
+                      type="button"
+                      onClick={() => setPolicy(conn, p)}
+                      title={
+                        p === 'auto'
+                          ? 'Run this tool’s calls without asking. Spend caps still apply.'
+                          : p === 'approval'
+                            ? 'Queue every call in Approvals for your sign-off (default)'
+                            : 'Refuse all calls to this tool'
+                      }
+                      className={`rounded-full border px-2 py-0.5 text-[10px] transition ${
+                        active
+                          ? p === 'auto'
+                            ? 'border-amber-400/40 bg-amber-400/10 text-amber-200'
+                            : p === 'deny'
+                              ? 'border-rose-400/40 bg-rose-400/10 text-rose-200'
+                              : 'border-white/20 bg-white/10 text-white/70'
+                          : 'border-transparent text-white/25 hover:text-white/50'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
             <div className="flex shrink-0 items-center gap-2">
               {/* Built-ins have no URL or header to edit — their credential is
