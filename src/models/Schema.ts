@@ -253,6 +253,13 @@ export const messages = pgTable(
       .references(() => conversations.id, { onDelete: 'cascade' }),
     role: varchar('role', { length: 20 }).notNull(), // user | assistant
     content: text('content').notNull(),
+    /**
+     * File ids (from `files`) attached to this message — screenshots the user
+     * pasted into the chat. Stores REFERENCES, never image bytes: base64 in this
+     * column would bloat the conversation table badly and it's already in R2.
+     * Hydrated into image blocks at call time by libs/agent/vision.ts.
+     */
+    attachments: jsonb('attachments').$type<string[]>(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   t => [index('messages_conversation_idx').on(t.conversationId, t.createdAt)],

@@ -18,6 +18,13 @@ import { getCurrentUser } from '@/libs/auth/session';
 import { db } from '@/libs/DB';
 import { buildTenantToolset } from '@/libs/mcp/registry';
 import { getUserTenants } from '@/libs/tenants';
+import {
+  MAX_IMAGES_PER_MESSAGE,
+  droppedImageNote,
+  imageTrustNote,
+  loadImageBlocks,
+  selectImagesForContext,
+} from '@/libs/agent/vision';
 import { conversations, messages } from '@/models/Schema';
 
 export const dynamic = 'force-dynamic';
@@ -25,6 +32,12 @@ export const dynamic = 'force-dynamic';
 const BodySchema = z.object({
   tenantSlug: z.string().min(1).max(80),
   message: z.string().min(1).max(32_000),
+  /**
+   * File ids of images pasted into the composer. Already uploaded to R2 via
+   * /api/files/upload, so this is a reference — never image bytes over the wire
+   * twice. Every id is re-scoped to the tenant in loadImageBlocks().
+   */
+  attachments: z.array(z.string().uuid()).max(MAX_IMAGES_PER_MESSAGE).optional(),
 });
 
 const HISTORY_LIMIT = 40;
@@ -66,22 +79,54 @@ export async function POST(request: Request) {
   const conversationId = conversation.id;
 
   const history = await db
-    .select({ role: messages.role, content: messages.content })
+    .select({ role: messages.role, content: messages.content, attachments: messages.attachments })
     .from(messages)
     .where(eq(messages.conversationId, conversationId))
     .orderBy(asc(messages.createdAt))
     .limit(HISTORY_LIMIT);
 
+  const attachments = body.attachments ?? [];
+
   await db.insert(messages).values({
     conversationId,
     role: 'user',
     content: body.message,
+    attachments: attachments.length > 0 ? attachments : null,
   });
 
-  const chatMessages = [
-    ...history.map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),
-    { role: 'user' as const, content: body.message },
-  ];
+  // ── Vision ────────────────────────────────────────────────────────────────
+  // Rebuild past turns WITH their images, so a follow-up like "now make that
+  // panel wider" still has the screenshot in view. Bounded by
+  // MAX_IMAGES_IN_CONTEXT — oldest images fall out first and leave an honest
+  // marker, because a model that doesn't know an image existed will answer
+  // confidently as though it never did.
+  const { keep } = selectImagesForContext([...history, { attachments }]);
+
+  const hydrated = await Promise.all(
+    history.map(async (m) => {
+      const ids = (m.attachments ?? []).filter(id => keep.has(id));
+      const dropped = (m.attachments ?? []).length - ids.length;
+      if (ids.length === 0 && dropped === 0) {
+        return { role: m.role as 'user' | 'assistant', content: m.content as unknown };
+      }
+      const blocks = await loadImageBlocks(tenant.id, ids);
+      return {
+        role: m.role as 'user' | 'assistant',
+        content: [
+          ...blocks,
+          ...(dropped > 0 ? [droppedImageNote()] : []),
+          { type: 'text', text: m.content },
+        ] as unknown,
+      };
+    }),
+  );
+
+  // This turn's images. Placed before the user's text by runToolLoop.
+  const userBlocks = attachments.length > 0
+    ? await loadImageBlocks(tenant.id, attachments.filter(id => keep.has(id)))
+    : [];
+
+  const anyImages = userBlocks.length > 0 || hydrated.some(m => Array.isArray(m.content));
 
   // Assemble the tenant's live toolset: platform tools (always available —
   // dashboard panels + datasets) merged with the tenant's enabled MCP
@@ -111,6 +156,12 @@ export async function POST(request: Request) {
   if (toolset.failedConnections.length > 0) {
     system += `\n\nNote: these configured tool servers are currently unavailable: ${toolset.failedConnections.join('; ')}.`;
   }
+  // Only added when images are actually present — costs nothing on text turns,
+  // and appending it unconditionally would also invalidate the system-prompt
+  // cache for every text-only conversation.
+  if (anyImages) {
+    system += `\n${imageTrustNote()}`;
+  }
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
@@ -125,8 +176,9 @@ export async function POST(request: Request) {
           tenantId: tenant.id,
           conversationId,
           system,
-          history: chatMessages.slice(0, -1),
+          history: hydrated,
           userText: body.message,
+          userBlocks,
           toolset,
           onDelta,
         });

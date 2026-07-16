@@ -5,6 +5,23 @@ import { AgentAvatar } from '@/features/agent/AgentAvatar';
 
 type Msg = { role: 'user' | 'assistant'; content: string };
 
+/** An image pasted into the composer, mid- or post-upload. */
+type Attachment = {
+  localId: string;
+  /** Set once the upload is confirmed — this is what the API receives. */
+  id?: string;
+  name: string;
+  /** Object URL for the thumbnail. Revoked on remove/send to avoid a leak. */
+  previewUrl: string;
+  uploading: boolean;
+};
+
+/** Mirrors libs/agent/vision.ts — Anthropic's supported image types. */
+const ACCEPTED = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+/** Mirrors MAX_IMAGES_PER_MESSAGE in vision.ts. Checked server-side too. */
+const MAX_IMAGES = 4;
+
 /** Very small markdown renderer: **bold**, `code`, and line breaks. */
 function renderInline(text: string): React.ReactNode[] {
   const parts: React.ReactNode[] = [];
@@ -86,8 +103,97 @@ export const AgentChat = (props: {
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [pending, setPending] = useState<Attachment[]>([]);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
+
+  /**
+   * Paste or drop an image → straight to R2 → keep the file id.
+   *
+   * Bytes never touch the app server: we mint a presigned PUT and the browser
+   * uploads directly to Cloudflare (the same path the file library uses). The
+   * chat request then carries a file id, not a base64 blob.
+   */
+  const upload = useCallback(async (file: File) => {
+    setUploadError(null);
+    if (!ACCEPTED.has(file.type)) {
+      setUploadError(`${file.type || 'That file type'} can't be viewed — use PNG, JPEG, GIF or WebP.`);
+      return;
+    }
+    if (file.size > MAX_IMAGE_BYTES) {
+      setUploadError(`That image is ${Math.round(file.size / 1024 / 1024)}MB — the limit is 5MB.`);
+      return;
+    }
+
+    const localId = Math.random().toString(36).slice(2);
+    const previewUrl = URL.createObjectURL(file);
+    setPending(prev => [...prev, { localId, name: file.name, previewUrl, uploading: true }]);
+
+    try {
+      const startRes = await fetch(`/api/files/upload?tenant=${encodeURIComponent(props.tenantSlug)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: file.name || 'screenshot.png', sizeBytes: file.size }),
+      });
+      const start = await startRes.json();
+      if (!startRes.ok) {
+        throw new Error(start?.error ?? 'Could not start the upload.');
+      }
+
+      const put = await fetch(start.uploadUrl, {
+        method: 'PUT',
+        headers: { 'Content-Type': file.type },
+        body: file,
+      });
+      if (!put.ok) {
+        throw new Error(`Storage rejected the upload (${put.status}).`);
+      }
+
+      const confirmRes = await fetch(`/api/files/upload?tenant=${encodeURIComponent(props.tenantSlug)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: start.key, name: file.name || 'screenshot.png', mime: file.type }),
+      });
+      const confirmed = await confirmRes.json();
+      if (!confirmRes.ok || !confirmed?.file?.id) {
+        throw new Error(confirmed?.error ?? 'Could not save the image.');
+      }
+
+      setPending(prev =>
+        prev.map(p => (p.localId === localId ? { ...p, id: confirmed.file.id, uploading: false } : p)),
+      );
+    } catch (err) {
+      // Drop the chip and say why. A silent failure here would leave the user
+      // thinking the agent can see something it can't.
+      setPending(prev => prev.filter(p => p.localId !== localId));
+      URL.revokeObjectURL(previewUrl);
+      setUploadError(err instanceof Error ? err.message : 'Upload failed.');
+    }
+  }, [props.tenantSlug]);
+
+  const addFiles = useCallback((files: File[]) => {
+    const images = files.filter(f => f.type.startsWith('image/'));
+    if (images.length === 0) {
+      return;
+    }
+    const room = MAX_IMAGES - pending.length;
+    if (room <= 0) {
+      setUploadError(`You can attach up to ${MAX_IMAGES} images per message.`);
+      return;
+    }
+    images.slice(0, room).forEach(upload);
+  }, [pending.length, upload]);
+
+  const removePending = (localId: string) => {
+    setPending((prev) => {
+      const hit = prev.find(p => p.localId === localId);
+      if (hit) {
+        URL.revokeObjectURL(hit.previewUrl);
+      }
+      return prev.filter(p => p.localId !== localId);
+    });
+  };
 
   const loadHistory = useCallback((showSpinner: boolean) => {
     if (showSpinner) {
@@ -135,18 +241,43 @@ export const AgentChat = (props: {
     if (!text || busy) {
       return;
     }
+    // Don't send while an image is still uploading — the agent would answer
+    // about a screenshot it never received.
+    if (pending.some(p => p.uploading)) {
+      setUploadError('Still uploading — one moment.');
+      return;
+    }
+
+    const attachments = pending.map(p => p.id).filter((id): id is string => Boolean(id));
+
     setInput('');
     if (taRef.current) {
       taRef.current.style.height = 'auto';
     }
+    pending.forEach(p => URL.revokeObjectURL(p.previewUrl));
+    setPending([]);
+    setUploadError(null);
     setBusy(true);
-    setMsgs(prev => [...prev, { role: 'user', content: text }, { role: 'assistant', content: '' }]);
+    setMsgs(prev => [
+      ...prev,
+      {
+        role: 'user',
+        content: attachments.length > 0
+          ? `${text}\n\n_[${attachments.length} image${attachments.length > 1 ? 's' : ''} attached]_`
+          : text,
+      },
+      { role: 'assistant', content: '' },
+    ]);
 
     try {
       const res = await fetch('/api/agent/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tenantSlug: props.tenantSlug, message: text }),
+        body: JSON.stringify({
+          tenantSlug: props.tenantSlug,
+          message: text,
+          ...(attachments.length > 0 ? { attachments } : {}),
+        }),
       });
       if (!res.ok || !res.body) {
         const data = await res.json().catch(() => null);
@@ -189,6 +320,20 @@ export const AgentChat = (props: {
       e.preventDefault();
       send();
     }
+  };
+
+  /** Cmd/Ctrl+Shift+4 then Cmd/Ctrl+V — the whole point of the feature. */
+  const onPaste = (e: React.ClipboardEvent) => {
+    const files = Array.from(e.clipboardData.files);
+    if (files.some(f => f.type.startsWith('image/'))) {
+      e.preventDefault(); // else the filename lands in the textarea as text
+      addFiles(files);
+    }
+  };
+
+  const onDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    addFiles(Array.from(e.dataTransfer.files));
   };
 
   const suggestions = [
@@ -318,7 +463,49 @@ export const AgentChat = (props: {
       </div>
 
       {/* Composer */}
-      <form onSubmit={send} className="border-t border-white/8 p-3">
+      <form
+        onSubmit={send}
+        className="border-t border-white/8 p-3"
+        onDrop={onDrop}
+        onDragOver={e => e.preventDefault()}
+      >
+        {/* Attached images — thumbnails, because a filename tells you nothing
+            about whether you grabbed the right screenshot. */}
+        {pending.length > 0 && (
+          <div className="mb-2 flex flex-wrap gap-2">
+            {pending.map(p => (
+              <div
+                key={p.localId}
+                className="group relative size-16 overflow-hidden rounded-lg border border-white/10 bg-white/[0.04]"
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={p.previewUrl} alt={p.name} className="size-full object-cover" />
+                {p.uploading && (
+                  <div className="absolute inset-0 grid place-items-center bg-black/60">
+                    <div className="size-4 animate-spin rounded-full border-2 border-white/30 border-t-white/90" />
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={() => removePending(p.localId)}
+                  aria-label={`Remove ${p.name}`}
+                  className="
+                    absolute right-0.5 top-0.5 grid size-5 place-items-center rounded-full
+                    bg-black/70 text-xs text-white/80 opacity-0 transition
+                    hover:bg-black/90 hover:text-white group-hover:opacity-100
+                  "
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {uploadError && (
+          <p className="mb-2 text-xs text-rose-300/90">{uploadError}</p>
+        )}
+
         <div className="
           flex items-end gap-2 rounded-xl border border-white/10
           bg-white/[0.04] px-3 py-2 transition
@@ -334,6 +521,7 @@ export const AgentChat = (props: {
               grow();
             }}
             onKeyDown={onKeyDown}
+            onPaste={onPaste}
             placeholder={`Message ${agentName === 'Agent' ? 'the agent' : agentName}…  (Enter to send, Shift+Enter for a new line)`}
             className="
               max-h-40 flex-1 resize-none bg-transparent py-1 text-sm

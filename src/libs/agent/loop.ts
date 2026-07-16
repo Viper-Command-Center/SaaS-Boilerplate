@@ -9,7 +9,7 @@
  * Every tool decision writes an audit_log row. Max 8 iterations per turn.
  */
 
-import type { BlockMessage, ChatMessage } from '@/libs/agent/anthropic';
+import type { BlockMessage } from '@/libs/agent/anthropic';
 import type { TenantToolset } from '@/libs/mcp/registry';
 import { callClaudeWithTools } from '@/libs/agent/anthropic';
 import { checkSpend, meterLlm } from '@/libs/billing/meter';
@@ -23,15 +23,48 @@ export async function runToolLoop(a: {
   tenantId: string;
   conversationId: string;
   system: string;
-  history: ChatMessage[];
+  /**
+   * Widened from ChatMessage[] to BlockMessage[] so history can carry image
+   * blocks. This is backward-compatible: BlockMessage['content'] is `unknown`,
+   * so every existing caller passing plain-string ChatMessage[] still fits.
+   */
+  history: BlockMessage[];
+  /** The user's words. Always a string — kept for auditing and persistence. */
   userText: string;
+  /**
+   * Image/text blocks for THIS turn (pasted screenshots), already hydrated by
+   * libs/agent/vision.ts. Placed BEFORE userText: Anthropic's guidance is that
+   * images should precede the question that asks about them.
+   */
+  userBlocks?: unknown[];
   toolset: TenantToolset;
   /** Called with displayable progress (text deltas + tool status lines). */
   onDelta: (text: string) => void;
 }): Promise<string> {
+  // The user's turn: [ ...images, { text } ] when there are attachments, or a
+  // plain string when there aren't (cheaper to serialise, and the overwhelming
+  // majority of turns).
+  const userContent: unknown = a.userBlocks?.length
+    ? [
+        ...a.userBlocks,
+        // 🔑 THE COST FIX. This breakpoint caches the whole request prefix —
+        // tools + system + history + this turn's images. The message array is
+        // re-sent on EVERY loop iteration (up to 8), so without it a single
+        // screenshot bills ~1,500 tokens eight times in one turn. With it,
+        // iterations 2..8 read it at ~10% of input price.
+        //
+        // It sits on the LAST block deliberately: cache_control caches
+        // everything *before and including* the block it's attached to.
+        //
+        // Note the system-block breakpoint in anthropic.ts (cachedSystem) is a
+        // separate one. Anthropic allows up to 4; we now use 2.
+        { type: 'text', text: a.userText, cache_control: { type: 'ephemeral' } },
+      ]
+    : a.userText;
+
   const messages: BlockMessage[] = [
-    ...a.history.map(m => ({ role: m.role, content: m.content as unknown })),
-    { role: 'user' as const, content: a.userText },
+    ...a.history,
+    { role: 'user' as const, content: userContent },
   ];
 
   let finalText = '';
