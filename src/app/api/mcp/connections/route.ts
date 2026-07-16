@@ -47,12 +47,24 @@ export async function GET(request: Request) {
       url: mcpConnections.url,
       toolPolicy: mcpConnections.toolPolicy,
       enabled: mcpConnections.enabled,
+      // The header NAME (e.g. "Authorization") so the edit form can pre-fill it.
+      // The sealed VALUE is never returned — `hasSecret` only says whether one
+      // exists, so the form can show "leave blank to keep the current key".
+      headerCredentials: mcpConnections.headerCredentials,
       createdAt: mcpConnections.createdAt,
     })
     .from(mcpConnections)
     .where(eq(mcpConnections.tenantId, tenant.id));
 
-  return NextResponse.json({ connections: rows, vaultConfigured: vaultConfigured() });
+  // Reshape before it leaves the server: the client gets the header NAME and a
+  // boolean, never the credential id and never the sealed value.
+  const connections = rows.map(({ headerCredentials, ...row }) => {
+    const map = (headerCredentials ?? {}) as Record<string, string>;
+    const header = Object.keys(map)[0] ?? null;
+    return { ...row, authHeader: header, hasSecret: Boolean(header && map[header]) };
+  });
+
+  return NextResponse.json({ connections, vaultConfigured: vaultConfigured() });
 }
 
 const CreateSchema = z.object({

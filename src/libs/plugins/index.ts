@@ -75,6 +75,24 @@ export const CATALOG_PRESETS = [
     },
   },
   {
+    key: 'zernio',
+    label: 'Zernio (social media)',
+    entry: {
+      slug: 'zernio',
+      name: 'Zernio',
+      description: 'Schedule and publish social posts across 14+ platforms, plus analytics, inbox and ads.',
+      category: 'marketing',
+      transport: 'http' as const,
+      // Streamable HTTP endpoint. Zernio also offers OAuth via Claude's own
+      // Connectors UI — irrelevant here; server-to-server uses the API key.
+      url: 'https://mcp.zernio.com/mcp',
+      authHeader: 'Authorization',
+      // The `Bearer ` prefix is REQUIRED and is the usual cause of Zernio's
+      // `401 invalid_token` — pasting the bare key silently fails.
+      authHint: 'Bearer <your API key> from zernio.com/dashboard/api-keys. Keep the "Bearer " prefix — without it Zernio returns 401 invalid_token.',
+    },
+  },
+  {
     key: 'duda',
     label: 'Duda (websites)',
     entry: {

@@ -10,6 +10,9 @@ type Connection = {
   url: string | null;
   toolPolicy: Record<string, string> | null;
   enabled: boolean;
+  /** Header name only — the sealed value never leaves the server. */
+  authHeader: string | null;
+  hasSecret: boolean;
 };
 
 type CatalogPlugin = {
@@ -50,6 +53,11 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
   const [siteUrl, setSiteUrl] = useState('');
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+  // When set, the form is EDITING this connection rather than creating one.
+  // Without this, a typo'd URL or a key pasted without its `Bearer ` prefix was
+  // unfixable — Remove-and-recreate was the only path, and it silently dropped
+  // the connection's tool policies with it.
+  const [editing, setEditing] = useState<Connection | null>(null);
 
   const reload = useCallback(() => {
     fetch(`/api/mcp/connections?tenant=${encodeURIComponent(props.tenantSlug)}`)
@@ -131,31 +139,64 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
     }
   };
 
-  const add = async (e: React.FormEvent) => {
+  const resetForm = () => {
+    setName('');
+    setUrl('');
+    setHeaderName('Authorization');
+    setHeaderValue('');
+    setEditing(null);
+    setShowForm(false);
+    setTestResult(null);
+    setError(null);
+  };
+
+  /** Load a connection into the form. The secret is never read back, so the
+   *  value field starts blank and blank means "keep the existing key". */
+  const startEdit = (conn: Connection) => {
+    setEditing(conn);
+    setName(conn.name);
+    setUrl(conn.url ?? '');
+    setHeaderName(conn.authHeader ?? 'Authorization');
+    setHeaderValue('');
+    setTestResult(null);
+    setError(null);
+    setShowForm(true);
+  };
+
+  const save = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     setBusy(true);
     try {
-      const res = await fetch('/api/mcp/connections', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          tenantSlug: props.tenantSlug,
-          name: name.trim().toLowerCase(),
-          url: url.trim(),
-          ...(headerValue.trim()
-            ? { headers: { [headerName.trim() || 'Authorization']: headerValue.trim() } }
-            : {}),
-        }),
-      });
+      const res = editing
+        ? await fetch(`/api/mcp/connections/${editing.id}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              name: name.trim().toLowerCase(),
+              url: url.trim(),
+              authHeader: headerName.trim() || 'Authorization',
+              // Blank = keep the stored secret.
+              ...(headerValue.trim() ? { authValue: headerValue.trim() } : {}),
+            }),
+          })
+        : await fetch('/api/mcp/connections', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              tenantSlug: props.tenantSlug,
+              name: name.trim().toLowerCase(),
+              url: url.trim(),
+              ...(headerValue.trim()
+                ? { headers: { [headerName.trim() || 'Authorization']: headerValue.trim() } }
+                : {}),
+            }),
+          });
       const data = await res.json().catch(() => null);
       if (!res.ok) {
-        setError(data?.error ?? 'Could not add the server.');
+        setError(data?.error ?? (editing ? 'Could not save the changes.' : 'Could not add the server.'));
       } else {
-        setName('');
-        setUrl('');
-        setHeaderValue('');
-        setShowForm(false);
+        resetForm();
         reload();
       }
     } catch {
@@ -198,7 +239,11 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
             Capabilities the agent can use. New tools need approval by default.
           </p>
         </div>
-        <Button variant="outline" size="sm" onClick={() => setShowForm(s => !s)}>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => (showForm ? resetForm() : setShowForm(true))}
+        >
           {showForm ? 'Cancel' : 'Add MCP server'}
         </Button>
       </div>
@@ -219,9 +264,17 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
         </p>
       )}
 
-      {/* Advanced: any hosted MCP server */}
+      {/* Advanced: any hosted MCP server. Doubles as the EDIT form. */}
       {showForm && (
-        <form onSubmit={add} className="space-y-3 border-b border-white/8 p-4">
+        <form onSubmit={save} className="space-y-3 border-b border-white/8 p-4">
+          {editing && (
+            <p className="text-xs text-white/45">
+              Editing
+              {' '}
+              <span className="text-white/80">{editing.name}</span>
+              . Leave the key blank to keep the current one.
+            </p>
+          )}
           <div className="
             grid gap-3
             sm:grid-cols-2
@@ -230,8 +283,22 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
             <input className={inputClass} value={name} onChange={e => setName(e.target.value)} placeholder="Name (e.g. github)" required />
             <input className={inputClass} value={url} onChange={e => setUrl(e.target.value)} placeholder="https://…/mcp" required />
             <input className={inputClass} value={headerName} onChange={e => setHeaderName(e.target.value)} placeholder="Auth header" />
-            <input className={inputClass} type="password" value={headerValue} onChange={e => setHeaderValue(e.target.value)} placeholder="Bearer sk_… (encrypted)" />
+            <input
+              className={inputClass}
+              type="password"
+              value={headerValue}
+              onChange={e => setHeaderValue(e.target.value)}
+              placeholder={editing?.hasSecret ? 'Leave blank to keep current key' : 'Bearer sk_… (encrypted)'}
+            />
           </div>
+          {/* Most 401s are a key pasted without its prefix. Say so where it
+              happens rather than letting the agent guess about it later. */}
+          <p className="text-[11px] text-white/30">
+            Include the prefix the vendor expects — usually
+            {' '}
+            <code className="text-white/50">Bearer sk_…</code>
+            . A few (Duda) want the raw token with no prefix.
+          </p>
           {testResult && (
             <p className={`text-xs ${testResult.ok ? 'text-emerald-300' : 'text-rose-300'}`} role="status">
               {testResult.ok ? '✓ ' : '✗ '}
@@ -241,7 +308,7 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
 
           <div className="flex gap-2">
             <Button type="submit" size="sm" disabled={busy}>
-              {busy ? 'Adding…' : 'Add server'}
+              {busy ? 'Saving…' : editing ? 'Save changes' : 'Add server'}
             </Button>
             <Button
               type="button"
@@ -249,9 +316,15 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
               variant="outline"
               disabled={testing || !url.trim()}
               onClick={test}
+              title={editing && !headerValue.trim() ? 'Enter the key to test — the stored one can’t be read back' : undefined}
             >
               {testing ? 'Testing…' : 'Test connection'}
             </Button>
+            {editing && (
+              <Button type="button" size="sm" variant="outline" onClick={resetForm}>
+                Cancel
+              </Button>
+            )}
           </div>
         </form>
       )}
@@ -353,6 +426,11 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
               </p>
             </div>
             <div className="flex shrink-0 items-center gap-2">
+              {/* Built-ins have no URL or header to edit — their credential is
+                  managed in the admin catalog, not here. */}
+              {conn.transport !== 'builtin' && (
+                <Button variant="outline" size="sm" onClick={() => startEdit(conn)}>Edit</Button>
+              )}
               <Button variant="outline" size="sm" onClick={() => toggle(conn)}>
                 {conn.enabled ? 'Disable' : 'Enable'}
               </Button>
