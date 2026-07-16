@@ -115,31 +115,34 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
   const test = async () => {
     setTestResult(null);
     setError(null);
-
-    // The stored secret CANNOT be read back (that's the point of the vault), so
-    // a test on an edit with a blank key field sends no credential at all — the
-    // server 401s and it looks like the saved key vanished. It hasn't. Refuse
-    // the test instead of reporting a failure we manufactured ourselves.
-    if (editing?.hasSecret && !headerValue.trim()) {
-      setTestResult({
-        ok: false,
-        message: 'Can’t test without re-entering the key — the stored one is encrypted and can’t be read back. Paste the key to test it, or just Save (your existing key is kept).',
-      });
-      return;
-    }
-
     setTesting(true);
-    try {
-      const res = await fetch('/api/mcp/test', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+
+    // Two modes, and picking the right one is the whole point:
+    //
+    //  · Editing with the key field blank → test the SAVED connection by id.
+    //    The server decrypts the stored credential and probes with it; the
+    //    secret never comes to the browser. This is what "does my saved key
+    //    still work?" actually means, and sending a blank key instead would
+    //    manufacture a 401 and look like the key had been lost.
+    //
+    //  · Otherwise (adding, or replacing the key) → test what's typed, so a
+    //    bad key is caught before it's committed.
+    const useStored = Boolean(editing && !headerValue.trim());
+    const payload = useStored
+      ? { tenantSlug: props.tenantSlug, connectionId: editing?.id }
+      : {
           tenantSlug: props.tenantSlug,
           url: url.trim(),
           ...(headerValue.trim()
             ? { headerName: headerName.trim() || 'Authorization', headerValue: headerValue.trim() }
             : {}),
-        }),
+        };
+
+    try {
+      const res = await fetch('/api/mcp/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
       });
       const data = await res.json().catch(() => null);
       setTestResult(data?.ok
@@ -287,7 +290,7 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
               <span className="text-white/80">{editing.name}</span>
               .
               {editing.hasSecret
-                ? ' A key is stored and will be kept — leave the field blank unless you want to replace it.'
+                ? ' A key is stored (encrypted, so it can’t be displayed). Leave it blank and Test will check the stored key — type a new one only to replace it.'
                 : ' No key is stored for this connection.'}
             </p>
           )}
@@ -304,7 +307,7 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
               type="password"
               value={headerValue}
               onChange={e => setHeaderValue(e.target.value)}
-              placeholder={editing?.hasSecret ? 'Leave blank to keep current key' : 'Bearer sk_… (encrypted)'}
+              placeholder={editing?.hasSecret ? 'Stored — blank keeps it' : 'Bearer sk_… (encrypted)'}
             />
           </div>
           {/* Most 401s are a key pasted without its prefix. Say so where it
@@ -330,11 +333,14 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
               type="button"
               size="sm"
               variant="outline"
-              disabled={testing || !url.trim()}
+              disabled={testing || (!editing && !url.trim())}
               onClick={test}
-              title={editing && !headerValue.trim() ? 'Enter the key to test — the stored one can’t be read back' : undefined}
             >
-              {testing ? 'Testing…' : 'Test connection'}
+              {testing
+                ? 'Testing…'
+                : editing && !headerValue.trim()
+                  ? 'Test saved key'
+                  : 'Test connection'}
             </Button>
             {editing && (
               <Button type="button" size="sm" variant="outline" onClick={resetForm}>
