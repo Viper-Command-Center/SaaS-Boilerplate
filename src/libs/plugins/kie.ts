@@ -44,6 +44,14 @@ export const KIE_USD_PER_CREDIT = 0.005;
 /** Codes that mean "this key is unusable right now" → try the next one. */
 const FAILOVER_CODES = new Set([401, 402, 403, 429, 433, 455]);
 
+// Kie treats text-to-video and image-to-video as different models with
+// different required inputs — there is no single "make a video" model. Verified
+// against docs.kie.ai on 2026-07-15; if these are changed, re-check the input
+// shape on the model's doc page, because a wrong shape surfaces only as Kie's
+// "This field is required" with no field name.
+const VIDEO_MODEL_TEXT_TO_VIDEO = 'kling/v2-5-turbo-text-to-video-pro';
+const VIDEO_MODEL_IMAGE_TO_VIDEO = 'kling/v2-1-standard';
+
 /** Round-robin cursor, per process. */
 let cursor = 0;
 
@@ -218,15 +226,15 @@ export const kieProvider: BuiltinProvider = {
     },
     {
       name: 'generate_video',
-      description: 'Generate a video from a text prompt (or an image) via Kie.ai. Async — this may take a few minutes. Returns video URL(s). Videos are the most expensive thing you can do: confirm the plan with the user before generating.',
+      description: 'Generate a video via Kie.ai. Give a prompt alone for text-to-video, or a prompt plus image_url to animate an existing image. The right model is chosen automatically. Async — may take a few minutes. Returns video URL(s). Videos are the most expensive thing you can do: confirm the plan with the user before generating.',
       input_schema: {
         type: 'object',
         properties: {
-          prompt: { type: 'string' },
-          model: { type: 'string', description: 'Optional Kie.ai model id. Defaults to kling/v2-1-standard.' },
-          image_url: { type: 'string', description: 'Optional source image for image-to-video.' },
-          duration_seconds: { type: 'number', description: 'Requested duration in seconds. Longer = more credits.' },
-          aspect_ratio: { type: 'string' },
+          prompt: { type: 'string', description: 'What should happen in the video. Describe motion, camera and pacing, not just a static scene.' },
+          image_url: { type: 'string', description: 'Optional. Supply a public image URL to animate it (image-to-video); omit for text-to-video.' },
+          duration_seconds: { type: 'number', description: 'Video length in seconds. Defaults to 5. Longer = more credits.' },
+          aspect_ratio: { type: 'string', description: 'e.g. 16:9, 9:16, 1:1. Defaults to 16:9. Ignored when image_url is set — the image fixes the frame.' },
+          model: { type: 'string', description: 'Optional Kie.ai model id override. Leave unset unless you know the exact id and its required inputs; a wrong id fails with an unhelpful "This field is required".' },
         },
         required: ['prompt'],
       },
@@ -280,17 +288,34 @@ export const kieProvider: BuiltinProvider = {
     }
 
     if (tool === 'generate_video') {
-      const model = String(args.model || 'kling/v2-1-standard');
+      // Kie exposes text-to-video and image-to-video as SEPARATE models with
+      // different required inputs. This used to default everything to
+      // kling/v2-1-standard — which is image-to-video and REQUIRES image_url —
+      // so every text-to-video request died with Kie's unhelpful
+      // "This field is required" and no clue which field.
+      //
+      // Verified against docs.kie.ai 2026-07-15:
+      //   text-to-video  kling/v2-5-turbo-text-to-video-pro
+      //                  { prompt, duration:"5", aspect_ratio:"16:9" }
+      //   image-to-video kling/v2-1-standard
+      //                  { prompt, image_url, duration:"5" }   (no aspect_ratio)
+      const hasImage = Boolean(args.image_url);
+      const model = String(
+        args.model || (hasImage ? VIDEO_MODEL_IMAGE_TO_VIDEO : VIDEO_MODEL_TEXT_TO_VIDEO),
+      );
+
       const input: Record<string, unknown> = { prompt: String(args.prompt ?? '') };
-      if (args.image_url) {
-        input.image_url = args.image_url;
+      if (hasImage) {
+        input.image_url = String(args.image_url);
       }
-      if (args.duration_seconds) {
-        input.duration = Number(args.duration_seconds);
+      // duration is a STRING in Kie's API ("5"), not a number. Sending a number
+      // is silently rejected.
+      input.duration = String(args.duration_seconds ? Math.round(Number(args.duration_seconds)) : 5);
+      // aspect_ratio applies to text-to-video; an image already fixes the frame.
+      if (!hasImage) {
+        input.aspect_ratio = String(args.aspect_ratio || '16:9');
       }
-      if (args.aspect_ratio) {
-        input.aspect_ratio = args.aspect_ratio;
-      }
+
       return runJob(model, input, keys);
     }
 
