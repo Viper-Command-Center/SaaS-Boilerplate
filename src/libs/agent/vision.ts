@@ -94,10 +94,10 @@ export async function loadImageBlock(
   if (!file) {
     return { type: 'text', text: '[an image was attached here but is no longer available]' };
   }
-  if (!isImageMime(file.mimeType)) {
+  if (!isImageMime(file.mime)) {
     return {
       type: 'text',
-      text: `[attached file "${file.name}" is ${file.mimeType ?? 'an unknown type'}, which cannot be viewed as an image]`,
+      text: `[attached file "${file.name}" is ${file.mime ?? 'an unknown type'}, which cannot be viewed as an image]`,
     };
   }
   if (file.sizeBytes && file.sizeBytes > MAX_BYTES) {
@@ -108,7 +108,7 @@ export async function loadImageBlock(
   }
 
   try {
-    const { body } = await getObject(file.storageKey);
+    const { body } = await getObject(file.r2Key);
     if (body.byteLength > MAX_BYTES) {
       return { type: 'text', text: `[attached image "${file.name}" is too large to view]` };
     }
@@ -116,7 +116,7 @@ export async function loadImageBlock(
       type: 'image',
       source: {
         type: 'base64',
-        media_type: file.mimeType!.toLowerCase(),
+        media_type: file.mime!.toLowerCase(),
         data: body.toString('base64'),
       },
     };
