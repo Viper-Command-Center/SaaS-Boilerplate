@@ -164,6 +164,48 @@ export const PanelsGrid = (props: { tenantSlug: string; canEdit?: boolean }) => 
     }
   };
 
+  /**
+   * Move a panel one slot earlier/later within its own section.
+   *
+   * Not a nicety. HTML5 drag-and-drop is mouse-only — there is no keyboard
+   * path through it — so without these buttons, reordering is impossible for
+   * anyone not using a pointer. They're also the only *discoverable* control:
+   * the drag handle is invisible until you happen to hover the right card,
+   * which is exactly how this shipped looking broken.
+   */
+  const nudge = (panelId: string, dir: -1 | 1) => {
+    const self = panels.find(p => p.id === panelId);
+    if (!self) {
+      return;
+    }
+    const sectionKey = self.section ?? UNGROUPED;
+    const mates = visible.filter(p => (p.section ?? UNGROUPED) === sectionKey);
+    const i = mates.findIndex(p => p.id === panelId);
+    const target = mates[i + dir];
+    if (!target) {
+      return; // already at the end of its section
+    }
+
+    const next = [...panels];
+    const ai = next.findIndex(p => p.id === panelId);
+    const bi = next.findIndex(p => p.id === target.id);
+    const a = next[ai];
+    const b = next[bi];
+    if (!a || !b) {
+      return;
+    }
+    next[ai] = b;
+    next[bi] = a;
+    persist(next);
+  };
+
+  /** Can this panel still move that way? Used to disable the arrows at the ends. */
+  const canNudge = (panel: Panel, dir: -1 | 1) => {
+    const mates = visible.filter(p => (p.section ?? UNGROUPED) === (panel.section ?? UNGROUPED));
+    const i = mates.findIndex(p => p.id === panel.id);
+    return i >= 0 && Boolean(mates[i + dir]);
+  };
+
   /** Drop `dragId` immediately before `beforeId` (or at the end of a section). */
   const dropOnPanel = (beforeId: string) => {
     if (!dragId || dragId === beforeId) {
@@ -221,8 +263,25 @@ export const PanelsGrid = (props: { tenantSlug: string; canEdit?: boolean }) => 
 
   const canEdit = props.canEdit ?? false;
 
+  // With no tabs and no sections there is nothing on screen saying this board
+  // can be rearranged at all — which is exactly how it looked broken. Say it
+  // once, quietly, and only to people who can actually act on it.
+  const unorganised = canEdit && views.length <= 1 && sections.length === 1 && sections[0] === UNGROUPED && visible.length > 3;
+
   return (
     <div className="space-y-4">
+      {unorganised && (
+        <p className="text-xs text-white/35">
+          Drag a card, or use the ↑↓ arrows, to rearrange.
+          {' '}
+          Ask your agent to
+          {' '}
+          <span className="text-white/55">“organise the dashboard into tabs and sections”</span>
+          {' '}
+          to group it by domain.
+        </p>
+      )}
+
       {/* Tabs — the primitive that keeps this readable at 5 MCPs and 60 panels */}
       {views.length > 1 && (
         <div className="flex flex-wrap items-center gap-1.5">
@@ -342,13 +401,19 @@ export const PanelsGrid = (props: { tenantSlug: string; canEdit?: boolean }) => 
                     } ${dropTarget === panel.id ? 'ring-2 ring-indigo-400' : ''} ${canEdit ? 'cursor-grab active:cursor-grabbing' : ''}`}
                   >
                     <div className="
-                      mb-3 flex items-center justify-between text-[10px]
+                      mb-3 flex items-center justify-between gap-2 text-[10px]
                       font-semibold tracking-[0.12em] text-white/40 uppercase
                     "
                     >
-                      <span className="flex items-center gap-1.5">
+                      <span className="flex min-w-0 items-center gap-1.5">
                         {canEdit && (
-                          <svg viewBox="0 0 24 24" className="size-3 fill-white/20 opacity-0 transition group-hover:opacity-100" aria-hidden>
+                          // Always visible. This was opacity-0 until hover, which
+                          // made the whole feature undiscoverable.
+                          <svg
+                            viewBox="0 0 24 24"
+                            className="size-3 shrink-0 fill-white/30"
+                            aria-hidden
+                          >
                             <circle cx="9" cy="6" r="1.5" />
                             <circle cx="15" cy="6" r="1.5" />
                             <circle cx="9" cy="12" r="1.5" />
@@ -357,9 +422,52 @@ export const PanelsGrid = (props: { tenantSlug: string; canEdit?: boolean }) => 
                             <circle cx="15" cy="18" r="1.5" />
                           </svg>
                         )}
-                        {panel.title}
+                        <span className="truncate">{panel.title}</span>
                       </span>
-                      <span className="pulse-dot size-1.5 rounded-full bg-indigo-400" />
+
+                      <span className="flex shrink-0 items-center gap-0.5">
+                        {canEdit && (
+                          <>
+                            {/* draggable={false} so grabbing an arrow doesn't
+                                start a card drag instead of clicking. */}
+                            <button
+                              type="button"
+                              draggable={false}
+                              disabled={!canNudge(panel, -1)}
+                              onClick={() => nudge(panel.id, -1)}
+                              title="Move earlier"
+                              aria-label={`Move ${panel.title} earlier`}
+                              className="
+                                rounded p-0.5 text-white/35 transition
+                                hover:bg-white/10 hover:text-white
+                                disabled:pointer-events-none disabled:opacity-20
+                              "
+                            >
+                              <svg viewBox="0 0 24 24" className="size-3 fill-none stroke-current stroke-[3]" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M18 15l-6-6-6 6" />
+                              </svg>
+                            </button>
+                            <button
+                              type="button"
+                              draggable={false}
+                              disabled={!canNudge(panel, 1)}
+                              onClick={() => nudge(panel.id, 1)}
+                              title="Move later"
+                              aria-label={`Move ${panel.title} later`}
+                              className="
+                                mr-1 rounded p-0.5 text-white/35 transition
+                                hover:bg-white/10 hover:text-white
+                                disabled:pointer-events-none disabled:opacity-20
+                              "
+                            >
+                              <svg viewBox="0 0 24 24" className="size-3 fill-none stroke-current stroke-[3]" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M6 9l6 6 6-6" />
+                              </svg>
+                            </button>
+                          </>
+                        )}
+                        <span className="pulse-dot size-1.5 rounded-full bg-indigo-400" />
+                      </span>
                     </div>
                     <PanelBody panel={panel} />
                   </div>
