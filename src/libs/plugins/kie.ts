@@ -1,9 +1,21 @@
 /**
- * Kie.ai — built-in tier-1 provider (image / video / music / chat generation).
+ * Kie.ai — built-in tier-1 provider (image / video / speech generation).
  *
  * Kie.ai has no MCP server; it exposes a unified REST API where every job is
  * ASYNC: create a task → poll until it completes. We wrap that here so the
  * agent gets simple, synchronous-feeling tools.
+ *
+ * ⚠️ THE THING TO UNDERSTAND BEFORE EDITING THIS FILE
+ *
+ * A hosted MCP server publishes its own tools and schemas, so the vendor's
+ * expertise arrives with the connection — that's why Zernio worked first try.
+ * Kie is NOT an MCP. Everything the agent "knows" about Kie is what is written
+ * here. There is no models API and no schema endpoint, so a wrong id or payload
+ * cannot be discovered at runtime — it comes back as a bare
+ * "This field is required" naming no field. Model ids and input shapes therefore
+ * live in kie-models.ts, each with the doc URL and date it was verified against.
+ * Never add one by pattern-matching a sibling: `nano-banana-2` is bare while
+ * `google/nano-banana-edit` is prefixed, and both are correct.
  *
  * TWO THINGS THAT MAKE THIS EXACT AND RESILIENT:
  *
@@ -28,6 +40,13 @@
  */
 
 import type { BuiltinProvider, BuiltinResult } from '@/libs/plugins/types';
+import {
+  type KieCapability,
+  KIE_MODELS,
+  defaultKieModel,
+  kieModel,
+  kieModelsFor,
+} from '@/libs/plugins/kie-models';
 
 const BASE = (process.env.KIE_BASE_URL || 'https://api.kie.ai').replace(/\/$/, '');
 const POLL_INTERVAL_MS = 3000;
@@ -44,13 +63,38 @@ export const KIE_USD_PER_CREDIT = 0.005;
 /** Codes that mean "this key is unusable right now" → try the next one. */
 const FAILOVER_CODES = new Set([401, 402, 403, 429, 433, 455]);
 
-// Kie treats text-to-video and image-to-video as different models with
-// different required inputs — there is no single "make a video" model. Verified
-// against docs.kie.ai on 2026-07-15; if these are changed, re-check the input
-// shape on the model's doc page, because a wrong shape surfaces only as Kie's
-// "This field is required" with no field name.
-const VIDEO_MODEL_TEXT_TO_VIDEO = 'kling/v2-5-turbo-text-to-video-pro';
-const VIDEO_MODEL_IMAGE_TO_VIDEO = 'kling/v2-1-standard';
+/**
+ * Resolve which model backs a job, and build its exact payload.
+ *
+ * `model` used to be a free-text string on every tool — an open field into a
+ * space the agent cannot enumerate (Kie publishes no models API, and their
+ * llms.txt carries no ids). It filled that field from priors and was wrong, and
+ * Kie's rejection is a bare "This field is required" with no field name.
+ *
+ * The fix was NOT to describe the models better. Each capability now has exactly
+ * ONE verified model and the `model` argument is gone from every tool schema —
+ * the agent cannot pass what it cannot see, so there is nothing to get wrong.
+ * `requested` is therefore always undefined today; the parameter stays as
+ * defense in depth (and because adding a second model to a capability is a real
+ * future decision — see the note in kie-models.ts before you do).
+ */
+function resolveModel(capability: KieCapability, requested: unknown) {
+  const chosen = requested ? kieModel(String(requested)) : defaultKieModel(capability);
+  if (!chosen) {
+    const options = kieModelsFor(capability).map(m => `${m.id} (${m.label})`).join(', ');
+    throw new Error(
+      `Unknown Kie.ai model "${String(requested)}". Verified models for ${capability}: ${options}. `
+      + `Call list_kie_models to see every model this workspace can use, with its options. `
+      + `Kie has ~368 models but only these are verified against their docs — an unverified id fails with an error that names no field.`,
+    );
+  }
+  if (chosen.capability !== capability) {
+    throw new Error(
+      `Model "${chosen.id}" is a ${chosen.capability} model, not ${capability}. ${chosen.guidance}`,
+    );
+  }
+  return chosen;
+}
 
 /** Round-robin cursor, per process. */
 let cursor = 0;
@@ -199,8 +243,8 @@ async function runJob(
 
 export const kieProvider: BuiltinProvider = {
   slug: 'kie-ai',
-  name: 'Kie.ai (images, video, music)',
-  description: 'Generate images, videos and music through Kie.ai\'s unified API (Nano Banana, Veo, Kling, Seedream, Suno, ElevenLabs and more) — typically 30–80% below official API prices.',
+  name: 'Kie.ai (images, video, voiceover)',
+  description: 'Generate images, video and voiceover through Kie.ai\'s unified API (Nano Banana 2, Kling, Seedream, Topaz, Recraft, ElevenLabs) — typically 30–80% below official API prices. Music is not currently available.',
   credentialLabel: 'Kie.ai API keys from kie.ai/api-key — paste up to 20, one per line. Calls round-robin across them and fail over automatically.',
   multiKey: true,
   usageMetering: {
@@ -211,22 +255,73 @@ export const kieProvider: BuiltinProvider = {
 
   tools: [
     {
+      name: 'list_kie_models',
+      description:
+        'List which model backs each Kie.ai job, and the options that job accepts (aspect ratios, resolutions, voice IDs). Use this to see what is possible before generating — e.g. which voice IDs exist for a voiceover, or which aspect ratios an image supports. You do NOT choose the model: each job is locked to one, deliberately, so that a client\'s output stays visually consistent. There is no model argument on any tool.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          capability: {
+            type: 'string',
+            enum: ['text_to_image', 'image_edit', 'upscale', 'remove_background', 'text_to_video', 'image_to_video', 'text_to_speech'],
+            description: 'Optional filter. Omit to list everything.',
+          },
+        },
+      },
+    },
+    {
       name: 'generate_image',
-      description: 'Generate an image from a text prompt via Kie.ai. Returns image URL(s). Use for social posts, blog headers, ad creative. Pass `model` to pick a specific one (e.g. "google/nano-banana", "bytedance/seedream-v4-text-to-image", "flux-2/pro-text-to-image").',
+      description: 'Generate an image from a text prompt via Kie.ai (Nano Banana 2). Returns image URL(s). Use for social posts, blog headers, ad creative. Covers every common social ratio up to 4K.',
       input_schema: {
         type: 'object',
         properties: {
           prompt: { type: 'string', description: 'What to generate — be specific about subject, style, composition.' },
-          model: { type: 'string', description: 'Optional Kie.ai model id. Defaults to google/nano-banana.' },
-          aspect_ratio: { type: 'string', description: 'e.g. 1:1, 16:9, 9:16' },
-          image_urls: { type: 'array', items: { type: 'string' }, description: 'Optional reference/source images for editing models.' },
+          aspect_ratio: { type: 'string', description: 'e.g. 1:1, 4:5 (Instagram portrait), 9:16 (story/reel), 16:9. Defaults to auto.' },
+          resolution: { type: 'string', description: '1K, 2K or 4K. Defaults to 1K. Higher costs more credits.' },
+          image_input: { type: 'array', items: { type: 'string' }, description: 'Optional reference image URLs to guide style/subject (up to 14). To EDIT an existing image instead, use edit_image.' },
         },
         required: ['prompt'],
       },
     },
     {
+      name: 'edit_image',
+      description: 'Edit or restyle an existing image via Kie.ai. Requires at least one source image URL. Use this — not generate_image — when the user wants to change a picture they already have.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          prompt: { type: 'string', description: 'What to change about the image.' },
+          image_urls: { type: 'array', items: { type: 'string' }, description: 'Source image URL(s), max 10, each ≤10MB.' },
+          aspect_ratio: { type: 'string' },
+        },
+        required: ['prompt', 'image_urls'],
+      },
+    },
+    {
+      name: 'upscale_image',
+      description: 'Enlarge an image without losing quality (Topaz), for print or hero use. Input must be ≤10MB.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          image_url: { type: 'string', description: 'Public URL of the image to upscale.' },
+          upscale_factor: { type: 'number', description: '1, 2, 4 or 8. Defaults to 2.' },
+        },
+        required: ['image_url'],
+      },
+    },
+    {
+      name: 'remove_background',
+      description: 'Cut a product or person out of its background (Recraft), leaving transparency. Max 5MB / 16MP / 4096px; min 256px.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          image_url: { type: 'string', description: 'Public URL of the image.' },
+        },
+        required: ['image_url'],
+      },
+    },
+    {
       name: 'generate_video',
-      description: 'Generate a video via Kie.ai. Give a prompt alone for text-to-video, or a prompt plus image_url to animate an existing image. The right model is chosen automatically. Async — may take a few minutes. Returns video URL(s). Videos are the most expensive thing you can do: confirm the plan with the user before generating.',
+      description: 'Generate a video via Kie.ai. Give a prompt alone for text-to-video, or a prompt plus image_url to animate an existing image — the right model is chosen automatically. Async: may take a few minutes. Videos are the most expensive thing you can do here: confirm the plan with the user before generating.',
       input_schema: {
         type: 'object',
         properties: {
@@ -234,22 +329,21 @@ export const kieProvider: BuiltinProvider = {
           image_url: { type: 'string', description: 'Optional. Supply a public image URL to animate it (image-to-video); omit for text-to-video.' },
           duration_seconds: { type: 'number', description: 'Video length in seconds. Defaults to 5. Longer = more credits.' },
           aspect_ratio: { type: 'string', description: 'e.g. 16:9, 9:16, 1:1. Defaults to 16:9. Ignored when image_url is set — the image fixes the frame.' },
-          model: { type: 'string', description: 'Optional Kie.ai model id override. Leave unset unless you know the exact id and its required inputs; a wrong id fails with an unhelpful "This field is required".' },
         },
         required: ['prompt'],
       },
     },
     {
-      name: 'generate_music',
-      description: 'Generate a music track or audio clip via Kie.ai (Suno). Returns audio URL(s).',
+      name: 'generate_speech',
+      description: 'Generate a voiceover / spoken audio track from text (ElevenLabs Multilingual v2). Use for video narration and ads. Call list_kie_models to see the available voices before picking one.',
       input_schema: {
         type: 'object',
         properties: {
-          prompt: { type: 'string', description: 'Style/mood/lyrics brief.' },
-          model: { type: 'string', description: 'Optional model id.' },
-          instrumental: { type: 'boolean' },
+          text: { type: 'string', description: 'The script to speak. Max 5000 characters.' },
+          voice: { type: 'string', description: 'A voice ID from list_kie_models. Must be an ID, not a name like "Rachel" — names are not in the API schema and fail on a paid call.' },
+          speed: { type: 'number', description: '0.7–1.2. Defaults to 1.' },
         },
-        required: ['prompt'],
+        required: ['text'],
       },
     },
     {
@@ -257,10 +351,30 @@ export const kieProvider: BuiltinProvider = {
       description: 'Check how many Kie.ai credits remain on the account behind this plugin.',
       input_schema: { type: 'object', properties: {} },
     },
+    // NOTE: there is deliberately NO music/Suno tool. See the call() comment.
   ],
 
   call: async (tool, args, credential) => {
     const keys = parseKeys(credential);
+
+    if (tool === 'list_kie_models') {
+      const wanted = args.capability ? String(args.capability) : null;
+      const models = wanted
+        ? kieModelsFor(wanted as KieCapability)
+        : KIE_MODELS;
+      return JSON.stringify({
+        models: models.map(m => ({
+          id: m.id,
+          capability: m.capability,
+          label: m.label,
+          use_when: m.guidance,
+          options: m.options ?? 'no options beyond the required inputs',
+          verified: m.verifiedAt,
+        })),
+        note:
+          'Each job is locked to exactly one model, verified against Kie.ai\'s own documentation. This is deliberate: a client\'s output should look consistent, so the model is chosen once by the operator rather than per request. You do not select a model and no tool accepts one. Kie hosts ~368 models but publishes no schema API, so anything not listed here is unverified and unavailable. If a job genuinely needs something that is not here, say so plainly and suggest the operator add it — do not imply you could use another model, and do not guess.',
+      });
+    }
 
     if (tool === 'kie_credits') {
       // Report every key's balance — that's what the operator actually needs.
@@ -275,57 +389,71 @@ export const kieProvider: BuiltinProvider = {
       return JSON.stringify({ keys: balances.length, balances });
     }
 
+    // Every generate path is the same three steps: resolve the model against the
+    // verified table → let the model build its own exact payload → run. All the
+    // per-model quirks (string-vs-number, which key names the image goes under,
+    // png vs jpg vs jpeg) live in kie-models.ts next to the doc URL that proves
+    // them, instead of being spread through this switch.
+
     if (tool === 'generate_image') {
-      const model = String(args.model || 'google/nano-banana');
-      const input: Record<string, unknown> = { prompt: String(args.prompt ?? '') };
-      if (args.aspect_ratio) {
-        input.aspect_ratio = args.aspect_ratio;
+      const m = resolveModel('text_to_image', args.model);
+      return runJob(m.id, m.build(args), keys);
+    }
+
+    if (tool === 'edit_image') {
+      const m = resolveModel('image_edit', args.model);
+      if (!Array.isArray(args.image_urls) || args.image_urls.length === 0) {
+        throw new Error('edit_image needs at least one source image URL. To create a NEW image from a prompt, use generate_image instead.');
       }
-      if (Array.isArray(args.image_urls) && args.image_urls.length > 0) {
-        input.image_urls = args.image_urls;
-      }
-      return runJob(model, input, keys);
+      return runJob(m.id, m.build(args), keys);
+    }
+
+    if (tool === 'upscale_image') {
+      const m = resolveModel('upscale', args.model);
+      return runJob(m.id, m.build(args), keys);
+    }
+
+    if (tool === 'remove_background') {
+      const m = resolveModel('remove_background', args.model);
+      return runJob(m.id, m.build(args), keys);
     }
 
     if (tool === 'generate_video') {
       // Kie exposes text-to-video and image-to-video as SEPARATE models with
-      // different required inputs. This used to default everything to
+      // different required inputs. This once defaulted everything to
       // kling/v2-1-standard — which is image-to-video and REQUIRES image_url —
-      // so every text-to-video request died with Kie's unhelpful
-      // "This field is required" and no clue which field.
-      //
-      // Verified against docs.kie.ai 2026-07-15:
-      //   text-to-video  kling/v2-5-turbo-text-to-video-pro
-      //                  { prompt, duration:"5", aspect_ratio:"16:9" }
-      //   image-to-video kling/v2-1-standard
-      //                  { prompt, image_url, duration:"5" }   (no aspect_ratio)
-      const hasImage = Boolean(args.image_url);
-      const model = String(
-        args.model || (hasImage ? VIDEO_MODEL_IMAGE_TO_VIDEO : VIDEO_MODEL_TEXT_TO_VIDEO),
-      );
-
-      const input: Record<string, unknown> = { prompt: String(args.prompt ?? '') };
-      if (hasImage) {
-        input.image_url = String(args.image_url);
+      // so every text-to-video request died on Kie's "This field is required"
+      // with no clue which field. Presence of image_url picks the capability.
+      const capability: KieCapability = args.image_url ? 'image_to_video' : 'text_to_video';
+      const m = resolveModel(capability, args.model);
+      if (capability === 'image_to_video' && !args.image_url) {
+        throw new Error(`${m.id} animates an existing image and requires image_url.`);
       }
-      // duration is a STRING in Kie's API ("5"), not a number. Sending a number
-      // is silently rejected.
-      input.duration = String(args.duration_seconds ? Math.round(Number(args.duration_seconds)) : 5);
-      // aspect_ratio applies to text-to-video; an image already fixes the frame.
-      if (!hasImage) {
-        input.aspect_ratio = String(args.aspect_ratio || '16:9');
-      }
-
-      return runJob(model, input, keys);
+      return runJob(m.id, m.build(args), keys);
     }
 
+    if (tool === 'generate_speech') {
+      const m = resolveModel('text_to_speech', args.model);
+      return runJob(m.id, m.build(args), keys);
+    }
+
+    // MUSIC / SUNO — deliberately absent, and this is the honest place to say why.
+    //
+    // The old `generate_music` POSTed { model:'suno/v5', input:{…} } to
+    // /api/v1/jobs/createTask. Every part of that was wrong: Suno is not a Market
+    // model, it's a separate legacy API at /api/v1/generate with no `input`
+    // wrapper, a different model namespace ("V5", not "suno/v5"), a REQUIRED
+    // callBackUrl, and its own poll endpoint. It never worked.
+    //
+    // It is not re-implemented because /api/v1/generate/record-info does NOT
+    // return `creditsConsumed` — the single field every Kie tool's billing reads.
+    // A working music tool would bill the client $0 while Kie burns real credits
+    // on our account: the Phase 18 money-leak class, shipped on purpose. Music
+    // returns when there's a verified way to meter it.
     if (tool === 'generate_music') {
-      const model = String(args.model || 'suno/v5');
-      const input: Record<string, unknown> = {
-        prompt: String(args.prompt ?? ''),
-        instrumental: Boolean(args.instrumental),
-      };
-      return runJob(model, input, keys);
+      throw new Error(
+        'Music generation is not available on this platform yet. Kie\'s Suno endpoint does not report the credits a job consumed, so it cannot be billed correctly, and it was removed rather than run unmetered. This is a platform limitation — do not suggest workarounds or alternative music services as though they were configured here. Tell the user it is unavailable and, if they need it, that it can be raised with the operator.',
+      );
     }
 
     throw new Error(`Unknown Kie.ai tool: ${tool}`);
