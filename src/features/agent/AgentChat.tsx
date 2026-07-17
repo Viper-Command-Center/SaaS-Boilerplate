@@ -16,6 +16,13 @@ type Attachment = {
   uploading: boolean;
 };
 
+/**
+ * How close to the bottom you must be for the transcript to keep following a
+ * streaming reply. Above this, you've scrolled up deliberately and we leave you
+ * alone. ~120px ≈ a line or two of slack, so a small nudge doesn't unstick it.
+ */
+const STICK_THRESHOLD_PX = 120;
+
 /** Mirrors libs/agent/vision.ts — Anthropic's supported image types. */
 const ACCEPTED = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
@@ -105,7 +112,8 @@ export const AgentChat = (props: {
   const [loaded, setLoaded] = useState(false);
   const [pending, setPending] = useState<Attachment[]>([]);
   const [uploadError, setUploadError] = useState<string | null>(null);
-  const bottomRef = useRef<HTMLDivElement>(null);
+  /** The transcript element. We scroll THIS, never the document. */
+  const scrollRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
 
   /**
@@ -222,9 +230,33 @@ export const AgentChat = (props: {
     return () => window.removeEventListener('artivio:conversation-updated', onUpdate);
   }, [loadHistory]);
 
+  /**
+   * Keep the transcript pinned to the bottom — WITHOUT moving the page.
+   *
+   * This used to be `bottomRef.current.scrollIntoView()`, which has a nasty
+   * property: it scrolls EVERY scrollable ancestor, including the document. So
+   * each streamed token dragged the whole dashboard down and the user had to
+   * scroll back up, once per word. Setting scrollTop on the transcript element
+   * itself can only ever move that element.
+   *
+   * It also only follows when you're ALREADY near the bottom. If you've scrolled
+   * up to re-read something, a long reply must not yank you away from it —
+   * that's your scroll position, not ours to take.
+   */
+  const stickToBottom = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) {
+      return;
+    }
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    if (distanceFromBottom <= STICK_THRESHOLD_PX) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, []);
+
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [msgs]);
+    stickToBottom();
+  }, [msgs, stickToBottom]);
 
   const grow = () => {
     const ta = taRef.current;
@@ -386,7 +418,7 @@ export const AgentChat = (props: {
       </div>
 
       {/* Transcript */}
-      <div className="flex-1 space-y-4 overflow-y-auto px-4 py-4">
+      <div ref={scrollRef} className="flex-1 space-y-4 overflow-y-auto px-4 py-4">
         {!loaded && <p className="text-sm text-white/40">Loading…</p>}
 
         {loaded && msgs.length === 0 && (
@@ -459,7 +491,6 @@ export const AgentChat = (props: {
             </div>
           </div>
         ))}
-        <div ref={bottomRef} />
       </div>
 
       {/* Composer */}
