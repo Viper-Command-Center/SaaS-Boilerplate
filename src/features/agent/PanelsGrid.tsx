@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { Markdown } from '@/features/agent/Markdown';
 
 type PanelRow = { row: Record<string, unknown>; capturedAt: string };
 type Panel = {
@@ -551,11 +552,10 @@ const PanelBody = ({ panel }: { panel: Panel }) => {
   const gid = useId().replace(/:/g, '');
 
   if (panel.type === 'markdown') {
-    return (
-      <p className="text-sm leading-relaxed whitespace-pre-wrap text-white/70">
-        {String(panel.config.text ?? '')}
-      </p>
-    );
+    // This used to be a whitespace-pre-wrap <p>, i.e. the "markdown" panel type
+    // printed markdown as literal text — headings, tables and links included.
+    // See features/agent/Markdown.tsx for why that was worse than cosmetic.
+    return <Markdown text={String(panel.config.text ?? '')} />;
   }
 
   if (panel.type === 'kpi') {
