@@ -77,6 +77,12 @@ export async function confirmUpload(a: {
 
   const mime = a.mime || head.contentType;
 
+  // Media uploaded here must be USABLE by the agent (handed to a social/ad
+  // plugin, embedded in a post) — all of which need a public URL. Documents
+  // (briefs, contracts, brand guides) stay private, as before.
+  const isMedia = /^(image|video|audio)\//i.test(mime);
+  const kind: 'knowledge' | 'asset' = isMedia ? 'asset' : 'knowledge';
+
   // Small text documents get their text extracted now, so read_file is a single
   // DB read later. Video and other binaries are indexed as-is.
   let text: string | null = null;
@@ -94,11 +100,11 @@ export async function confirmUpload(a: {
     .values({
       tenantId: a.tenantId,
       name: a.name.slice(0, 300),
-      kind: 'knowledge',
+      kind,
       mime: mime.slice(0, 120),
       sizeBytes: head.size,
       r2Key: a.key,
-      publicUrl: null, // client documents stay private (see saveFile)
+      publicUrl: kind === 'asset' ? publicUrlFor(a.key) : null,
       source: 'upload',
       textContent: text,
       meta: {},
