@@ -60,21 +60,33 @@ const DEFAULT_DIM = { width: 1280, height: 720 };
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
+// Default per-request budget. Kept well under the route's 300s cap so a single
+// hung request can't wedge the whole chat (see mcp/client.ts). Overridable per
+// call because HeyGen's /v2/avatars is an outlier — see LIST_AVATARS_TIMEOUT_MS.
+const DEFAULT_FETCH_TIMEOUT_MS = 60_000;
+// HeyGen's /v2/avatars returns the ENTIRE public avatar catalog plus talking
+// photos — hundreds of entries, several MB — and is routinely slow (30–90s).
+// 60s was not enough and every list_avatars call aborted, which stranded the
+// agent (it fell back to Kie.ai). Give it a much larger window; it's a plain
+// GET, so a long wait is safe and the payload is capped downstream.
+const LIST_AVATARS_TIMEOUT_MS = 180_000;
+
 async function heygenFetch(
   path: string,
   apiKey: string,
   init?: RequestInit,
+  timeoutMs: number = DEFAULT_FETCH_TIMEOUT_MS,
 ): Promise<Record<string, any>> {
   const resp = await fetch(`${BASE}${path}`, {
     ...init,
-    // A single hung request must not wedge the whole chat (see mcp/client.ts).
-    signal: AbortSignal.timeout(60_000),
+    signal: AbortSignal.timeout(timeoutMs),
     headers: {
       'X-Api-Key': apiKey,
       'Content-Type': 'application/json',
       ...(init?.headers ?? {}),
     },
   });
+
   const body = (await resp.json().catch(() => ({}))) as Record<string, any>;
   if (!resp.ok) {
     const detail = JSON.stringify(body).slice(0, 300);
@@ -157,7 +169,7 @@ export const heygenProvider: BuiltinProvider = {
     {
       name: 'generate_avatar_video',
       description:
-        'Create a talking-avatar video from a script. Async — may take a few minutes; the tool waits and returns the finished video URL (archived to the workspace library), or a video_id to check later if the render is slow. avatar_id and voice_id are optional: omit them to use a sensible default, or call list_avatars and list_voices first to choose deliberately (recommended for brand consistency). Videos cost HeyGen credits — confirm the script and choices with the user before generating.',
+        'THE way to make a HeyGen avatar/spokesperson video. Create one from a script. Async — may take a few minutes; the tool waits and returns the finished video URL (archived to the workspace library), or a video_id to check later if the render is slow. avatar_id and voice_id are OPTIONAL — omit both to use known-good defaults and this works out of the box, so you do NOT need to call list_avatars or list_voices first. If the user asked for a HeyGen video, call THIS tool; never substitute a different video provider (e.g. Kie.ai) just because listing avatars was slow. Videos cost HeyGen credits — confirm the script with the user before generating.',
       input_schema: {
         type: 'object',
         properties: {
@@ -174,7 +186,7 @@ export const heygenProvider: BuiltinProvider = {
     },
     {
       name: 'list_avatars',
-      description: 'List the avatars available on this HeyGen account (avatar_id + name). Call this before generate_avatar_video to pick an avatar deliberately.',
+      description: 'OPTIONAL: list the avatars on this HeyGen account (avatar_id + name) to pick one deliberately. This is HeyGen\'s slowest endpoint and may be slow or time out — that is normal and does NOT mean HeyGen is broken. If it returns empty or a timeout note, do NOT abandon HeyGen or switch providers: just call generate_avatar_video without avatar_id to use the default. You can skip this tool entirely.',
       input_schema: {
         type: 'object',
         properties: {
@@ -213,20 +225,35 @@ export const heygenProvider: BuiltinProvider = {
     }
 
     if (tool === 'list_avatars') {
-      const body = await heygenFetch('/v2/avatars', apiKey);
-      const avatars = (body.data?.avatars ?? []) as any[];
-      const search = args.search ? String(args.search).toLowerCase() : null;
-      const filtered = avatars.filter(a => !search || String(a.avatar_name ?? '').toLowerCase().includes(search));
-      return JSON.stringify({
-        count: filtered.length,
-        avatars: filtered.slice(0, 80).map(a => ({
-          avatar_id: a.avatar_id,
-          name: a.avatar_name,
-          gender: a.gender,
-          premium: a.premium ?? false,
-        })),
-        note: filtered.length > 80 ? 'Showing the first 80. Use the search argument to narrow down.' : undefined,
-      });
+      // /v2/avatars is HeyGen's slowest endpoint (huge payload, 30–90s). It gets
+      // its own long timeout. If it STILL times out or errors, we must NOT throw:
+      // a thrown error strands the agent, which then abandons HeyGen and falls
+      // back to Kie.ai. Instead, degrade gracefully — hand back the known-good
+      // default avatar so the agent can render immediately with generate_avatar_video.
+      try {
+        const body = await heygenFetch('/v2/avatars', apiKey, undefined, LIST_AVATARS_TIMEOUT_MS);
+        const avatars = (body.data?.avatars ?? []) as any[];
+        const search = args.search ? String(args.search).toLowerCase() : null;
+        const filtered = avatars.filter(a => !search || String(a.avatar_name ?? '').toLowerCase().includes(search));
+        return JSON.stringify({
+          count: filtered.length,
+          avatars: filtered.slice(0, 80).map(a => ({
+            avatar_id: a.avatar_id,
+            name: a.avatar_name,
+            gender: a.gender,
+            premium: a.premium ?? false,
+          })),
+          note: filtered.length > 80 ? 'Showing the first 80. Use the search argument to narrow down.' : undefined,
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return JSON.stringify({
+          count: 0,
+          avatars: [],
+          default_avatar_id: DEFAULT_AVATAR_ID,
+          note: `HeyGen's avatar catalog did not respond in time (${msg.slice(0, 120)}). This is a known HeyGen slowness, NOT a broken connection — do NOT switch to another video provider. Proceed with generate_avatar_video: omit avatar_id to use the default "${DEFAULT_AVATAR_ID}", or retry list_avatars once. Voices are unaffected — list_voices still works.`,
+        });
+      }
     }
 
     if (tool === 'list_voices') {
@@ -234,6 +261,7 @@ export const heygenProvider: BuiltinProvider = {
       const voices = (body.data?.voices ?? []) as any[];
       const lang = args.language ? String(args.language).toLowerCase() : null;
       const search = args.search ? String(args.search).toLowerCase() : null;
+
       const filtered = voices.filter(v =>
         (!lang || String(v.language ?? '').toLowerCase().includes(lang))
         && (!search || String(v.name ?? '').toLowerCase().includes(search)),
