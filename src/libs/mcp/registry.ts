@@ -44,6 +44,44 @@ function sanitize(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9-]/g, '-');
 }
 
+/**
+ * Anthropic/Bedrock require every tool name to match ^[a-zA-Z0-9_-]{1,64}$.
+ *
+ * 🔴 WHY THIS FUNCTION EXISTS — the failure it prevents is workspace-wide and
+ * silently misattributed:
+ *
+ * We namespace as `mcp__<connection>__<tool>`. The connection half is ours and
+ * already validated. **The tool half comes from a third-party server** and was
+ * passed through verbatim. A hosted MCP exposing `notion-create.page` or
+ * `search files` — or simply a long name that pushes the total past 64 — puts
+ * an ILLEGAL entry in the `tools` array. Anthropic then 400s the ENTIRE request.
+ *
+ * So one badly-named tool on one server killed every tool in the workspace, and
+ * the Tools panel showed that server as perfectly healthy — because
+ * buildTenantToolset() succeeded. The failure happened later, in
+ * callClaudeWithTools, with nothing in failedConnections to name the culprit.
+ *
+ * The lesson generalises: the per-connection try/catch isolates failures at the
+ * FETCH boundary, but the tools array is a SHARED structure that the API
+ * validates as a whole. Anything poisoning that array escapes the isolation.
+ * Validate at the boundary that's actually checked.
+ */
+const MAX_TOOL_NAME = 64;
+
+export function namespacedToolName(connectionName: string, toolName: string): string | null {
+  const conn = sanitize(connectionName);
+  // Underscores are legal for Anthropic but are our namespace separator, so a
+  // tool named `a__b` could forge a different connection. Map them to '-'.
+  const tool = toolName.replace(/[^a-zA-Z0-9-]/g, '-');
+  if (!tool.replace(/-/g, '')) {
+    return null; // nothing legal left to name it with
+  }
+  const full = `mcp__${conn}__${tool}`;
+  // Truncating would risk two tools colliding on the same key, which is the
+  // duplicate-name 400 in a different costume. Refuse instead, and report it.
+  return full.length <= MAX_TOOL_NAME ? full : null;
+}
+
 async function resolveHeaders(
   headerCredentials: unknown,
 ): Promise<Record<string, string>> {
@@ -97,7 +135,16 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
   const connections = await db
     .select()
     .from(mcpConnections)
-    .where(and(eq(mcpConnections.tenantId, tenantId), eq(mcpConnections.enabled, true)));
+    .where(and(eq(mcpConnections.tenantId, tenantId), eq(mcpConnections.enabled, true)))
+    // 🔑 ORDER BY IS LOAD-BEARING — it is a COST control, not tidiness.
+    // Tool definitions sit in the cached prefix (order: tools → system →
+    // messages), and a cache key is the exact prefix bytes. Without ORDER BY,
+    // Postgres returns heap order — which silently changes the moment any row is
+    // UPDATEd (MVCC rewrites the tuple at the end of the heap). So toggling
+    // `enabled`, renaming a connection, or rotating a key would reshuffle the
+    // whole tool list and invalidate ~77k tokens of cache at a 1.25x write, with
+    // nothing visible to explain the bill.
+    .orderBy(mcpConnections.name);
 
   const anthropicTools: AnthropicTool[] = [];
   const failedConnections: string[] = [];
@@ -161,7 +208,13 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
         const policyMap = (conn.toolPolicy ?? {}) as Record<string, ToolPolicy>;
 
         for (const tool of provider.tools) {
-          const namespaced = `mcp__${sanitize(conn.name)}__${tool.name}`;
+          const namespaced = namespacedToolName(conn.name, tool.name);
+          if (!namespaced) {
+            // Ours, so this is a bug to fix rather than a vendor quirk — but it
+            // still must not poison the shared array.
+            failedConnections.push(`${conn.name} (built-in tool "${tool.name}" has an unusable name)`);
+            continue;
+          }
           anthropicTools.push({
             name: namespaced,
             description: tool.description,
@@ -263,8 +316,17 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
         }
       }
 
+      // 🔴 tool.name is THIRD-PARTY DATA. An illegal or over-long name here used
+      // to be pushed verbatim into the shared tools array, which Anthropic then
+      // rejected as a whole — killing every tool in the workspace while this
+      // connection still looked healthy. Skip the offender, name it, keep going.
+      const skipped: string[] = [];
       for (const tool of tools) {
-        const namespaced = `mcp__${sanitize(conn.name)}__${tool.name}`;
+        const namespaced = namespacedToolName(conn.name, tool.name);
+        if (!namespaced) {
+          skipped.push(tool.name);
+          continue;
+        }
         anthropicTools.push({
           name: namespaced,
           description: (tool.description ?? tool.name).slice(0, 1000),
@@ -297,6 +359,14 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
             return text || '(no output)';
           },
         });
+      }
+      if (skipped.length > 0) {
+        // Honest and specific: the agent is told which capabilities it does NOT
+        // have and why, instead of silently missing them (or, worse, the whole
+        // request 400ing with no attribution).
+        failedConnections.push(
+          `${conn.name} (${skipped.length} tool(s) unavailable — names are too long or use unsupported characters: ${skipped.slice(0, 5).join(', ')})`,
+        );
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'unreachable';

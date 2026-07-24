@@ -24,9 +24,36 @@ type Transport = {
   protocolVersion?: string;
 };
 
+/**
+ * Hard ceiling on any single MCP round-trip.
+ *
+ * 🔴 WITHOUT THIS, ONE HUNG SERVER KILLS EVERY CHAT IN THE WORKSPACE.
+ *
+ * The registry's per-connection try/catch is documented as failure-tolerant —
+ * but a catch only fires on a THROW. A third-party server that accepts the TCP
+ * connection and then never answers doesn't throw: it hangs listTools(), which
+ * hangs the serial connection loop, which hangs buildTenantToolset(), which
+ * hangs POST /api/agent/chat until the platform's 300s limit. The user gets a
+ * spinner forever on every message and no clue which server to blame. Node's
+ * fetch has no total-request timeout by default, so "tolerant of failure" was
+ * only ever true for servers that fail LOUDLY — and in the wild, hung is far
+ * more common than refused.
+ *
+ * 15s is generous for initialize/tools/list. tools/call gets its own longer
+ * budget (below) because real work — a Firecrawl scrape, a Kling render — takes
+ * time and killing it at 15s would break legitimate calls.
+ */
+const LIST_TIMEOUT_MS = 15_000;
+const CALL_TIMEOUT_MS = 120_000;
+
 async function rpc(t: Transport, method: string, params?: unknown, id?: number): Promise<unknown> {
+  const timeoutMs = method === 'tools/call' ? CALL_TIMEOUT_MS : LIST_TIMEOUT_MS;
   const resp = await fetch(t.url, {
     method: 'POST',
+    // AbortSignal.timeout throws a TimeoutError, which the registry's
+    // per-connection catch turns into a named failedConnection — so a hung
+    // server now degrades exactly like a refusing one.
+    signal: AbortSignal.timeout(timeoutMs),
     headers: {
       'Content-Type': 'application/json',
       'Accept': 'application/json, text/event-stream',

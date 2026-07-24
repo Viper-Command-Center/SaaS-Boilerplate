@@ -153,14 +153,33 @@ export async function POST(request: Request) {
   // Which AI Employee works this account (name + personality → the prompt).
   const agent = await resolveAgentForTenant(tenant.id);
   let system = buildSystemPrompt({ tenant, userFirstName: user.firstName, agent });
-  if (toolset.failedConnections.length > 0) {
-    system += `\n\nNote: these configured tool servers are currently unavailable: ${toolset.failedConnections.join('; ')}.`;
-  }
   // Only added when images are actually present — costs nothing on text turns,
   // and appending it unconditionally would also invalidate the system-prompt
   // cache for every text-only conversation.
   if (anyImages) {
     system += `\n${imageTrustNote()}`;
+  }
+
+  // ── Failed connections ────────────────────────────────────────────────────
+  // 🔴 This note used to be appended to `system`, which put it INSIDE the
+  // cache_control breakpoint that caches the ~77k-token tools+system prefix.
+  // And the note embeds the server's VERBATIM error text, which routinely
+  // carries a request-id or timestamp. So a single flaky server re-wrote the
+  // entire prefix at 1.25x on EVERY turn, for as long as it stayed flaky —
+  // making the cheapest moment to be flaky the most expensive. Exactly the
+  // reasoning applied to imageTrustNote() above, and never applied here.
+  //
+  // It now rides the user message instead: outside the system cache, inside the
+  // per-turn message breakpoint (which changes every turn anyway, so there is
+  // nothing to bust). The agent still gets the full, real error — the Phase 14
+  // rule that it must be told the truth and not invent remediation is intact.
+  const notices: unknown[] = [];
+  if (toolset.failedConnections.length > 0) {
+    notices.push({
+      type: 'text',
+      text: `[system] These configured tool servers are unavailable right now: ${toolset.failedConnections.join('; ')}.\n`
+        + `Their tools are missing from this turn. If the user asks for something that needed one, say plainly that the connection is down and quote the error above — do NOT invent troubleshooting steps the error does not state, and do NOT suggest a different product as though it were configured here. You cannot see the platform's code or logs.`,
+    });
   }
 
   const encoder = new TextEncoder();
@@ -178,7 +197,9 @@ export async function POST(request: Request) {
           system,
           history: hydrated,
           userText: body.message,
-          userBlocks,
+          // Notices first, then images, then the user's text (Anthropic's
+          // guidance is images before the question that asks about them).
+          userBlocks: [...notices, ...userBlocks],
           toolset,
           onDelta,
         });

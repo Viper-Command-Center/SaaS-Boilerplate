@@ -6,6 +6,7 @@
 
 import type { BuiltinProvider } from '@/libs/plugins/types';
 import { agentcoreBrowserProvider } from '@/libs/plugins/agentcoreBrowser';
+import { heygenProvider } from '@/libs/plugins/heygen';
 import { kieProvider } from '@/libs/plugins/kie';
 import { wordpressProvider } from '@/libs/plugins/wordpress';
 
@@ -13,6 +14,7 @@ export const BUILTIN_PROVIDERS: Record<string, BuiltinProvider> = {
   [kieProvider.slug]: kieProvider,
   [wordpressProvider.slug]: wordpressProvider,
   [agentcoreBrowserProvider.slug]: agentcoreBrowserProvider,
+  [heygenProvider.slug]: heygenProvider,
 };
 
 export function getBuiltinProvider(slug: string): BuiltinProvider | undefined {
@@ -117,6 +119,22 @@ export const CATALOG_PRESETS = [
       transport: 'builtin' as const,
       provider: 'wordpress',
       authHint: 'username:application password — create one in WP Admin → Users → Profile → Application Passwords.',
+    },
+  },
+  {
+    key: 'heygen',
+    label: 'HeyGen (AI avatar video)',
+    entry: {
+      slug: 'heygen',
+      name: 'HeyGen',
+      description: 'Generate talking-avatar / spokesperson videos from a script. Async render; billed by HeyGen against the plan that owns the API key.',
+      category: 'marketing',
+      transport: 'builtin' as const,
+      provider: 'heygen',
+      // Built-in provider (REST API, X-Api-Key). HeyGen's hosted MCP is
+      // OAuth-only and Artivio's MCP client sends static headers only, so the
+      // remote MCP URL 401s — the REST adapter is the supported path.
+      authHint: 'Your HeyGen API key from app.heygen.com → Settings → API. Paste the raw key (no "Bearer" prefix); it is sent as the X-Api-Key header.',
     },
   },
   {

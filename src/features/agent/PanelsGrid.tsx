@@ -58,6 +58,8 @@ export const PanelsGrid = (props: { tenantSlug: string; canEdit?: boolean }) => 
   const [panels, setPanels] = useState<Panel[]>([]);
   const [views, setViews] = useState<View[]>([]);
   const [loaded, setLoaded] = useState(false);
+  /** Last poll failure. Shown as a banner; never a reason to blank the grid. */
+  const [error, setError] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   // Individually folded panels. A per-USER preference (localStorage), not a DB
@@ -78,17 +80,36 @@ export const PanelsGrid = (props: { tenantSlug: string; canEdit?: boolean }) => 
     if (frozen.current) {
       return;
     }
+    // 🔴 A FAILED POLL MUST NOT WIPE THE DASHBOARD.
+    //
+    // This used to be `r.ok ? r.json() : { panels: [], views: [] }` — so a 500,
+    // a 403, a DB blip or a dropped connection on the 30s poll called
+    // setPanels([]), and since the component returns null on an empty list, the
+    // user's ENTIRE DASHBOARD SILENTLY VANISHED. No error, no stale data. They
+    // couldn't tell whether the agent had deleted their panels, the workspace
+    // broke, or the wifi hiccuped. Keeping the last good render is strictly
+    // better: slightly stale beats absent, and absent looked like data loss.
     fetch(`/api/panels?tenant=${encodeURIComponent(props.tenantSlug)}`)
-      .then(r => (r.ok ? r.json() : { panels: [], views: [] }))
+      .then(async (r) => {
+        if (!r.ok) {
+          throw new Error(`Panels unavailable (${r.status})`);
+        }
+        return r.json();
+      })
       .then((data) => {
         if (frozen.current) {
           return;
         }
         setPanels(data.panels ?? []);
         setViews(data.views ?? []);
+        setError(null);
         setLoaded(true);
       })
-      .catch(() => setLoaded(true));
+      .catch((err) => {
+        // Say so, and keep what's on screen.
+        setError(err instanceof Error ? err.message : 'Could not refresh panels.');
+        setLoaded(true);
+      });
   }, [props.tenantSlug]);
 
   useEffect(() => {
@@ -288,6 +309,10 @@ export const PanelsGrid = (props: { tenantSlug: string; canEdit?: boolean }) => 
     setDropTarget(null);
   };
 
+  // Hidden until there's something to show — but NOT hidden merely because the
+  // last refresh failed. If we ever had panels, keep rendering them and put the
+  // failure in a banner (see reload()); a dashboard that deletes itself on a
+  // network blip is indistinguishable from data loss.
   if (!loaded || panels.length === 0) {
     return null;
   }
@@ -301,6 +326,12 @@ export const PanelsGrid = (props: { tenantSlug: string; canEdit?: boolean }) => 
 
   return (
     <div className="space-y-4">
+      {error && (
+        <p className="rounded-lg border border-amber-400/20 bg-amber-400/5 px-3 py-2 text-xs text-amber-200/80">
+          {error}
+          {' — showing the last data that loaded. Retrying every 30s.'}
+        </p>
+      )}
       {unorganised && (
         <p className="text-xs text-white/35">
           Drag a card, or use the ↑↓ arrows, to rearrange.
@@ -650,13 +681,47 @@ const PanelBody = ({ panel }: { panel: Panel }) => {
   }
 
   // table
+  //
+  // 🔴 `limit` was ADVERTISED TO THE AGENT AND IGNORED. The tool description
+  // says `table (config: datasetKey, columns?, limit?)`, the API honoured it
+  // (fetching up to 200 rows), and then this line threw them away:
+  //     const rows = panel.rows.slice(-8).reverse();
+  // So the agent set limit:50, was told the panel was created, and told the user
+  // "here are your 50 most recent orders" — and the user saw 8, with no "showing
+  // 8 of 50" anywhere. The agent did everything right; the platform silently
+  // truncated and the agent wore it. Same shape as the markdown panel.
+  //
+  // Now: honour it, cap the visual height instead of the data, and say so when
+  // there's more.
   const columns = Array.isArray(panel.config.columns) && panel.config.columns.length > 0
     ? (panel.config.columns as string[])
-    : Object.keys(panel.rows[panel.rows.length - 1]?.row ?? {}).slice(0, 4);
-  const rows = panel.rows.slice(-8).reverse();
+    // No `columns` set is a path the agent is TOLD is fine, so silently dropping
+    // fields 5+ is our bug, not its. Take up to 8 and flag the rest below.
+    : Object.keys(panel.rows[panel.rows.length - 1]?.row ?? {}).slice(0, 8);
+  const allKeys = Object.keys(panel.rows[panel.rows.length - 1]?.row ?? {});
+  const hiddenColumns = Array.isArray(panel.config.columns) ? 0 : Math.max(0, allKeys.length - columns.length);
+  const rows = panel.rows.slice().reverse();
+
+  if (rows.length === 0) {
+    // Distinguish "no data yet" from "your datasetKey is a typo" — an empty
+    // titled card told the user nothing at all.
+    return (
+      <p className="text-sm text-white/40">
+        No rows yet in
+        {' '}
+        <code className="rounded bg-white/10 px-1 text-xs">{String(panel.config.datasetKey ?? 'this dataset')}</code>
+        .
+      </p>
+    );
+  }
 
   return (
-    <div className="overflow-x-auto">
+    <div className="max-h-72 overflow-auto">
+      {hiddenColumns > 0 && (
+        <p className="mb-1 text-[10px] text-white/30">
+          {`Showing ${columns.length} of ${allKeys.length} fields — ask the agent to set the columns you want.`}
+        </p>
+      )}
       <table className="w-full text-xs">
         <thead>
           <tr className="
