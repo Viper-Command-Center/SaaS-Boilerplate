@@ -6,6 +6,7 @@
 
 import type { BuiltinProvider } from '@/libs/plugins/types';
 import { agentcoreBrowserProvider } from '@/libs/plugins/agentcoreBrowser';
+import { cloudflareAnalyticsProvider } from '@/libs/plugins/cloudflareAnalytics';
 import { heygenProvider } from '@/libs/plugins/heygen';
 import { kieProvider } from '@/libs/plugins/kie';
 import { wordpressProvider } from '@/libs/plugins/wordpress';
@@ -15,6 +16,7 @@ export const BUILTIN_PROVIDERS: Record<string, BuiltinProvider> = {
   [wordpressProvider.slug]: wordpressProvider,
   [agentcoreBrowserProvider.slug]: agentcoreBrowserProvider,
   [heygenProvider.slug]: heygenProvider,
+  [cloudflareAnalyticsProvider.slug]: cloudflareAnalyticsProvider,
 };
 
 export function getBuiltinProvider(slug: string): BuiltinProvider | undefined {
@@ -127,14 +129,29 @@ export const CATALOG_PRESETS = [
     entry: {
       slug: 'heygen',
       name: 'HeyGen',
-      description: 'Generate talking-avatar / spokesperson videos from a script. Async render; billed by HeyGen against the plan that owns the API key.',
+      description: 'Generate talking-avatar / spokesperson videos from a script or a plain-language prompt. Async render; billed by HeyGen against the plan that owns the API key.',
       category: 'marketing',
       transport: 'builtin' as const,
       provider: 'heygen',
-      // Built-in provider (REST API, X-Api-Key). HeyGen's hosted MCP is
+      // Built-in provider (REST API v3, X-Api-Key). HeyGen's hosted MCP is
       // OAuth-only and Artivio's MCP client sends static headers only, so the
       // remote MCP URL 401s — the REST adapter is the supported path.
       authHint: 'Your HeyGen API key from app.heygen.com → Settings → API. Paste the raw key (no "Bearer" prefix); it is sent as the X-Api-Key header.',
+    },
+  },
+  {
+    key: 'cloudflare-analytics',
+    label: 'Cloudflare Web Analytics (site traffic)',
+    entry: {
+      slug: 'cloudflare-analytics',
+      name: 'Cloudflare Analytics',
+      description: 'Near-realtime site traffic — page views, visits, top pages, referrers, countries, devices — from Cloudflare Web Analytics.',
+      category: 'data',
+      transport: 'builtin' as const,
+      provider: 'cloudflare-analytics',
+      // Per-connection: the connection URL field holds "<accountTag>/<siteTag>",
+      // the credential is a CF API token with Account Analytics : Read.
+      authHint: 'Connection URL = "<accountTag>/<siteTag>" (Account ID + Web Analytics site tag). Credential = a Cloudflare API token with Account Analytics : Read.',
     },
   },
   {
