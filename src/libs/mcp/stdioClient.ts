@@ -85,7 +85,9 @@ export class McpStdioClient {
     // process.execPath = the exact Node binary running this app — no PATH
     // lookup, no npx, no network at spawn time.
     const child = spawn(process.execPath, [this.entryPath], {
-      env: childEnv,
+      // childEnv is a plain Record, but it always sets NODE_ENV above; cast so
+      // it satisfies Node's ProcessEnv type (which now requires NODE_ENV).
+      env: childEnv as NodeJS.ProcessEnv,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     this.child = child;
