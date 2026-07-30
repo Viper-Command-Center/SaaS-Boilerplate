@@ -18,10 +18,12 @@ import { getCurrentUser } from '@/libs/auth/session';
 import { db } from '@/libs/DB';
 import { McpHttpClient } from '@/libs/mcp/client';
 import { applyUrlSecret } from '@/libs/mcp/registry';
+import { getStdioServer } from '@/libs/mcp/stdioCatalog';
+import { createEphemeralStdioClient } from '@/libs/mcp/stdioClient';
 import { classifyToolError } from '@/libs/support/issues';
 import { getUserTenants } from '@/libs/tenants';
 import { openSecret } from '@/libs/vault';
-import { credentials, mcpConnections } from '@/models/Schema';
+import { credentials, mcpConnections, pluginCatalog } from '@/models/Schema';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -71,6 +73,51 @@ export async function POST(request: Request) {
 
     if (!conn) {
       return NextResponse.json({ error: 'Connection not found.' }, { status: 404 });
+    }
+    if (conn.transport === 'stdio') {
+      // A stdio connection CAN be tested for real: spawn the allowlisted
+      // server with this connection's credentials and list its tools. This
+      // catches a wrong app password or site URL at add time, not mid-chat.
+      try {
+        const [entry] = conn.catalogId
+          ? await db.select().from(pluginCatalog).where(eq(pluginCatalog.id, conn.catalogId)).limit(1)
+          : [undefined];
+        const spec = entry?.provider ? getStdioServer(entry.provider) : undefined;
+        if (!spec) {
+          return NextResponse.json({ ok: false, error: 'This stdio plugin is not in the server allowlist.' });
+        }
+        const map = (conn.headerCredentials ?? {}) as Record<string, string>;
+        const ids = Object.values(map).filter(Boolean);
+        let credentialValue = '';
+        if (ids.length > 0) {
+          const rows = await db
+            .select({ id: credentials.id, cipher: credentials.cipher })
+            .from(credentials)
+            .where(inArray(credentials.id, ids));
+          credentialValue = rows[0] ? openSecret(rows[0].cipher) : '';
+        }
+        const env = spec.buildEnv(conn.url ?? '', credentialValue);
+        const client = createEphemeralStdioClient(spec.resolveEntry(), env, conn.name);
+        try {
+          const tools = await client.listTools();
+          return NextResponse.json({
+            ok: true,
+            toolCount: tools.length,
+            tools: tools.slice(0, 25).map(t => t.name),
+            message: `Connected. ${tools.length} tool(s) available.`,
+          });
+        } finally {
+          client.dispose();
+        }
+      } catch (err) {
+        const triaged = classifyToolError(err);
+        return NextResponse.json({
+          ok: false,
+          kind: triaged.kind,
+          error: err instanceof Error ? err.message : 'Could not start the server.',
+          guidance: triaged.clientMessage,
+        });
+      }
     }
     if (conn.transport !== 'http' || !conn.url) {
       // Built-in providers have no endpoint to probe; they either have a

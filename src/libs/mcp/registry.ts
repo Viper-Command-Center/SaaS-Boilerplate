@@ -9,6 +9,8 @@ import { and, eq, inArray } from 'drizzle-orm';
 import { meterPlugin } from '@/libs/billing/meter';
 import { db } from '@/libs/DB';
 import { McpHttpClient } from '@/libs/mcp/client';
+import { getStdioServer } from '@/libs/mcp/stdioCatalog';
+import { acquireStdioClient } from '@/libs/mcp/stdioClient';
 import { getBuiltinProvider } from '@/libs/plugins';
 import { archiveGeneratedAssets } from '@/libs/storage/files';
 import { captureIssue } from '@/libs/support/issues';
@@ -284,6 +286,79 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'unavailable';
         failedConnections.push(`${conn.name} (${msg.slice(0, 120)})`);
+      }
+      continue;
+    }
+
+
+    // ── stdio (Phase 4): a bundled, ALLOWLISTED MCP server run as a child
+    // process on this container. Most of the MCP ecosystem is stdio-only
+    // (built for Claude Code / Cursor); this branch makes those servers
+    // first-class connections. The connection stores only the allowlist KEY
+    // (its catalog entry's provider column) — the executable resolves from
+    // OUR package.json in stdioCatalog.ts, never from user input.
+    if (conn.transport === 'stdio') {
+      try {
+        const [entry] = conn.catalogId
+          ? await db.select().from(pluginCatalog).where(eq(pluginCatalog.id, conn.catalogId)).limit(1)
+          : [undefined];
+        const spec = entry?.provider ? getStdioServer(entry.provider) : undefined;
+        if (!entry || !spec || !entry.enabled) {
+          failedConnections.push(`${conn.name} (plugin unavailable)`);
+          continue;
+        }
+        // The workspace's sealed credential + the connection's target (url
+        // field) become the child env — mapping decided by the allowlist spec.
+        const secrets = await resolveHeaders(conn.headerCredentials);
+        const credentialValue = Object.values(secrets)[0] ?? '';
+        const env = spec.buildEnv(conn.url ?? '', credentialValue);
+        const client = acquireStdioClient(conn.id, spec.resolveEntry(), env, conn.name);
+        const tools = await client.listTools();
+        const policyMap = (conn.toolPolicy ?? {}) as Record<string, ToolPolicy>;
+
+        // 🔴 tool.name is THIRD-PARTY DATA — same rule as the http branch:
+        // one illegal name must never poison the shared tools array.
+        const skipped: string[] = [];
+        for (const tool of tools) {
+          const namespaced = namespacedToolName(conn.name, tool.name);
+          if (!namespaced) {
+            skipped.push(tool.name);
+            continue;
+          }
+          anthropicTools.push({
+            name: namespaced,
+            description: (tool.description ?? tool.name).slice(0, 1000),
+            input_schema: tool.inputSchema ?? { type: 'object', properties: {} },
+          });
+          executors.set(namespaced, {
+            connectionId: conn.id,
+            connectionName: conn.name,
+            toolName: tool.name,
+            // Safe by default: per-tool wins; `*` is the connection-wide
+            // default; approval is the fallback. Especially right here —
+            // DiviOps exposes 74 tools that WRITE to a client's live site.
+            policy: policyMap[tool.name] ?? policyMap['*'] ?? 'approval',
+            call: async (args) => {
+              const result = await client.callTool(tool.name, args);
+              const text = result.content
+                .map(c => (c.type === 'text' ? c.text ?? '' : `[${c.type}]`))
+                .join('\n')
+                .slice(0, 20_000);
+              if (result.isError) {
+                throw new Error(text || 'Tool reported an error.');
+              }
+              return text || '(no output)';
+            },
+          });
+        }
+        if (skipped.length > 0) {
+          failedConnections.push(
+            `${conn.name} (${skipped.length} tool(s) unavailable — names are too long or use unsupported characters: ${skipped.slice(0, 5).join(', ')})`,
+          );
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'unreachable';
+        failedConnections.push(`${conn.name} (${msg.slice(0, 160)})`);
       }
       continue;
     }

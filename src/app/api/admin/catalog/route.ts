@@ -17,6 +17,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getCurrentUser } from '@/libs/auth/session';
 import { db } from '@/libs/DB';
+import { getStdioServer, listStdioServers } from '@/libs/mcp/stdioCatalog';
 import { CATALOG_PRESETS, getBuiltinProvider, listBuiltinProviders } from '@/libs/plugins';
 import { MAX_KEYS, parseKeys } from '@/libs/plugins/kie';
 import { openSecret, sealSecret, vaultConfigured } from '@/libs/vault';
@@ -38,8 +39,8 @@ const CreateSchema = z.object({
   description: z.string().max(500).optional(),
   category: z.string().max(40).optional(),
   tier: z.enum(['tier1', 'tier2']),
-  transport: z.enum(['http', 'builtin']).default('http'),
-  provider: z.string().max(60).optional(), // builtin only
+  transport: z.enum(['http', 'builtin', 'stdio']).default('http'),
+  provider: z.string().max(60).optional(), // builtin/stdio: the adapter or allowlist key
   url: z.string().url().max(2000).optional(), // http only
   authHeader: z.string().max(80).optional(),
   authHint: z.string().max(200).optional(),
@@ -120,6 +121,7 @@ export async function GET() {
       credentialId: undefined,
     })),
     builtinProviders: listBuiltinProviders(),
+    stdioServers: listStdioServers(),
     presets: CATALOG_PRESETS,
     vaultConfigured: vaultConfigured(),
   });
@@ -144,6 +146,9 @@ export async function POST(request: Request) {
   }
   if (body.transport === 'builtin' && !body.provider) {
     return NextResponse.json({ error: 'Pick a built-in provider.' }, { status: 400 });
+  }
+  if (body.transport === 'stdio' && !getStdioServer(body.provider)) {
+    return NextResponse.json({ error: 'Pick an allowlisted stdio server (see stdioCatalog.ts).' }, { status: 400 });
   }
 
   const existing = await db.select({ id: pluginCatalog.id }).from(pluginCatalog).where(eq(pluginCatalog.slug, body.slug)).limit(1);
@@ -193,7 +198,7 @@ export async function POST(request: Request) {
       category: body.category,
       tier: body.tier,
       transport: body.transport,
-      provider: body.transport === 'builtin' ? body.provider : null,
+      provider: body.transport === 'builtin' || body.transport === 'stdio' ? body.provider : null,
       url: body.transport === 'http' ? body.url : null,
       authHeader: body.authHeader,
       authHint: body.authHint,
@@ -216,7 +221,7 @@ const UpdateSchema = z.object({
   description: z.string().max(500).optional(),
   category: z.string().max(40).optional(),
   tier: z.enum(['tier1', 'tier2']).optional(),
-  transport: z.enum(['http', 'builtin']).optional(),
+  transport: z.enum(['http', 'builtin', 'stdio']).optional(),
   provider: z.string().max(60).nullable().optional(),
   url: z.string().max(2000).nullable().optional(),
   authHeader: z.string().max(80).nullable().optional(),
@@ -255,6 +260,9 @@ export async function PATCH(request: Request) {
   }
   if (transport === 'builtin' && !provider) {
     return NextResponse.json({ error: 'Pick a built-in provider.' }, { status: 400 });
+  }
+  if (transport === 'stdio' && !getStdioServer(provider)) {
+    return NextResponse.json({ error: 'Pick an allowlisted stdio server.' }, { status: 400 });
   }
 
   // Credential: rotate the existing one, or create the platform credential if
@@ -302,7 +310,7 @@ export async function PATCH(request: Request) {
       transport,
       // Keep the two transports mutually exclusive so the registry never has
       // to guess which one an entry meant.
-      provider: transport === 'builtin' ? provider : null,
+      provider: transport === 'builtin' || transport === 'stdio' ? provider : null,
       url: transport === 'http' ? url : null,
       credentialId,
     })

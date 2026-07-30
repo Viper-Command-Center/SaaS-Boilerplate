@@ -14,6 +14,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getCurrentUser } from '@/libs/auth/session';
 import { db } from '@/libs/DB';
+import { getStdioServer } from '@/libs/mcp/stdioCatalog';
 import { getBuiltinProvider } from '@/libs/plugins';
 import { getUserTenants } from '@/libs/tenants';
 import { sealSecret, vaultConfigured } from '@/libs/vault';
@@ -57,7 +58,10 @@ export async function GET(request: Request) {
     plugins: catalog.map((p) => {
       const rules = (p.priceRules ?? {}) as Record<string, { unit: string; costUsd: number; markup?: number; argField?: string }>;
       const provider = p.transport === 'builtin' && p.provider ? getBuiltinProvider(p.provider) : undefined;
-      const perConnection = Boolean(provider?.perConnection);
+      // stdio plugins (DiviOps…) are per-connection like WordPress: the
+      // workspace supplies its own site URL + credential when enabling.
+      const stdioSpec = p.transport === 'stdio' && p.provider ? getStdioServer(p.provider) : undefined;
+      const perConnection = Boolean(provider?.perConnection) || Boolean(stdioSpec?.perConnection);
       const noCredential = Boolean(provider?.noCredential);
       return {
         id: p.id,
@@ -144,14 +148,18 @@ export async function POST(request: Request) {
   const provider = plugin.transport === 'builtin' && plugin.provider
     ? getBuiltinProvider(plugin.provider)
     : undefined;
+  const stdioSpec = plugin.transport === 'stdio' && plugin.provider
+    ? getStdioServer(plugin.provider)
+    : undefined;
+  const perConnection = Boolean(provider?.perConnection) || Boolean(stdioSpec?.perConnection);
   // noCredential providers (AgentCore browser) authenticate with platform AWS
   // keys — there is nothing for the client to supply, even on tier 2.
   const needsOwnCredential = !provider?.noCredential
-    && (plugin.tier === 'tier2' || Boolean(provider?.perConnection));
+    && (plugin.tier === 'tier2' || perConnection);
 
-  // Per-connection built-ins (WordPress) target the workspace's own site.
-  const targetUrl = provider?.perConnection ? (body.siteUrl ?? '') : plugin.url;
-  if (provider?.perConnection && !targetUrl) {
+  // Per-connection plugins (WordPress, DiviOps) target the workspace's own site.
+  const targetUrl = perConnection ? (body.siteUrl ?? '') : plugin.url;
+  if (perConnection && !targetUrl) {
     return NextResponse.json({ error: 'This plugin needs your site URL (e.g. https://yoursite.com).' }, { status: 400 });
   }
 
@@ -187,7 +195,7 @@ export async function POST(request: Request) {
   await db.insert(mcpConnections).values({
     tenantId: tenant.id,
     name: plugin.slug,
-    transport: plugin.transport === 'builtin' ? 'builtin' : 'http',
+    transport: plugin.transport === 'builtin' ? 'builtin' : plugin.transport === 'stdio' ? 'stdio' : 'http',
     url: targetUrl,
     catalogId: plugin.id,
     headerCredentials,
