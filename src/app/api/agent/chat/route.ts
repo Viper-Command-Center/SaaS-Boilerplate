@@ -5,6 +5,12 @@
  * Response: text/plain stream of the assistant's reply (client reads
  * incrementally). History is loaded server-side from the conversation store —
  * the client never supplies past messages.
+ *
+ * STOP (Phase 26.1): when the client aborts the fetch (Stop button, closed
+ * tab), the stream's cancel() fires; the tool loop checks that flag before
+ * every iteration and halts — no new model calls, no new paid tool calls.
+ * Whatever streamed before the stop is still persisted as the assistant
+ * message, so the transcript stays honest about what actually ran.
  */
 
 import { and, asc, eq } from 'drizzle-orm';
@@ -182,13 +188,23 @@ export async function POST(request: Request) {
     });
   }
 
+  // Set by the stream's cancel() when the client aborts (Stop button / closed
+  // tab). The loop reads it before every iteration.
+  let cancelled = false;
+
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       let full = '';
       const onDelta = (delta: string) => {
         full += delta;
-        controller.enqueue(encoder.encode(delta));
+        // After a client abort, enqueue() throws — but `full` must keep
+        // accumulating so the persisted message includes the [stopped] line.
+        try {
+          controller.enqueue(encoder.encode(delta));
+        } catch {
+          // Client is gone; persistence below is what matters now.
+        }
       };
       try {
         await runToolLoop({
@@ -202,10 +218,11 @@ export async function POST(request: Request) {
           userBlocks: [...notices, ...userBlocks],
           toolset,
           onDelta,
+          shouldStop: () => cancelled,
         });
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'Agent error';
-        controller.enqueue(encoder.encode(`\n\n[error] ${msg}`));
+        onDelta(`\n\n[error] ${msg}`);
       } finally {
         if (full.trim()) {
           await db
@@ -213,8 +230,15 @@ export async function POST(request: Request) {
             .values({ conversationId, role: 'assistant', content: full })
             .catch(() => {});
         }
-        controller.close();
+        try {
+          controller.close();
+        } catch {
+          // Already cancelled — nothing to close.
+        }
       }
+    },
+    cancel() {
+      cancelled = true;
     },
   });
 

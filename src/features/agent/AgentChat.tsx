@@ -115,6 +115,9 @@ export const AgentChat = (props: {
   /** The transcript element. We scroll THIS, never the document. */
   const scrollRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
+  /** Aborting this fetch cancels the server stream, which halts the tool loop
+   * before its next iteration (Phase 26.1). In-flight tool calls finish. */
+  const abortRef = useRef<AbortController | null>(null);
 
   /**
    * Paste or drop an image → straight to R2 → keep the file id.
@@ -301,10 +304,14 @@ export const AgentChat = (props: {
       { role: 'assistant', content: '' },
     ]);
 
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     try {
       const res = await fetch('/api/agent/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
         body: JSON.stringify({
           tenantSlug: props.tenantSlug,
           message: text,
@@ -333,18 +340,43 @@ export const AgentChat = (props: {
         });
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Something went wrong.';
-      setMsgs((prev) => {
-        const next = [...prev];
-        const last = next[next.length - 1];
-        if (last?.role === 'assistant' && !last.content) {
-          next[next.length - 1] = { role: 'assistant', content: `[error] ${msg}` };
-        }
-        return next;
-      });
+      // A user Stop is not an error. The server halts after its current step
+      // and persists what ran, including its own [stopped] line — pull that
+      // truth in shortly rather than guessing at it here.
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        setMsgs((prev) => {
+          const next = [...prev];
+          const last = next[next.length - 1];
+          if (last?.role === 'assistant') {
+            next[next.length - 1] = {
+              ...last,
+              content: `${last.content ? `${last.content}\n\n` : ''}[stopped] Stopping — the agent halts after its current step.`,
+            };
+          }
+          return next;
+        });
+        setTimeout(() => loadHistory(false), 4000);
+      } else {
+        const msg = err instanceof Error ? err.message : 'Something went wrong.';
+        setMsgs((prev) => {
+          const next = [...prev];
+          const last = next[next.length - 1];
+          if (last?.role === 'assistant' && !last.content) {
+            next[next.length - 1] = { role: 'assistant', content: `[error] ${msg}` };
+          }
+          return next;
+        });
+      }
     } finally {
+      abortRef.current = null;
       setBusy(false);
     }
+  };
+
+  /** The Stop button. Aborts the stream; the server stops before its next
+   * tool call — an external call already in flight cannot be un-made. */
+  const stop = () => {
+    abortRef.current?.abort();
   };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
@@ -561,21 +593,42 @@ export const AgentChat = (props: {
             "
             disabled={busy}
           />
-          <button
-            type="submit"
-            disabled={busy || !input.trim()}
-            className="
-              grad-fill flex size-8 shrink-0 items-center justify-center
-              rounded-lg text-white shadow-lg shadow-indigo-900/40 transition
-              hover:brightness-110
-              disabled:opacity-25 disabled:shadow-none
-            "
-            aria-label="Send"
-          >
-            <svg viewBox="0 0 24 24" className="size-4 fill-none stroke-current stroke-2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 19V5M5 12l7-7 7 7" />
-            </svg>
-          </button>
+          {busy
+            ? (
+                <button
+                  type="button"
+                  onClick={stop}
+                  className="
+                    flex size-8 shrink-0 items-center justify-center rounded-lg
+                    border border-rose-400/40 bg-rose-400/10 text-rose-300
+                    transition
+                    hover:bg-rose-400/20 hover:text-rose-200
+                  "
+                  aria-label="Stop the agent"
+                  title="Stop — the agent halts after its current step"
+                >
+                  <svg viewBox="0 0 24 24" className="size-3.5 fill-current" aria-hidden>
+                    <rect x="6" y="6" width="12" height="12" rx="2" />
+                  </svg>
+                </button>
+              )
+            : (
+                <button
+                  type="submit"
+                  disabled={!input.trim()}
+                  className="
+                    grad-fill flex size-8 shrink-0 items-center justify-center
+                    rounded-lg text-white shadow-lg shadow-indigo-900/40 transition
+                    hover:brightness-110
+                    disabled:opacity-25 disabled:shadow-none
+                  "
+                  aria-label="Send"
+                >
+                  <svg viewBox="0 0 24 24" className="size-4 fill-none stroke-current stroke-2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 19V5M5 12l7-7 7 7" />
+                  </svg>
+                </button>
+              )}
         </div>
       </form>
     </div>

@@ -67,6 +67,12 @@ export async function runToolLoop(a: {
   maxIterations?: number;
   /** Wall-clock budget for this turn. Default 4 minutes. */
   wallClockMs?: number;
+  /**
+   * Checked before every iteration. Return true to stop the loop — the user
+   * hit Stop / closed the stream. In-flight tool calls finish (an external
+   * API call can't be un-made), but nothing new starts.
+   */
+  shouldStop?: () => boolean;
 }): Promise<ToolLoopResult> {
   const maxIterations = a.maxIterations ?? DEFAULT_MAX_ITERATIONS;
   const wallClockMs = a.wallClockMs ?? DEFAULT_WALL_CLOCK_MS;
@@ -102,6 +108,18 @@ export async function runToolLoop(a: {
   let exhausted = false;
 
   for (let i = 0; ; i++) {
+    // ── User stop (Phase 26.1) ───────────────────────────────────────────────
+    // The human hit Stop or closed the stream. Stop BEFORE anything new runs —
+    // especially before another paid tool call — and say so in the transcript
+    // (which is persisted server-side even when the client is gone).
+    if (a.shouldStop?.()) {
+      const msg = '\n\n[stopped] Stopped at your request — progress up to here is saved.';
+      a.onDelta(msg);
+      finalText += msg;
+      await audit(a.tenantId, 'loop.user_stopped', 'runToolLoop', { iteration: i });
+      break;
+    }
+
     // ── Budget checks, in honesty order ──────────────────────────────────────
     // Spend first (a hard money guardrail, re-checked every iteration so a
     // long tool loop can't blow through the daily cap mid-turn)…
