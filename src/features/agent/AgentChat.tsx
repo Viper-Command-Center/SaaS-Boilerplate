@@ -118,6 +118,11 @@ export const AgentChat = (props: {
   /** Aborting this fetch cancels the server stream, which halts the tool loop
    * before its next iteration (Phase 26.1). In-flight tool calls finish. */
   const abortRef = useRef<AbortController | null>(null);
+  /** Set when history is (re)loaded from scratch: jump to the newest message
+   * unconditionally. Refreshing the page used to land you at the OLDEST
+   * message because stickToBottom only follows when already near the bottom. */
+  const forceScrollRef = useRef(false);
+  const [clearing, setClearing] = useState(false);
 
   /**
    * Paste or drop an image → straight to R2 → keep the file id.
@@ -213,6 +218,7 @@ export const AgentChat = (props: {
     fetch(`/api/agent/history?tenant=${encodeURIComponent(props.tenantSlug)}`)
       .then(r => (r.ok ? r.json() : { messages: [] }))
       .then((data) => {
+        forceScrollRef.current = true;
         setMsgs((data.messages ?? []).map((m: Msg) => ({ role: m.role, content: m.content })));
         setLoaded(true);
       })
@@ -258,6 +264,16 @@ export const AgentChat = (props: {
   }, []);
 
   useEffect(() => {
+    if (forceScrollRef.current) {
+      // Fresh history load (page refresh / clear / approval continuation):
+      // the newest message is what the user came for — jump there.
+      forceScrollRef.current = false;
+      const el = scrollRef.current;
+      if (el) {
+        el.scrollTop = el.scrollHeight;
+      }
+      return;
+    }
     stickToBottom();
   }, [msgs, stickToBottom]);
 
@@ -400,6 +416,38 @@ export const AgentChat = (props: {
     addFiles(Array.from(e.dataTransfer.files));
   };
 
+  /**
+   * Clear the transcript (messages only). Durable memory survives: dashboards,
+   * datasets, files, notes, scheduled tasks, approvals and the audit log. A
+   * long transcript full of stale threads actively confuses the agent, so
+   * clearing after a finished project is healthy — but anything important that
+   * lives ONLY in chat should be saved to a note first, hence the confirm.
+   */
+  const clearChat = async () => {
+    if (busy || clearing) {
+      return;
+    }
+    // eslint-disable-next-line no-alert
+    const sure = window.confirm(
+      'Clear this chat?\n\nThe agent keeps its dashboards, datasets, files and notes — but loses the conversation itself. If anything important lives only in this chat, ask the agent to save it to a note first.',
+    );
+    if (!sure) {
+      return;
+    }
+    setClearing(true);
+    try {
+      const r = await fetch(`/api/agent/history?tenant=${encodeURIComponent(props.tenantSlug)}`, { method: 'DELETE' });
+      if (!r.ok) {
+        throw new Error(`Could not clear (${r.status})`);
+      }
+      setMsgs([]);
+    } catch {
+      // Leave the transcript as-is; the next reload shows the server's truth.
+    } finally {
+      setClearing(false);
+    }
+  };
+
   const suggestions = [
     'What can you do for this workspace?',
     'Draft this week\'s content plan',
@@ -447,6 +495,23 @@ export const AgentChat = (props: {
                 online
               </span>
             )}
+        {msgs.length > 0 && !busy && (
+          <button
+            type="button"
+            onClick={clearChat}
+            disabled={clearing}
+            title="Clear chat — dashboards, datasets, files and notes are kept"
+            aria-label="Clear chat"
+            className="
+              rounded-full border border-white/10 px-2.5 py-0.5 text-[11px]
+              text-white/40 transition
+              hover:border-white/25 hover:text-white/75
+              disabled:opacity-40
+            "
+          >
+            {clearing ? 'clearing…' : 'clear chat'}
+          </button>
+        )}
       </div>
 
       {/* Transcript */}
