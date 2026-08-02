@@ -5,6 +5,15 @@
  *      reply is yielded in one chunk).
  *   2. ANTHROPIC_API_KEY / CLAUDE_API_KEY — api.anthropic.com with true
  *      token-by-token streaming.
+ *
+ * RETRY (Phase 27 / P0): transient provider failures — 429 throttling, 5xx,
+ * 529 overloaded, and network-level fetch errors — are retried with
+ * exponential backoff + jitter (2 retries, so 3 attempts max, ~7s worst
+ * case; bounded so a retrying call can't eat the tool loop's wall-clock
+ * budget). Retry-After is honoured when the provider sends it. Anything
+ * non-transient (400 bad request, 401/403 auth, 413 too large) fails
+ * immediately — retrying those just burns time. Before this, ONE Bedrock
+ * blip killed the entire agent turn.
  */
 
 export type ChatMessage = { role: 'user' | 'assistant'; content: string };
@@ -34,6 +43,67 @@ function bedrockRegion(): string {
   return process.env.BEDROCK_REGION || process.env.AWS_REGION || 'us-east-1';
 }
 
+// ─── Transient-failure retry ─────────────────────────────────────────────────
+
+const MAX_ATTEMPTS = 3; // 1 try + 2 retries
+const BASE_DELAY_MS = 1_000;
+const MAX_DELAY_MS = 8_000;
+const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504, 529]);
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function retryDelayMs(attempt: number, retryAfterHeader: string | null): number {
+  if (retryAfterHeader) {
+    const seconds = Number(retryAfterHeader);
+    if (Number.isFinite(seconds) && seconds > 0) {
+      return Math.min(seconds * 1_000, MAX_DELAY_MS);
+    }
+  }
+  const backoff = BASE_DELAY_MS * 2 ** (attempt - 1);
+  const jitter = Math.random() * 250;
+  return Math.min(backoff + jitter, MAX_DELAY_MS);
+}
+
+/**
+ * POST with bounded retries on transient failures. Returns the first response
+ * that is OK or non-retryable; throws only when every attempt failed at the
+ * network level. The caller still owns non-OK handling (error text, status).
+ */
+async function postWithRetry(
+  url: string,
+  headers: Record<string, string>,
+  body: string,
+  label: string,
+): Promise<Response> {
+  let lastNetworkError: unknown;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    let resp: Response;
+    try {
+      resp = await fetch(url, { method: 'POST', headers, body });
+    } catch (err) {
+      // Network-level failure (DNS, reset, timeout) — transient by nature.
+      lastNetworkError = err;
+      if (attempt < MAX_ATTEMPTS) {
+        await sleep(retryDelayMs(attempt, null));
+        continue;
+      }
+      throw new Error(
+        `${label}: network error after ${MAX_ATTEMPTS} attempts (${err instanceof Error ? err.message : 'unknown'})`,
+      );
+    }
+    if (resp.ok || !RETRYABLE_STATUS.has(resp.status) || attempt === MAX_ATTEMPTS) {
+      return resp;
+    }
+    // Drain the failed body so the connection can be reused, then back off.
+    await resp.text().catch(() => '');
+    await sleep(retryDelayMs(attempt, resp.headers.get('retry-after')));
+  }
+  // Unreachable, but TypeScript deserves an honest ending.
+  throw lastNetworkError instanceof Error ? lastNetworkError : new Error(`${label}: request failed`);
+}
+
 async function callBedrockBearer(a: {
   system: string;
   messages: ChatMessage[];
@@ -41,20 +111,16 @@ async function callBedrockBearer(a: {
 }): Promise<string> {
   const key = process.env.BEDROCK_API_KEY || process.env.AWS_BEARER_TOKEN_BEDROCK;
   const url = `https://bedrock-runtime.${bedrockRegion()}.amazonaws.com/model/${encodeURIComponent(BEDROCK_MODEL)}/invoke`;
-  const resp = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${key}`,
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
-    },
-    body: JSON.stringify({
-      anthropic_version: 'bedrock-2023-05-31',
-      max_tokens: a.maxTokens,
-      system: a.system,
-      messages: a.messages,
-    }),
-  });
+  const resp = await postWithRetry(url, {
+    'Authorization': `Bearer ${key}`,
+    'Content-Type': 'application/json',
+    'Accept': 'application/json',
+  }, JSON.stringify({
+    anthropic_version: 'bedrock-2023-05-31',
+    max_tokens: a.maxTokens,
+    system: a.system,
+    messages: a.messages,
+  }), 'Bedrock');
   if (!resp.ok) {
     const detail = (await resp.text().catch(() => '')).slice(0, 300);
     throw new Error(`Bedrock ${resp.status}: ${detail}`);
@@ -154,7 +220,8 @@ function cachedSystem(system: string) {
 /**
  * Tool-capable single model call (non-streaming) via the Bedrock bearer
  * endpoint — used by the agent tool loop. Falls back to api.anthropic.com
- * when only an Anthropic key is configured.
+ * when only an Anthropic key is configured. Transient failures are retried
+ * (see postWithRetry above).
  */
 export async function callClaudeWithTools(a: {
   system: string;
@@ -169,22 +236,18 @@ export async function callClaudeWithTools(a: {
   if (wantsBedrockBearer) {
     const key = process.env.BEDROCK_API_KEY || process.env.AWS_BEARER_TOKEN_BEDROCK;
     const url = `https://bedrock-runtime.${bedrockRegion()}.amazonaws.com/model/${encodeURIComponent(BEDROCK_MODEL)}/invoke`;
-    const resp = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${key}`,
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-      },
-      body: JSON.stringify({
-        anthropic_version: 'bedrock-2023-05-31',
-        max_tokens: maxTokens,
-        // Cached prefix: tools + system prompt (see cachedSystem above).
-        system: cachedSystem(a.system),
-        messages: a.messages,
-        ...(a.tools.length > 0 ? { tools: a.tools } : {}),
-      }),
-    });
+    const resp = await postWithRetry(url, {
+      'Authorization': `Bearer ${key}`,
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+    }, JSON.stringify({
+      anthropic_version: 'bedrock-2023-05-31',
+      max_tokens: maxTokens,
+      // Cached prefix: tools + system prompt (see cachedSystem above).
+      system: cachedSystem(a.system),
+      messages: a.messages,
+      ...(a.tools.length > 0 ? { tools: a.tools } : {}),
+    }), 'Bedrock');
     if (!resp.ok) {
       const detail = (await resp.text().catch(() => '')).slice(0, 300);
       throw new Error(`Bedrock ${resp.status}: ${detail}`);
@@ -196,21 +259,17 @@ export async function callClaudeWithTools(a: {
 
   if (wantsAnthropic) {
     const key = process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_API_KEY;
-    const resp = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'x-api-key': key || '',
-        'anthropic-version': '2023-06-01',
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: ANTHROPIC_MODEL,
-        max_tokens: maxTokens,
-        system: cachedSystem(a.system),
-        messages: a.messages,
-        ...(a.tools.length > 0 ? { tools: a.tools } : {}),
-      }),
-    });
+    const resp = await postWithRetry('https://api.anthropic.com/v1/messages', {
+      'x-api-key': key || '',
+      'anthropic-version': '2023-06-01',
+      'Content-Type': 'application/json',
+    }, JSON.stringify({
+      model: ANTHROPIC_MODEL,
+      max_tokens: maxTokens,
+      system: cachedSystem(a.system),
+      messages: a.messages,
+      ...(a.tools.length > 0 ? { tools: a.tools } : {}),
+    }), 'Anthropic');
     if (!resp.ok) {
       const detail = (await resp.text().catch(() => '')).slice(0, 300);
       throw new Error(`Anthropic ${resp.status}: ${detail}`);

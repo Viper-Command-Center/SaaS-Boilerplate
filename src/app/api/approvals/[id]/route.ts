@@ -2,15 +2,11 @@
  * POST /api/approvals/[id] — decide a pending approval.
  * Body: { decision: 'approve' | 'reject' }
  * Approve executes the stored MCP tool call, stores the result, AND resumes the
- * conversation so the agent carries on with the task.
- *
- * The resume happens on BOTH outcomes. Success was wired first; failure used to
- * stop in the approvals row — the agent had promised "I'll continue when it
- * comes back", the execution failed, and nothing told it. The user saw the
- * agent go silent and had to copy error text out of the inbox by hand
- * (exactly what happened to Max, 2026-07-30). Now the agent is handed the
- * triaged error and narrates it, honestly, in the conversation.
- *
+ * conversation so the agent carries on with the task — in BOTH directions:
+ * success hands the result back; failure hands the triaged error back. Before
+ * the failure direction existed, a failed approved call left the error in the
+ * approvals row, the agent had promised to continue, and the user had to paste
+ * the error into chat by hand (the Max incident, 2026-07-30).
  * Roles: owner/admin/editor (or platform admin).
  */
 
@@ -18,6 +14,7 @@ import { asc, eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { runToolLoop } from '@/libs/agent/loop';
+import { buildMissionTools } from '@/libs/agent/missionTools';
 import { resolveAgentForTenant } from '@/libs/agent/persona';
 import { buildPlatformTools } from '@/libs/agent/platformTools';
 import { buildSystemPrompt } from '@/libs/agent/prompt';
@@ -75,7 +72,9 @@ async function resumeConversation(
     .limit(HISTORY_LIMIT);
 
   // Show the approval in the transcript. The user really did do this, and
-  // without it the agent's next message appears out of nowhere.
+  // without it the agent's next message appears out of nowhere. The failure
+  // variant is honest in the transcript too — the human approved, the CALL
+  // failed; those are different facts and both belong on the record.
   const marker = outcome.ok
     ? `✓ Approved: ${approval.toolName}`
     : `✓ Approved: ${approval.toolName} (execution failed)`;
@@ -92,11 +91,12 @@ async function resumeConversation(
     mcpToolset = { anthropicTools: [], failedConnections: [], resolve: () => null };
   }
   const platform = buildPlatformTools(approval.tenantId);
+  const mission = buildMissionTools(approval.tenantId);
   const toolset = {
-    anthropicTools: [...platform.anthropicTools, ...mcpToolset.anthropicTools],
+    anthropicTools: [...platform.anthropicTools, ...mission.anthropicTools, ...mcpToolset.anthropicTools],
     failedConnections: mcpToolset.failedConnections,
     resolve: (name: string) => {
-      const p = platform.executors.get(name);
+      const p = platform.executors.get(name) ?? mission.executors.get(name);
       if (p) {
         return { connectionId: '', connectionName: 'platform', toolName: name, policy: p.policy, call: p.call };
       }
@@ -115,17 +115,15 @@ ${outcome.result.slice(0, 12_000)}
 </tool_output>
 
 Carry on with the task using this result. Do NOT request the same call again. If you already told the user what you'd do once it came back, do that now.`
-    : `The human approved your queued call to ${approval.toolName}, but the execution FAILED. The error:
+    : `The human approved your queued call to ${approval.toolName}, but the execution FAILED. The real error:
 
 <tool_output trust="untrusted">
-${outcome.error.slice(0, 4_000)}
+${outcome.error.slice(0, 8_000)}
 </tool_output>
 
-${outcome.guidance}
-${outcome.escalated
-    ? 'This is a platform bug and has ALREADY been reported to the Artivio operator automatically — tell the user plainly that it is not something they can fix.'
-    : 'Relay this error to the user as-is. Do NOT invent troubleshooting steps beyond what it states.'}
-If (and only if) the error clearly shows the ARGUMENTS were wrong, you may queue ONE corrected call; otherwise do not repeat it. Continue whatever parts of the task do not depend on this call.`;
+Triage: ${outcome.guidance}${outcome.escalated ? ' This has already been escalated to the Artivio operator automatically — the user does not need to report it.' : ''}
+
+Tell the user plainly that the approved call failed and relay the error above. Do NOT invent troubleshooting steps the error does not state. You may retry the call ONCE, and only if the error clearly shows the ARGUMENTS were wrong (a typo, a bad id) — a server, credential or provider error will fail identically on retry, so don't. Continue whatever parts of the task do not depend on this call.`;
 
   let reply = '';
   await runToolLoop({
@@ -265,12 +263,11 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
       .where(eq(approvals.id, id));
     await audit(approval.tenantId, user.id, 'tool.approved_failed', approval.toolName);
 
-    // ── Resume on failure too ────────────────────────────────────────────────
-    // Symmetry with the success path, and for the same reason. Before this, a
-    // FAILED approved call resumed nothing: the agent had promised to continue,
-    // the error sat in the inbox, and the user had to paste it into chat by
-    // hand while the agent said "nothing came back to me". The agent now gets
-    // the triaged error and explains it in the conversation itself.
+    // ── Resume on FAILURE too ────────────────────────────────────────────────
+    // The agent promised to continue after approval; a failed execution is
+    // still an outcome it must narrate. Without this, the error sat in the
+    // approvals row, the agent stayed silent, and the user had to paste the
+    // error into chat by hand.
     const continuation = await resumeConversation(approval, {
       ok: false,
       error: message,

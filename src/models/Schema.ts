@@ -565,3 +565,53 @@ export const todoSchema = pgTable('todo', {
     .notNull(),
   createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
 });
+
+// ─── Phase 27: durable missions (docs/MISSION_RUNNER_SPEC.md) ────────────────
+// A mission is a PERSISTED plan: the agent decomposes a big goal into steps
+// BEFORE executing, and the cron runner executes one step per tick through the
+// same tool loop + approvals gateway as chat. Durability lives here, not in a
+// request or a context window — which is why a mission survives deploys,
+// crashes, and budget exhaustion (steps continue via the exhausted-requeue
+// mechanic). Status flow: running → waiting_approval | paused | done | failed.
+
+export const missions = pgTable(
+  'missions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+    title: text('title').notNull(),
+    /** The user's ask, verbatim — the mission's north star. */
+    goal: text('goal').notNull(),
+    status: varchar('status', { length: 20 }).notNull().default('running'),
+    createdBy: uuid('created_by'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  t => [index('missions_tenant_status_idx').on(t.tenantId, t.status)],
+);
+
+export const missionSteps = pgTable(
+  'mission_steps',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    missionId: uuid('mission_id')
+      .notNull()
+      .references(() => missions.id, { onDelete: 'cascade' }),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+    position: integer('position').notNull(),
+    title: text('title').notNull(),
+    /** Complete, standalone instructions — same rule as scheduled-task prompts. */
+    instructions: text('instructions').notNull(),
+    // pending | running | done | failed | skipped
+    status: varchar('status', { length: 20 }).notNull().default('pending'),
+    result: text('result'),
+    attempts: integer('attempts').notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  t => [index('mission_steps_mission_pos_idx').on(t.missionId, t.position)],
+);

@@ -17,9 +17,11 @@ import { and, asc, eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { runToolLoop } from '@/libs/agent/loop';
+import { buildMissionTools } from '@/libs/agent/missionTools';
 import { resolveAgentForTenant } from '@/libs/agent/persona';
 import { buildPlatformTools } from '@/libs/agent/platformTools';
 import { buildSystemPrompt } from '@/libs/agent/prompt';
+import { checkRateLimit } from '@/libs/agent/rateLimit';
 import { getCurrentUser } from '@/libs/auth/session';
 import { db } from '@/libs/DB';
 import { buildTenantToolset } from '@/libs/mcp/registry';
@@ -65,6 +67,17 @@ export async function POST(request: Request) {
   const tenant = (await getUserTenants(user.id)).find(t => t.slug === body.tenantSlug);
   if (!tenant) {
     return NextResponse.json({ error: 'No access to this workspace.' }, { status: 403 });
+  }
+
+  // Velocity guard (Phase 27): a runaway loop hammering this route is a money
+  // problem before it is a load problem — each turn can be dozens of model
+  // calls. The spend cap bounds dollars; this bounds requests per minute.
+  const rate = checkRateLimit(tenant.id);
+  if (!rate.allowed) {
+    return NextResponse.json(
+      { error: `Too many agent turns at once — wait ${rate.retryAfterSec}s and try again.` },
+      { status: 429, headers: { 'Retry-After': String(rate.retryAfterSec) } },
+    );
   }
 
   // One rolling conversation per (tenant, user) for Phase 1.
@@ -144,11 +157,12 @@ export async function POST(request: Request) {
     mcpToolset = { anthropicTools: [], failedConnections: [], resolve: () => null };
   }
   const platform = buildPlatformTools(tenant.id);
+  const mission = buildMissionTools(tenant.id);
   const toolset = {
-    anthropicTools: [...platform.anthropicTools, ...mcpToolset.anthropicTools],
+    anthropicTools: [...platform.anthropicTools, ...mission.anthropicTools, ...mcpToolset.anthropicTools],
     failedConnections: mcpToolset.failedConnections,
     resolve: (name: string) => {
-      const p = platform.executors.get(name);
+      const p = platform.executors.get(name) ?? mission.executors.get(name);
       if (p) {
         return { connectionId: '', connectionName: 'platform', toolName: name, policy: p.policy, call: p.call };
       }
