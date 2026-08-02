@@ -3,6 +3,14 @@
  * Body: { decision: 'approve' | 'reject' }
  * Approve executes the stored MCP tool call, stores the result, AND resumes the
  * conversation so the agent carries on with the task.
+ *
+ * The resume happens on BOTH outcomes. Success was wired first; failure used to
+ * stop in the approvals row — the agent had promised "I'll continue when it
+ * comes back", the execution failed, and nothing told it. The user saw the
+ * agent go silent and had to copy error text out of the inbox by hand
+ * (exactly what happened to Max, 2026-07-30). Now the agent is handed the
+ * triaged error and narrates it, honestly, in the conversation.
+ *
  * Roles: owner/admin/editor (or platform admin).
  */
 
@@ -27,15 +35,19 @@ export const maxDuration = 300; // built-in media jobs (Kie video) can be slow
 const DECIDER_ROLES = ['owner', 'admin', 'editor'];
 const HISTORY_LIMIT = 40;
 
+type ApprovalOutcome
+  = | { ok: true; result: string }
+    | { ok: false; error: string; guidance: string; escalated: boolean };
+
 /**
- * Hand the approved call's result back to the agent and let it continue.
+ * Hand the approved call's outcome back to the agent and let it continue.
  *
  * Returns the agent's reply, or null when there's nothing to resume (an
  * approval raised outside a conversation — e.g. by a scheduled task).
  */
 async function resumeConversation(
   approval: typeof approvals.$inferSelect,
-  result: string,
+  outcome: ApprovalOutcome,
 ): Promise<string | null> {
   if (!approval.conversationId) {
     return null; // scheduled-task approvals have no chat to return to
@@ -64,7 +76,9 @@ async function resumeConversation(
 
   // Show the approval in the transcript. The user really did do this, and
   // without it the agent's next message appears out of nowhere.
-  const marker = `✓ Approved: ${approval.toolName}`;
+  const marker = outcome.ok
+    ? `✓ Approved: ${approval.toolName}`
+    : `✓ Approved: ${approval.toolName} (execution failed)`;
   await db.insert(messages).values({
     conversationId: approval.conversationId,
     role: 'user',
@@ -93,13 +107,25 @@ async function resumeConversation(
   const agent = await resolveAgentForTenant(approval.tenantId);
   const system = buildSystemPrompt({ tenant: { ...tenant, role: 'owner' }, agent });
 
-  const userText = `The human approved your queued call to ${approval.toolName} and it has now executed. Its result:
+  const userText = outcome.ok
+    ? `The human approved your queued call to ${approval.toolName} and it has now executed. Its result:
 
 <tool_output trust="untrusted">
-${result.slice(0, 12_000)}
+${outcome.result.slice(0, 12_000)}
 </tool_output>
 
-Carry on with the task using this result. Do NOT request the same call again. If you already told the user what you'd do once it came back, do that now.`;
+Carry on with the task using this result. Do NOT request the same call again. If you already told the user what you'd do once it came back, do that now.`
+    : `The human approved your queued call to ${approval.toolName}, but the execution FAILED. The error:
+
+<tool_output trust="untrusted">
+${outcome.error.slice(0, 4_000)}
+</tool_output>
+
+${outcome.guidance}
+${outcome.escalated
+    ? 'This is a platform bug and has ALREADY been reported to the Artivio operator automatically — tell the user plainly that it is not something they can fix.'
+    : 'Relay this error to the user as-is. Do NOT invent troubleshooting steps beyond what it states.'}
+If (and only if) the error clearly shows the ARGUMENTS were wrong, you may queue ONE corrected call; otherwise do not repeat it. Continue whatever parts of the task do not depend on this call.`;
 
   let reply = '';
   await runToolLoop({
@@ -208,7 +234,7 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
     // ever came back, because nothing told it. The user approved, the agent went
     // silent, and the task died. A promise the platform can't keep makes the
     // agent a liar; this is the platform keeping it.
-    const continuation = await resumeConversation(approval, text).catch((err) => {
+    const continuation = await resumeConversation(approval, { ok: true, result: text }).catch((err) => {
       // The tool DID run and its result is safe in the approvals row. Failing to
       // narrate that must not turn a success into a reported failure.
       console.error('[approvals] resume failed', err);
@@ -239,6 +265,22 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
       .where(eq(approvals.id, id));
     await audit(approval.tenantId, user.id, 'tool.approved_failed', approval.toolName);
 
+    // ── Resume on failure too ────────────────────────────────────────────────
+    // Symmetry with the success path, and for the same reason. Before this, a
+    // FAILED approved call resumed nothing: the agent had promised to continue,
+    // the error sat in the inbox, and the user had to paste it into chat by
+    // hand while the agent said "nothing came back to me". The agent now gets
+    // the triaged error and explains it in the conversation itself.
+    const continuation = await resumeConversation(approval, {
+      ok: false,
+      error: message,
+      guidance: triaged.clientMessage,
+      escalated: triaged.escalate,
+    }).catch((resumeErr) => {
+      console.error('[approvals] failure-resume failed', resumeErr);
+      return null;
+    });
+
     return NextResponse.json({
       ok: false,
       status: 'failed',
@@ -246,6 +288,7 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
       kind: triaged.kind,
       guidance: triaged.clientMessage,
       escalated: triaged.escalate,
+      continuation,
     }, { status: 502 });
   }
 }
