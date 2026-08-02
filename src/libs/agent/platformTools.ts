@@ -120,7 +120,7 @@ export function buildPlatformTools(tenantId: string): {
     },
     {
       name: 'create_panel',
-      description: 'Create a dashboard panel. Types: kpi (config: datasetKey, valueField, label?), timeseries (config: datasetKey, valueField), table (config: datasetKey, columns?: string[], limit?: number), markdown (config: text). Put it on a tab with viewId and group it with section. Do NOT create a markdown panel purely to act as a section heading — use the section field, which renders a real collapsible header.',
+      description: 'Create a dashboard panel. Types: kpi (config: datasetKey, valueField, label?), timeseries (config: datasetKey, valueField), table (config: datasetKey, columns?: string[], limit?: number, filter?: object, sortBy?: string, sortDir?: \"asc\"|\"desc\"), markdown (config: text). Table filter is field→value equality (e.g. {"week": 1}) applied BEFORE limit — use it when several panels share one dataset (one panel per week/status/owner) instead of creating near-duplicate datasets. sortBy orders rows by that field (numeric-aware); without it tables show newest rows first. Rows with a status field are inline-editable by the user. Put it on a tab with viewId and group it with section. Do NOT create a markdown panel purely to act as a section heading — use the section field, which renders a real collapsible header.',
       input_schema: {
         type: 'object',
         properties: {

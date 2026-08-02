@@ -6,7 +6,18 @@
  *   'auto'      → call the MCP server now, feed the result back
  *   'approval'  → insert an approvals row; tell the model it's queued
  *   'deny'      → tell the model the tool is not permitted
- * Every tool decision writes an audit_log row. Max 8 iterations per turn.
+ * Every tool decision writes an audit_log row.
+ *
+ * BUDGET (Phase 26): the old hard cap was 8 iterations per turn, and hitting
+ * it ended the turn SILENTLY — which is how a 6-week dashboard build stopped
+ * at week 2 overnight with no error and no explanation. Now the cap is
+ * configurable (chat default 24, scheduled missions pass more), a wall-clock
+ * guard stops runaway turns, and exhaustion is HONEST: the model gets one
+ * final tool-free call to summarise progress + what remains, the user sees a
+ * [budget] line, and callers receive `exhausted: true` so a scheduled mission
+ * can requeue itself to continue (see run-scheduled). Cost is bounded the
+ * same way it always was: checkSpend() runs before EVERY iteration, so the
+ * daily cap — not the iteration count — is the real spending guardrail.
  */
 
 import type { BlockMessage } from '@/libs/agent/anthropic';
@@ -17,7 +28,19 @@ import { db } from '@/libs/DB';
 import { captureIssue, redact } from '@/libs/support/issues';
 import { approvals, auditLog } from '@/models/Schema';
 
-const MAX_ITERATIONS = 8;
+const DEFAULT_MAX_ITERATIONS = 24;
+const DEFAULT_WALL_CLOCK_MS = 4 * 60_000; // stay under typical route limits
+
+export type ToolLoopResult = {
+  /** Everything streamed to the user (text + status lines). */
+  text: string;
+  /**
+   * True when the turn ended on the iteration or wall-clock budget while the
+   * model still wanted to call tools — i.e. the task is NOT finished. Callers
+   * that can continue later (scheduled missions) should requeue soon.
+   */
+  exhausted: boolean;
+};
 
 export async function runToolLoop(a: {
   tenantId: string;
@@ -40,7 +63,15 @@ export async function runToolLoop(a: {
   toolset: TenantToolset;
   /** Called with displayable progress (text deltas + tool status lines). */
   onDelta: (text: string) => void;
-}): Promise<string> {
+  /** Tool-loop iteration budget for this turn. Default 24; missions pass 40. */
+  maxIterations?: number;
+  /** Wall-clock budget for this turn. Default 4 minutes. */
+  wallClockMs?: number;
+}): Promise<ToolLoopResult> {
+  const maxIterations = a.maxIterations ?? DEFAULT_MAX_ITERATIONS;
+  const wallClockMs = a.wallClockMs ?? DEFAULT_WALL_CLOCK_MS;
+  const startedAt = Date.now();
+
   // The user's turn: [ ...images, { text } ] when there are attachments, or a
   // plain string when there aren't (cheaper to serialise, and the overwhelming
   // majority of turns).
@@ -49,9 +80,9 @@ export async function runToolLoop(a: {
         ...a.userBlocks,
         // 🔑 THE COST FIX. This breakpoint caches the whole request prefix —
         // tools + system + history + this turn's images. The message array is
-        // re-sent on EVERY loop iteration (up to 8), so without it a single
-        // screenshot bills ~1,500 tokens eight times in one turn. With it,
-        // iterations 2..8 read it at ~10% of input price.
+        // re-sent on EVERY loop iteration, so without it a single screenshot
+        // bills ~1,500 tokens dozens of times in one turn. With it, iterations
+        // 2..n read it at ~10% of input price.
         //
         // It sits on the LAST block deliberately: cache_control caches
         // everything *before and including* the block it's attached to.
@@ -68,15 +99,23 @@ export async function runToolLoop(a: {
   ];
 
   let finalText = '';
+  let exhausted = false;
 
-  for (let i = 0; i < MAX_ITERATIONS; i++) {
-    // Guardrail: kill switch + daily cost cap, re-checked every iteration so a
-    // long tool loop can't blow through the cap mid-turn.
+  for (let i = 0; ; i++) {
+    // ── Budget checks, in honesty order ──────────────────────────────────────
+    // Spend first (a hard money guardrail, re-checked every iteration so a
+    // long tool loop can't blow through the daily cap mid-turn)…
     const spend = await checkSpend(a.tenantId);
     if (!spend.allowed) {
       const msg = `\n\n[stopped] ${spend.reason}`;
       a.onDelta(msg);
       finalText += msg;
+      break;
+    }
+    // …then iteration/wall-clock. These are NOT silent ends any more: mark the
+    // turn exhausted and let the wrap-up below tell the model and the user.
+    if (i >= maxIterations || Date.now() - startedAt > wallClockMs) {
+      exhausted = true;
       break;
     }
 
@@ -147,7 +186,7 @@ export async function runToolLoop(a: {
           .returning();
         a.onDelta(`\n\n[approval] ${name} queued for human approval (#${row?.id?.slice(0, 8)}).\n`);
         resultText = 'This action requires human approval and has been queued in the Approvals inbox. '
-          + 'Tell the user it is awaiting their approval; the result will appear in the inbox once decided. '
+          + 'Tell the user it is awaiting their approval; once they decide, the outcome will be delivered back into this conversation. '
           + 'Do not retry the same call.';
         await audit(a.tenantId, 'tool.queued_approval', name, { args: redact(args), approvalId: row?.id });
       } else {
@@ -204,7 +243,59 @@ export async function runToolLoop(a: {
     messages.push({ role: 'user', content: toolResults });
   }
 
-  return finalText;
+  // ── Honest exhaustion wrap-up ─────────────────────────────────────────────
+  // One final TOOL-FREE call so the model can say what it finished and what
+  // remains, instead of the turn just… ending. Tool-free means it cannot burn
+  // more budget here, and the summary becomes part of the visible reply (and
+  // of lastResult for scheduled runs — which is what the requeued continuation
+  // run reads to pick up where this one stopped).
+  if (exhausted) {
+    const notice = '\n\n[budget] Tool budget for this turn is used up — progress so far is saved.\n';
+    a.onDelta(notice);
+    finalText += notice;
+    try {
+      const wrap = await callClaudeWithTools({
+        system: a.system,
+        messages: [
+          ...messages,
+          {
+            role: 'user',
+            content: '[system] The tool budget for this turn is exhausted. Without calling any more tools: state in 2-4 sentences (a) what you completed this turn and (b) exactly what remains to be done, so the work can be resumed. If everything is actually complete, say so plainly.',
+          },
+        ],
+        tools: [], // tool-free by construction
+      });
+      if (wrap.usage) {
+        await meterLlm({
+          tenantId: a.tenantId,
+          modelId: wrap._modelId ?? 'unknown',
+          usage: {
+            inputTokens: wrap.usage.input_tokens ?? 0,
+            outputTokens: wrap.usage.output_tokens ?? 0,
+            cacheReadTokens: wrap.usage.cache_read_input_tokens ?? 0,
+            cacheWriteTokens: wrap.usage.cache_creation_input_tokens ?? 0,
+          },
+          detail: a.conversationId ? 'chat' : 'scheduled',
+        });
+      }
+      for (const block of wrap.content.filter(b => b.type === 'text')) {
+        if (block.text) {
+          finalText += (finalText ? '\n' : '') + block.text;
+          a.onDelta(block.text);
+        }
+      }
+    } catch {
+      // The wrap-up is best-effort narration; the exhausted flag is the signal
+      // that matters, and it is already set.
+    }
+    await audit(a.tenantId, 'loop.exhausted', 'runToolLoop', {
+      maxIterations,
+      wallClockMs,
+      elapsedMs: Date.now() - startedAt,
+    });
+  }
+
+  return { text: finalText, exhausted };
 }
 
 async function audit(tenantId: string, action: string, target: string, detail: unknown): Promise<void> {

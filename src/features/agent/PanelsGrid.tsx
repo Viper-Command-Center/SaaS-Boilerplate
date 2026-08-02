@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Markdown } from '@/features/agent/Markdown';
 
-type PanelRow = { row: Record<string, unknown>; capturedAt: string };
+type PanelRow = { id: string; row: Record<string, unknown>; capturedAt: string };
 type Panel = {
   id: string;
   type: 'kpi' | 'timeseries' | 'table' | 'markdown' | string;
@@ -562,7 +562,9 @@ export const PanelsGrid = (props: { tenantSlug: string; canEdit?: boolean }) => 
                         <span className="pulse-dot size-1.5 rounded-full bg-indigo-400" />
                       </span>
                     </div>
-                    {!folded.has(panel.id) && <PanelBody panel={panel} />}
+                    {!folded.has(panel.id) && (
+                      <PanelBody panel={panel} tenantSlug={props.tenantSlug} canEdit={canEdit} />
+                    )}
                   </div>
                 ))}
               </div>
@@ -579,8 +581,38 @@ function num(v: unknown): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-const PanelBody = ({ panel }: { panel: Panel }) => {
+/**
+ * Inline-editable statuses (Phase 26). The mechanism (write_dataset) belonged
+ * only to the agent; this is the matching human control — the Phase 21/24
+ * rule. Any current value outside this list still renders as an option, so an
+ * agent-invented status is editable rather than clobbered.
+ */
+const STATUS_OPTIONS = ['pending', 'in progress', 'blocked', 'done'];
+
+const PanelBody = ({ panel, tenantSlug, canEdit }: { panel: Panel; tenantSlug: string; canEdit: boolean }) => {
   const gid = useId().replace(/:/g, '');
+  // Optimistic per-row edits. The 30s poll delivers the server's truth; until
+  // then the dropdown shows what the user just picked, not a stale value.
+  const [edits, setEdits] = useState<Record<string, Record<string, unknown>>>({});
+
+  const patchRow = async (rowId: string, field: string, value: string) => {
+    const prev = edits[rowId];
+    setEdits(e => ({ ...e, [rowId]: { ...e[rowId], [field]: value } }));
+    try {
+      const r = await fetch(`/api/datasets?tenant=${encodeURIComponent(tenantSlug)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: rowId, patch: { [field]: value } }),
+      });
+      if (!r.ok) {
+        throw new Error(String(r.status));
+      }
+    } catch {
+      // Revert the optimistic edit — a dropdown showing a state the server
+      // rejected is a lying dashboard.
+      setEdits(e => ({ ...e, [rowId]: { ...prev } }));
+    }
+  };
 
   if (panel.type === 'markdown') {
     // This used to be a whitespace-pre-wrap <p>, i.e. the "markdown" panel type
@@ -700,7 +732,11 @@ const PanelBody = ({ panel }: { panel: Panel }) => {
     : Object.keys(panel.rows[panel.rows.length - 1]?.row ?? {}).slice(0, 8);
   const allKeys = Object.keys(panel.rows[panel.rows.length - 1]?.row ?? {});
   const hiddenColumns = Array.isArray(panel.config.columns) ? 0 : Math.max(0, allKeys.length - columns.length);
-  const rows = panel.rows.slice().reverse();
+  // sortBy panels arrive from the API already in display order (Phase 26);
+  // unsorted panels arrive oldest → newest for chart parity, so show newest
+  // first, as before.
+  const sorted = typeof panel.config.sortBy === 'string' && panel.config.sortBy.length > 0;
+  const rows = sorted ? panel.rows.slice() : panel.rows.slice().reverse();
 
   if (rows.length === 0) {
     // Distinguish "no data yet" from "your datasetKey is a typo" — an empty
@@ -734,10 +770,39 @@ const PanelBody = ({ panel }: { panel: Panel }) => {
         <tbody className="text-white/75">
           {rows.map((r, i) => (
             // eslint-disable-next-line react/no-array-index-key
-            <tr key={i} className="border-t border-white/6">
-              {columns.map(c => (
-                <td key={c} className="py-1.5 pr-3">{String(r.row[c] ?? '')}</td>
-              ))}
+            <tr key={r.id ?? i} className="border-t border-white/6">
+              {columns.map((c) => {
+                const value = edits[r.id]?.[c] ?? r.row[c];
+                // The one editable field: status. Everyone can read it; only
+                // editors get the dropdown. Values the agent invented stay
+                // selectable instead of being clobbered.
+                if (canEdit && c.toLowerCase() === 'status' && r.id) {
+                  const current = String(value ?? 'pending');
+                  const options = STATUS_OPTIONS.includes(current)
+                    ? STATUS_OPTIONS
+                    : [current, ...STATUS_OPTIONS];
+                  return (
+                    <td key={c} className="py-1 pr-3">
+                      <select
+                        value={current}
+                        onChange={e => patchRow(r.id, c, e.target.value)}
+                        aria-label={`Status for row ${i + 1}`}
+                        className="
+                          rounded border border-white/10 bg-transparent px-1
+                          py-0.5 text-xs text-white/75 transition
+                          hover:border-white/25
+                          focus:border-indigo-400 focus:outline-none
+                        "
+                      >
+                        {options.map(o => (
+                          <option key={o} value={o} className="bg-neutral-900">{o}</option>
+                        ))}
+                      </select>
+                    </td>
+                  );
+                }
+                return <td key={c} className="py-1.5 pr-3">{String(value ?? '')}</td>;
+              })}
             </tr>
           ))}
         </tbody>

@@ -2,6 +2,14 @@
  * GET /api/panels?tenant=<slug> — dashboard views (tabs) + their panels with
  * data resolved server-side (dataset rows for kpi/timeseries/table panels).
  *
+ * Table panels support filter/sort in config (Phase 26):
+ *   filter: { field: value, ... }  — row matches when EVERY entry matches
+ *                                    (string-compared, so 1 == "1")
+ *   sortBy: 'field', sortDir: 'asc'|'desc' — numeric-aware ordering
+ * Filtering happens BEFORE limit, or a filtered panel would only ever see
+ * whatever happened to be newest — which is exactly the bug that made six
+ * "week" panels all display the same September rows.
+ *
  * PATCH /api/panels?tenant=<slug> — persist a drag: { moves: [{id, viewId,
  * section, position}] }. Editor+ only. Layout is deliberately not approval-
  * gated: it touches nothing outside this workspace's own dashboard.
@@ -16,6 +24,32 @@ import { getUserTenants } from '@/libs/tenants';
 import { dashboardPanels, dashboardViews, datasets } from '@/models/Schema';
 
 export const dynamic = 'force-dynamic';
+
+/** Rows scanned when a table panel filters/sorts. Bounded so a huge dataset
+ * can't make the dashboard poll expensive; if a workspace outgrows this, the
+ * agent should split datasets (e.g. per week) rather than filter one giant one. */
+const FILTER_SCAN_LIMIT = 1000;
+
+type StoredRow = { id: string; row: unknown; capturedAt: Date };
+
+function rowMatches(row: Record<string, unknown>, filter: Record<string, unknown>): boolean {
+  for (const [field, want] of Object.entries(filter)) {
+    if (String(row[field] ?? '') !== String(want ?? '')) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/** Numeric-aware comparison: "9" < "10", but "W2" still sorts after "W1". */
+function compareValues(a: unknown, b: unknown): number {
+  const na = Number(a);
+  const nb = Number(b);
+  if (Number.isFinite(na) && Number.isFinite(nb)) {
+    return na - nb;
+  }
+  return String(a ?? '').localeCompare(String(b ?? ''), undefined, { numeric: true });
+}
 
 export async function GET(request: Request) {
   const user = await getCurrentUser();
@@ -43,15 +77,39 @@ export async function GET(request: Request) {
   const withData = await Promise.all(panels.map(async (panel) => {
     const config = (panel.config ?? {}) as Record<string, unknown>;
     const datasetKey = typeof config.datasetKey === 'string' ? config.datasetKey : null;
-    let rows: Array<{ row: unknown; capturedAt: Date }> = [];
+
+    const filter = config.filter && typeof config.filter === 'object' && !Array.isArray(config.filter)
+      ? config.filter as Record<string, unknown>
+      : null;
+    const sortBy = typeof config.sortBy === 'string' ? config.sortBy : null;
+    const shaped = panel.type === 'table' && (filter || sortBy);
+
+    let rows: StoredRow[] = [];
     if (datasetKey && panel.type !== 'markdown') {
       const limit = panel.type === 'kpi' ? 1 : Math.min(Number(config.limit) || 50, 200);
       rows = await db
-        .select({ row: datasets.row, capturedAt: datasets.capturedAt })
+        .select({ id: datasets.id, row: datasets.row, capturedAt: datasets.capturedAt })
         .from(datasets)
         .where(and(eq(datasets.tenantId, tenant.id), eq(datasets.key, datasetKey)))
         .orderBy(desc(datasets.capturedAt))
-        .limit(limit);
+        // Filters must see the whole (bounded) dataset, not the newest slice.
+        .limit(shaped ? FILTER_SCAN_LIMIT : limit);
+
+      if (shaped) {
+        if (filter) {
+          rows = rows.filter(r => rowMatches((r.row ?? {}) as Record<string, unknown>, filter));
+        }
+        if (sortBy) {
+          const dir = config.sortDir === 'desc' ? -1 : 1;
+          rows = rows.slice().sort((x, y) =>
+            dir * compareValues(
+              ((x.row ?? {}) as Record<string, unknown>)[sortBy],
+              ((y.row ?? {}) as Record<string, unknown>)[sortBy],
+            ),
+          );
+        }
+        rows = rows.slice(0, limit);
+      }
     }
     return {
       id: panel.id,
@@ -66,7 +124,9 @@ export async function GET(request: Request) {
       section: panel.section,
       width: panel.width,
       position: panel.position,
-      rows: rows.reverse(), // oldest → newest for charts
+      // sortBy panels are already in display order; everything else stays
+      // oldest → newest for charts (the client reverses tables itself).
+      rows: sortBy && panel.type === 'table' ? rows : rows.reverse(),
     };
   }));
 
