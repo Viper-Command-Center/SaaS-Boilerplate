@@ -121,6 +121,18 @@ expect('src/libs/agent/anthropic.ts', 'postWithRetry', 'transient 429/5xx/529 mu
 expect('src/app/api/agent/chat/route.ts', 'checkRateLimit', 'per-tenant velocity guard — a runaway client is a money problem');
 expect('src/libs/mcp/registry.ts', "?? 'approval'", 'unknown MCP tools must DEFAULT to approval, never auto');
 
+// ── History window direction (the "Max is very confused" incident, 2026-08-03)
+// `orderBy(asc).limit(N)` selects the OLDEST N messages — once the rolling
+// conversation crossed the limit, the agent was permanently frozen in its
+// earliest window and answered new requests against week-old context (asked
+// for blog posts on the site, it drafted LinkedIn/Twitter posts from the old
+// social-media era of the transcript). History must load newest-N descending
+// and flip back to chronological.
+expect('src/app/api/agent/chat/route.ts', /orderBy\(desc\(messages\.createdAt\)\)/, 'chat history must be the NEWEST window, not the oldest');
+forbid('src/app/api/agent/chat/route.ts', /orderBy\(asc\(messages\.createdAt\)\)[\s\S]{0,80}limit\(/, 'asc+limit on messages = oldest-window amnesia');
+expect('src/app/api/approvals/[id]/route.ts', /orderBy\(desc\(messages\.createdAt\)\)/, 'approval resume must see recent context, not the conversation opening');
+expect('src/app/api/agent/history/route.ts', /orderBy\(desc\(messages\.createdAt\)\)/, 'UI transcript + clear-consolidation must use the newest window');
+
 // ── Chat UX honesty (Phase 26.1/26.2) ───────────────────────────────────────
 expect('src/features/agent/AgentChat.tsx', 'abortRef', 'Stop button must abort the in-flight stream');
 expect('src/features/agent/AgentChat.tsx', 'forceScrollRef', 'refresh must land at the NEWEST message, not the oldest');

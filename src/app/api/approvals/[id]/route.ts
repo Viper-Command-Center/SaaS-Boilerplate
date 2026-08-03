@@ -10,7 +10,7 @@
  * Roles: owner/admin/editor (or platform admin).
  */
 
-import { asc, eq } from 'drizzle-orm';
+import { desc, eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { runToolLoop } from '@/libs/agent/loop';
@@ -64,12 +64,17 @@ async function resumeConversation(
     return null;
   }
 
-  const history = await db
-    .select({ role: messages.role, content: messages.content })
-    .from(messages)
-    .where(eq(messages.conversationId, approval.conversationId))
-    .orderBy(asc(messages.createdAt))
-    .limit(HISTORY_LIMIT);
+  // NEWEST 40 flipped back to chronological — `asc().limit()` here selected
+  // the OLDEST 40 and resumed the agent against ancient context (same bug as
+  // the chat route, fixed 2026-08-03).
+  const history = (
+    await db
+      .select({ role: messages.role, content: messages.content })
+      .from(messages)
+      .where(eq(messages.conversationId, approval.conversationId))
+      .orderBy(desc(messages.createdAt))
+      .limit(HISTORY_LIMIT)
+  ).reverse();
 
   // Show the approval in the transcript. The user really did do this, and
   // without it the agent's next message appears out of nowhere. The failure

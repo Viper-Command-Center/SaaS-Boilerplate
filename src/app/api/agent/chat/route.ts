@@ -13,7 +13,7 @@
  * message, so the transcript stays honest about what actually ran.
  */
 
-import { and, asc, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { runToolLoop } from '@/libs/agent/loop';
@@ -97,12 +97,21 @@ export async function POST(request: Request) {
   }
   const conversationId = conversation.id;
 
-  const history = await db
-    .select({ role: messages.role, content: messages.content, attachments: messages.attachments })
-    .from(messages)
-    .where(eq(messages.conversationId, conversationId))
-    .orderBy(asc(messages.createdAt))
-    .limit(HISTORY_LIMIT);
+  // 🔴 NEWEST 40, then flip back to chronological order. This was
+  // `orderBy(asc).limit(40)` — the OLDEST 40 messages of the one rolling
+  // conversation — so once a conversation crossed 40 messages the agent was
+  // permanently frozen in its earliest window: it answered every new request
+  // against week-old context and could not see the message it was replying
+  // to being preceded by anything recent. (The "Max is very confused /
+  // talking about LinkedIn when I asked for blog posts" incident, 2026-08-03.)
+  const history = (
+    await db
+      .select({ role: messages.role, content: messages.content, attachments: messages.attachments })
+      .from(messages)
+      .where(eq(messages.conversationId, conversationId))
+      .orderBy(desc(messages.createdAt))
+      .limit(HISTORY_LIMIT)
+  ).reverse();
 
   const attachments = body.attachments ?? [];
 

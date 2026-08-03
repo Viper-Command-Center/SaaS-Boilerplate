@@ -17,7 +17,7 @@
  * never block the clear the user asked for.
  */
 
-import { and, asc, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { callClaudeWithTools } from '@/libs/agent/anthropic';
 import { getCurrentUser } from '@/libs/auth/session';
@@ -57,12 +57,17 @@ export async function GET(request: Request) {
     return NextResponse.json({ messages: [] });
   }
 
-  const rows = await db
-    .select({ role: messages.role, content: messages.content, createdAt: messages.createdAt })
-    .from(messages)
-    .where(eq(messages.conversationId, conversation.id))
-    .orderBy(asc(messages.createdAt))
-    .limit(200);
+  // NEWEST 200 flipped back to chronological — `asc().limit()` returned the
+  // OLDEST 200, so past ~200 messages the UI showed an ancient transcript
+  // (same oldest-window bug as the chat route, fixed 2026-08-03).
+  const rows = (
+    await db
+      .select({ role: messages.role, content: messages.content, createdAt: messages.createdAt })
+      .from(messages)
+      .where(eq(messages.conversationId, conversation.id))
+      .orderBy(desc(messages.createdAt))
+      .limit(200)
+  ).reverse();
 
   return NextResponse.json({ messages: rows });
 }
@@ -161,13 +166,17 @@ export async function DELETE(request: Request) {
     return NextResponse.json({ ok: true, cleared: 0, memoryNote: null });
   }
 
-  // Consolidate BEFORE deleting — the transcript is the input.
-  const rows = await db
-    .select({ role: messages.role, content: messages.content })
-    .from(messages)
-    .where(eq(messages.conversationId, conversation.id))
-    .orderBy(asc(messages.createdAt))
-    .limit(200);
+  // Consolidate BEFORE deleting — the transcript is the input. NEWEST 200
+  // flipped chronological: the summary must capture the current state of
+  // work, not the conversation's opening (same oldest-window bug).
+  const rows = (
+    await db
+      .select({ role: messages.role, content: messages.content })
+      .from(messages)
+      .where(eq(messages.conversationId, conversation.id))
+      .orderBy(desc(messages.createdAt))
+      .limit(200)
+  ).reverse();
   const memoryNote = await consolidate(tenant.id, rows);
 
   const deleted = await db
