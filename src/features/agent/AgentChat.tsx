@@ -17,6 +17,20 @@ type Attachment = {
 };
 
 /**
+ * Live status of a turn running server-side, polled when this tab is NOT the
+ * one streaming it (Phase 29). A page refresh drops the stream but the run
+ * keeps going on the server — this is how a refreshed page shows it's alive.
+ */
+type RemoteStatus = {
+  active: boolean;
+  iteration: number;
+  lastTool: string | null;
+  elapsedMs: number;
+};
+
+const REMOTE_IDLE: RemoteStatus = { active: false, iteration: 0, lastTool: null, elapsedMs: 0 };
+
+/**
  * How close to the bottom you must be for the transcript to keep following a
  * streaming reply. Above this, you've scrolled up deliberately and we leave you
  * alone. ~120px ≈ a line or two of slack, so a small nudge doesn't unstick it.
@@ -94,6 +108,14 @@ const MessageBody = ({ text }: { text: string }) => (
   </div>
 );
 
+/** mm:ss from a millisecond duration — for the "… · 1:23 elapsed" indicator. */
+function fmtElapsed(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const mm = Math.floor(total / 60);
+  const ss = total % 60;
+  return `${mm}:${ss.toString().padStart(2, '0')}`;
+}
+
 /**
  * The agent console. Glass surface, gradient composer, tool activity shown as
  * live status chips rather than raw text.
@@ -112,12 +134,22 @@ export const AgentChat = (props: {
   const [loaded, setLoaded] = useState(false);
   const [pending, setPending] = useState<Attachment[]>([]);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  /**
+   * Server-side turn status (Phase 29). Populated by the poller below only
+   * when THIS tab isn't the one streaming (`!busy`); lets a refreshed page —
+   * which has no open stream — still show the run is alive and finish on it.
+   */
+  const [remote, setRemote] = useState<RemoteStatus>(REMOTE_IDLE);
   /** The transcript element. We scroll THIS, never the document. */
   const scrollRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
-  /** Aborting this fetch cancels the server stream, which halts the tool loop
-   * before its next iteration (Phase 26.1). In-flight tool calls finish. */
+  /** Aborting this fetch cancels the LOCAL stream read only. The server no
+   * longer treats that as Stop (Phase 29) — Stop is the explicit /stop POST. */
   const abortRef = useRef<AbortController | null>(null);
+  /** Was a remote turn active on the previous poll? Used to detect the
+   * active→inactive edge, which is when the finished message has landed and we
+   * should reload history. */
+  const wasRemoteActiveRef = useRef(false);
   /** Set when history is (re)loaded from scratch: jump to the newest message
    * unconditionally. Refreshing the page used to land you at the OLDEST
    * message because stickToBottom only follows when already near the bottom. */
@@ -240,6 +272,61 @@ export const AgentChat = (props: {
   }, [loadHistory]);
 
   /**
+   * Live turn poller (Phase 29). When this tab ISN'T the one streaming
+   * (`!busy`), poll the server for an in-flight turn every 5s. This is what
+   * makes a REFRESHED page — which lost its stream but not the run — show the
+   * agent still working, and reload the finished message when it lands.
+   *
+   * On the active→inactive edge (a turn we were watching just finished), pull
+   * the transcript so the completed reply appears. While `busy`, the stream is
+   * the source of truth and we don't poll at all.
+   */
+  useEffect(() => {
+    if (busy) {
+      // Our own stream is authoritative; clear any stale remote state.
+      setRemote(REMOTE_IDLE);
+      wasRemoteActiveRef.current = false;
+      return;
+    }
+
+    let cancelled = false;
+    const poll = () => {
+      fetch(`/api/agent/status?tenant=${encodeURIComponent(props.tenantSlug)}`)
+        .then(r => (r.ok ? r.json() : null))
+        .then((data) => {
+          if (cancelled || !data) {
+            return;
+          }
+          if (data.active) {
+            wasRemoteActiveRef.current = true;
+            setRemote({
+              active: true,
+              iteration: data.iteration ?? 0,
+              lastTool: data.lastTool ?? null,
+              elapsedMs: data.elapsedMs ?? 0,
+            });
+          } else {
+            setRemote(REMOTE_IDLE);
+            // Active → inactive: the turn we were watching just finished, so
+            // its message is now persisted — reload to show it.
+            if (wasRemoteActiveRef.current) {
+              wasRemoteActiveRef.current = false;
+              loadHistory(false);
+            }
+          }
+        })
+        .catch(() => {});
+    };
+
+    poll();
+    const interval = setInterval(poll, 5_000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [busy, props.tenantSlug, loadHistory]);
+
+  /**
    * Keep the transcript pinned to the bottom — WITHOUT moving the page.
    *
    * This used to be `bottomRef.current.scrollIntoView()`, which has a nasty
@@ -289,7 +376,9 @@ export const AgentChat = (props: {
   const send = async (e?: React.FormEvent) => {
     e?.preventDefault();
     const text = input.trim();
-    if (!text || busy) {
+    // Don't start a new turn while one is streaming here OR running server-side
+    // (a refresh could otherwise fire a second concurrent turn).
+    if (!text || busy || remote.active) {
       return;
     }
     // Don't send while an image is still uploading — the agent would answer
@@ -356,22 +445,13 @@ export const AgentChat = (props: {
         });
       }
     } catch (err) {
-      // A user Stop is not an error. The server halts after its current step
-      // and persists what ran, including its own [stopped] line — pull that
-      // truth in shortly rather than guessing at it here.
+      // A local abort is NOT a stop any more (Phase 29): the server keeps
+      // working after our stream closes. If the user really hit Stop, the
+      // explicit /stop POST handles it and the loop persists its own [stopped]
+      // line — so on an abort we just let the poller pick the run back up and
+      // reload history, rather than writing a misleading "stopped" line here.
       if (err instanceof DOMException && err.name === 'AbortError') {
-        setMsgs((prev) => {
-          const next = [...prev];
-          const last = next[next.length - 1];
-          if (last?.role === 'assistant') {
-            next[next.length - 1] = {
-              ...last,
-              content: `${last.content ? `${last.content}\n\n` : ''}[stopped] Stopping — the agent halts after its current step.`,
-            };
-          }
-          return next;
-        });
-        setTimeout(() => loadHistory(false), 4000);
+        setTimeout(() => loadHistory(false), 2000);
       } else {
         const msg = err instanceof Error ? err.message : 'Something went wrong.';
         setMsgs((prev) => {
@@ -389,9 +469,18 @@ export const AgentChat = (props: {
     }
   };
 
-  /** The Stop button. Aborts the stream; the server stops before its next
-   * tool call — an external call already in flight cannot be un-made. */
+  /**
+   * The Stop button. Sends the EXPLICIT stop signal to the server (Phase 29) —
+   * the loop halts before its next tool call and persists its own [stopped]
+   * line — and also aborts the local stream read so the UI unblocks instantly.
+   * A tool call already in flight cannot be un-made.
+   */
   const stop = () => {
+    fetch('/api/agent/stop', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tenantSlug: props.tenantSlug }),
+    }).catch(() => {});
     abortRef.current?.abort();
   };
 
@@ -454,6 +543,11 @@ export const AgentChat = (props: {
     'Show me our key metrics as panels',
   ];
 
+  // A turn is "in progress" for UI purposes when we're streaming it locally OR
+  // the server says one is live (refreshed page / other tab). Both disable the
+  // composer and show the Stop button.
+  const working = busy || remote.active;
+
   return (
     <div className="
       glass glass-topline relative flex h-[62vh] min-h-[440px] flex-col
@@ -472,7 +566,7 @@ export const AgentChat = (props: {
           {' '}
           {props.tenantName}
         </span>
-        {busy
+        {working
           ? (
               <span className="
                 ml-auto flex items-center gap-1.5 rounded-full border
@@ -481,7 +575,7 @@ export const AgentChat = (props: {
               "
               >
                 <span className="pulse-dot size-1.5 rounded-full bg-indigo-400" />
-                thinking
+                {busy ? 'thinking' : 'working'}
               </span>
             )
           : (
@@ -495,7 +589,7 @@ export const AgentChat = (props: {
                 online
               </span>
             )}
-        {msgs.length > 0 && !busy && (
+        {msgs.length > 0 && !working && (
           <button
             type="button"
             onClick={clearChat}
@@ -588,6 +682,32 @@ export const AgentChat = (props: {
             </div>
           </div>
         ))}
+
+        {/* Live remote-turn indicator (Phase 29): shown when a turn is running
+            server-side but this tab isn't the one streaming it — i.e. after a
+            refresh, or in a second tab. Reuses the typing-dots row so it reads
+            as "the agent is working" rather than a new message. */}
+        {remote.active && !busy && (
+          <div className="flex gap-2.5">
+            <span className="mt-0.5 shrink-0">
+              <AgentAvatar name={agentName} avatarUrl={props.agentAvatarUrl} accent={props.agentAccent} size={22} />
+            </span>
+            <div className="max-w-[85%] text-sm text-white/80">
+              <span className="flex items-center gap-2 py-1.5">
+                <span className="flex gap-1">
+                  <span className="size-1.5 animate-bounce rounded-full bg-indigo-400/80" />
+                  <span className="size-1.5 animate-bounce rounded-full bg-fuchsia-400/80 [animation-delay:120ms]" />
+                  <span className="size-1.5 animate-bounce rounded-full bg-indigo-300/80 [animation-delay:240ms]" />
+                </span>
+                <span className="text-[12px] text-white/50">
+                  {`Working — ${remote.iteration} tool call${remote.iteration === 1 ? '' : 's'}`}
+                  {remote.lastTool ? ` · last: ${remote.lastTool}` : ''}
+                  {` · ${fmtElapsed(remote.elapsedMs)} elapsed`}
+                </span>
+              </span>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Composer */}
@@ -650,15 +770,17 @@ export const AgentChat = (props: {
             }}
             onKeyDown={onKeyDown}
             onPaste={onPaste}
-            placeholder={`Message ${agentName === 'Agent' ? 'the agent' : agentName}…  (Enter to send, Shift+Enter for a new line)`}
+            placeholder={working
+              ? `${agentName === 'Agent' ? 'The agent' : agentName} is working…`
+              : `Message ${agentName === 'Agent' ? 'the agent' : agentName}…  (Enter to send, Shift+Enter for a new line)`}
             className="
               max-h-40 flex-1 resize-none bg-transparent py-1 text-sm
               text-white/90 outline-none
               placeholder:text-white/30
             "
-            disabled={busy}
+            disabled={working}
           />
-          {busy
+          {working
             ? (
                 <button
                   type="button"

@@ -195,9 +195,13 @@ many-step campaigns, anything you'd otherwise do "over the next while" — use \
 start_mission. Decompose the goal into ordered steps FIRST, each with \
 complete standalone instructions (the executor runs one step at a time with \
 NO memory of this chat, so a step like "continue from before" is useless — \
-spell out what to build and where). The platform then executes one step \
+spell out what to build and where). Size each step so it needs at most ~12 \
+tool calls: a step like "write and commit 3 articles" is right, "write 20 \
+articles" is wrong and will be cut off mid-work — use more, smaller steps \
+instead. The platform then executes one step \
 every few minutes in the background, pauses for a human if a step fails \
 twice, and survives cleared chats and restarts because the plan lives in the \
+
 database, not in your head. After starting one, tell the user it is running \
 in the background and roughly when to expect progress; when they ask about \
 background work, check list_missions / get_mission before answering. Do NOT \

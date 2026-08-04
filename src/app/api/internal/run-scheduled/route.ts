@@ -35,10 +35,12 @@ import { buildMissionTools } from '@/libs/agent/missionTools';
 import { resolveAgentForTenant } from '@/libs/agent/persona';
 import { buildPlatformTools } from '@/libs/agent/platformTools';
 import { buildSystemPrompt } from '@/libs/agent/prompt';
+import { markTick } from '@/libs/agent/runnerHealth';
 import { captureIssue } from '@/libs/support/issues';
 import { db } from '@/libs/DB';
 import { buildTenantToolset } from '@/libs/mcp/registry';
 import { missions, missionSteps, scheduledTasks, tenants } from '@/models/Schema';
+
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -69,13 +71,16 @@ async function assembleToolset(tenantId: string) {
   try {
     mcpToolset = await buildTenantToolset(tenantId);
   } catch {
-    mcpToolset = { anthropicTools: [], failedConnections: [], resolve: () => null };
+    mcpToolset = { anthropicTools: [], failedConnections: [], resolve: () => null, deferredSummary: '' };
   }
   const platform = buildPlatformTools(tenantId);
   const mission = buildMissionTools(tenantId);
   return {
     anthropicTools: [...platform.anthropicTools, ...mission.anthropicTools, ...mcpToolset.anthropicTools],
     failedConnections: mcpToolset.failedConnections,
+    // Surface deferred MCP collections (Phase 29) so the mission/task prompt can
+    // tell the model they exist and how to load them.
+    deferredSummary: mcpToolset.deferredSummary,
     resolve: (name: string) => {
       const p = platform.executors.get(name) ?? mission.executors.get(name);
       if (p) {
@@ -86,13 +91,19 @@ async function assembleToolset(tenantId: string) {
   };
 }
 
+
 export async function POST(request: Request) {
   const secret = process.env.CRON_SECRET;
   if (!secret || secret.length < 16 || request.headers.get('x-cron-secret') !== secret) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
+  // Runner heartbeat (Phase 29): record that a tick happened so the Missions
+  // panel can show "runner ticked Xm ago" and flag a stalled cron.
+  markTick();
+
   const tickStartedAt = Date.now();
+
 
   const due = await db
     .select()
@@ -129,7 +140,7 @@ export async function POST(request: Request) {
       // Same employee runs the 3am mission as runs the chat — with the same
       // standing workspace memory (Phase 28).
       const agent = await resolveAgentForTenant(tenant.id);
-      const system = `${buildSystemPrompt({ tenant: { ...tenant, role: 'owner' }, agent, memory: tenant.agentMemory })}
+      let system = `${buildSystemPrompt({ tenant: { ...tenant, role: 'owner' }, agent, memory: tenant.agentMemory })}
 
 This is an AUTOMATED SCHEDULED RUN of your standing task "${task.name}" — no
 human is watching live. Do the work now with your tools. Anything requiring
@@ -137,6 +148,11 @@ approval will queue in the Approvals inbox. Keep the final summary short; it
 is stored as the run's result. If useful, record progress via write_dataset.
 If your tool budget runs out mid-task, summarise honestly what remains — the
 platform will requeue you within minutes to continue from that summary.`;
+      // Deferred MCP collections (Phase 29): tell the model they exist + how to load.
+      if (toolset.deferredSummary) {
+        system += `\nSome tool collections are DEFERRED to keep context small: ${toolset.deferredSummary}. Call load_connection_tools with the connection name before using them.`;
+      }
+
 
       // A continuation run starts from the previous run's honest wrap-up
       // instead of cold — the [continuing] marker is set below only when the
@@ -256,7 +272,7 @@ Check the current workspace state with your read tools (list_views, list_panels,
 
       const toolset = await assembleToolset(tenant.id);
       const agent = await resolveAgentForTenant(tenant.id);
-      const system = `${buildSystemPrompt({ tenant: { ...tenant, role: 'owner' }, agent, memory: tenant.agentMemory })}
+      let system = `${buildSystemPrompt({ tenant: { ...tenant, role: 'owner' }, agent, memory: tenant.agentMemory })}
 
 This is an AUTOMATED MISSION STEP RUN — no human is watching live. You are
 executing ONE step of the mission "${mission.title}" (goal: ${mission.goal.slice(0, 500)}).
@@ -269,6 +285,11 @@ for approval, note it and finish what else you can. Keep the final summary
 short and concrete (what was produced, where) — it is stored as the step's
 result. If your tool budget runs out, summarise honestly what remains; the
 platform will continue this step on the next run.`;
+      // Deferred MCP collections (Phase 29): tell the model they exist + how to load.
+      if (toolset.deferredSummary) {
+        system += `\nSome tool collections are DEFERRED to keep context small: ${toolset.deferredSummary}. Call load_connection_tools with the connection name before using them.`;
+      }
+
 
       const userText = resuming
         ? `Step ${step.position + 1}: ${step.title}

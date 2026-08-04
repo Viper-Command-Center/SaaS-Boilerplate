@@ -25,6 +25,15 @@ export type AnthropicTool = {
   input_schema: Record<string, unknown>;
 };
 
+/** The executor + policy behind a namespaced tool name. */
+type ExecutorEntry = {
+  connectionId: string;
+  connectionName: string;
+  toolName: string;
+  policy: ToolPolicy;
+  call: (args: Record<string, unknown>) => Promise<string>;
+};
+
 export type TenantToolset = {
   /** Tools in Anthropic Messages API format, ready for the `tools` param. */
   anthropicTools: AnthropicTool[];
@@ -38,6 +47,14 @@ export type TenantToolset = {
   } | null;
   /** Names of connections that failed to respond (surfaced to the model). */
   failedConnections: string[];
+  /**
+   * One-line summary of tool collections DEFERRED to keep context small
+   * (Phase 29). Empty string when nothing was deferred. Surfaced into the
+   * system prompt by every assembler so the model knows they exist and how to
+   * load them, e.g.:
+   *   "zernio (51 tools: posts-create, …), diviops (74 tools: …)"
+   */
+  deferredSummary: string;
 };
 
 const NAME_RE = /^mcp__([a-z0-9-]+)__(.+)$/i;
@@ -133,6 +150,20 @@ export function applyUrlSecret(
   };
 }
 
+// ── Deferred tool loading (Phase 29 token diet) ─────────────────────────────
+// The full tool catalog (~77k tokens; Zernio alone is 51 schemas, DiviOps 74)
+// used to be re-sent on EVERY model call even when unused — the single biggest
+// cost lever. Now: a connection with ≥ DEFER_THRESHOLD tools ships NO schemas
+// up front; instead its tools are stashed and a single meta-tool
+// `load_connection_tools` pulls them into the live tools array on demand. The
+// deferral is a pure token optimization — resolve() auto-loads on first use, so
+// a model that calls a deferred tool without loading it first still works.
+const DEFER_THRESHOLD = 10;
+const LOAD_TOOLS_META_NAME = 'load_connection_tools';
+
+/** A tool prepared for a connection: its API def + its executor. */
+type PreparedTool = { toolName: string; def: AnthropicTool; executor: ExecutorEntry };
+
 export async function buildTenantToolset(tenantId: string): Promise<TenantToolset> {
   const connections = await db
     .select()
@@ -150,13 +181,54 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
 
   const anthropicTools: AnthropicTool[] = [];
   const failedConnections: string[] = [];
-  const executors = new Map<string, {
-    connectionId: string;
-    connectionName: string;
-    toolName: string;
-    policy: ToolPolicy;
-    call: (args: Record<string, unknown>) => Promise<string>;
-  }>();
+  const executors = new Map<string, ExecutorEntry>();
+
+  // Deferred connections: their prepared tools, kept out of anthropicTools
+  // until load_connection_tools (or resolve auto-load) pulls them in.
+  const deferralEnabled = process.env.DISABLE_TOOL_DEFERRAL !== '1';
+  const deferredGroups: Array<{ connectionName: string; sanitized: string; prepared: PreparedTool[] }> = [];
+
+  /**
+   * Take a connection's prepared tools and either ship them now or defer them.
+   * A connection at/above the threshold is deferred (when deferral is on);
+   * everything else is added to the live arrays immediately.
+   */
+  function commitConnectionTools(connectionName: string, prepared: PreparedTool[]): void {
+    if (deferralEnabled && prepared.length >= DEFER_THRESHOLD) {
+      deferredGroups.push({ connectionName, sanitized: sanitize(connectionName), prepared });
+      return;
+    }
+    for (const p of prepared) {
+      anthropicTools.push(p.def);
+      executors.set(p.def.name, p.executor);
+    }
+  }
+
+  /**
+   * Pull a deferred group's tools into the LIVE arrays. Mutating the same
+   * `anthropicTools` instance is deliberate: the loop passes
+   * `a.toolset.anthropicTools` on every call, so the newly-added schemas take
+   * effect on the model's next step. Expanding a group busts the tools+system
+   * cache prefix once — an accepted trade for not shipping 77k idle tokens
+   * every turn. Returns the loaded group (or null if there was none).
+   */
+  function loadDeferredGroup(
+    match: (g: { connectionName: string; sanitized: string }) => boolean,
+  ): { connection: string; names: string[] } | null {
+    const idx = deferredGroups.findIndex(match);
+    if (idx === -1) {
+      return null;
+    }
+    const [group] = deferredGroups.splice(idx, 1);
+    if (!group) {
+      return null;
+    }
+    for (const p of group.prepared) {
+      anthropicTools.push(p.def);
+      executors.set(p.def.name, p.executor);
+    }
+    return { connection: group.connectionName, names: group.prepared.map(p => p.toolName) };
+  }
 
   for (const conn of connections) {
     // ── Built-in (tier-1) provider: in-app adapter, platform credential,
@@ -209,6 +281,7 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
         const rules = (entry.priceRules ?? {}) as Record<string, PriceRule>;
         const policyMap = (conn.toolPolicy ?? {}) as Record<string, ToolPolicy>;
 
+        const prepared: PreparedTool[] = [];
         for (const tool of provider.tools) {
           const namespaced = namespacedToolName(conn.name, tool.name);
           if (!namespaced) {
@@ -217,72 +290,76 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
             failedConnections.push(`${conn.name} (built-in tool "${tool.name}" has an unusable name)`);
             continue;
           }
-          anthropicTools.push({
-            name: namespaced,
-            description: tool.description,
-            input_schema: tool.input_schema,
-          });
-          executors.set(namespaced, {
-            connectionId: conn.id,
-            connectionName: conn.name,
+          prepared.push({
             toolName: tool.name,
-            // Per-tool wins; `*` is the connection-wide default; approval is the
-          // fallback. The wildcard exists because per-tool config is unusable
-          // at scale — Zernio alone exposes 51 tools, and nobody is setting 51
-          // switches to say "I trust this vendor".
-          policy: policyMap[tool.name] ?? policyMap['*'] ?? 'approval',
-            call: async (args) => {
-              const raw = await provider.call(tool.name, args, apiKey, target);
-              const result = typeof raw === 'string' ? { output: raw } : raw;
+            def: {
+              name: namespaced,
+              description: tool.description,
+              input_schema: tool.input_schema,
+            },
+            executor: {
+              connectionId: conn.id,
+              connectionName: conn.name,
+              toolName: tool.name,
+              // Per-tool wins; `*` is the connection-wide default; approval is the
+              // fallback. The wildcard exists because per-tool config is unusable
+              // at scale — Zernio alone exposes 51 tools, and nobody is setting 51
+              // switches to say "I trust this vendor".
+              policy: policyMap[tool.name] ?? policyMap['*'] ?? 'approval',
+              call: async (args) => {
+                const raw = await provider.call(tool.name, args, apiKey, target);
+                const result = typeof raw === 'string' ? { output: raw } : raw;
 
-              // An async job that outran our poll window WILL still be billed
-              // by the provider — flag it (Issues inbox, provider-class so it
-              // logs without emailing) instead of recording a silent $0.
-              if (result.pendingReconcile) {
-                await captureIssue({
-                  tenantId,
-                  source: `${entry.slug}:${tool.name} (unbilled — job still running)`,
-                  error: new Error(`Kie job ${result.pendingReconcile} exceeded the poll window; credits consumed are not yet billed. Reconcile via recordInfo.`),
-                  detail: { taskId: result.pendingReconcile, slug: entry.slug, tool: tool.name },
-                  forceKind: 'provider', // log it, but don't email — it's expected, not a bug
-                }).catch(() => {});
-              }
-
-              // Meter AFTER a successful call (failed jobs aren't charged).
-              // `units` = what the provider says it actually consumed (Kie.ai
-              // returns creditsConsumed), so usage-priced plugins bill exactly.
-              const rule = rules[tool.name];
-              if (rule && result.units !== undefined) {
-                await meterPlugin({
-                  tenantId,
-                  slug: entry.slug,
-                  tool: tool.name,
-                  rule,
-                  args,
-                  reportedUnits: result.units,
-                });
-              }
-
-              // Generated media expires at the provider (Kie.ai: 14 days) —
-              // archive it into the workspace library so published links live.
-              if (result.assetUrls?.length) {
-                const saved = await archiveGeneratedAssets({
-                  tenantId,
-                  urls: result.assetUrls,
-                  source: entry.slug,
-                  meta: { tool: tool.name, args },
-                }).catch(() => []);
-                if (saved.length > 0) {
-                  return `${result.output}\n\nArchived to the workspace file library (permanent links — use these, not the provider URLs):\n${
-                    saved.map(s => `- ${s.name}: ${s.url ?? `/api/files/${s.id}/content`}`).join('\n')
-                  }`;
+                // An async job that outran our poll window WILL still be billed
+                // by the provider — flag it (Issues inbox, provider-class so it
+                // logs without emailing) instead of recording a silent $0.
+                if (result.pendingReconcile) {
+                  await captureIssue({
+                    tenantId,
+                    source: `${entry.slug}:${tool.name} (unbilled — job still running)`,
+                    error: new Error(`Kie job ${result.pendingReconcile} exceeded the poll window; credits consumed are not yet billed. Reconcile via recordInfo.`),
+                    detail: { taskId: result.pendingReconcile, slug: entry.slug, tool: tool.name },
+                    forceKind: 'provider', // log it, but don't email — it's expected, not a bug
+                  }).catch(() => {});
                 }
-              }
 
-              return result.output;
+                // Meter AFTER a successful call (failed jobs aren't charged).
+                // `units` = what the provider says it actually consumed (Kie.ai
+                // returns creditsConsumed), so usage-priced plugins bill exactly.
+                const rule = rules[tool.name];
+                if (rule && result.units !== undefined) {
+                  await meterPlugin({
+                    tenantId,
+                    slug: entry.slug,
+                    tool: tool.name,
+                    rule,
+                    args,
+                    reportedUnits: result.units,
+                  });
+                }
+
+                // Generated media expires at the provider (Kie.ai: 14 days) —
+                // archive it into the workspace library so published links live.
+                if (result.assetUrls?.length) {
+                  const saved = await archiveGeneratedAssets({
+                    tenantId,
+                    urls: result.assetUrls,
+                    source: entry.slug,
+                    meta: { tool: tool.name, args },
+                  }).catch(() => []);
+                  if (saved.length > 0) {
+                    return `${result.output}\n\nArchived to the workspace file library (permanent links — use these, not the provider URLs):\n${
+                      saved.map(s => `- ${s.name}: ${s.url ?? `/api/files/${s.id}/content`}`).join('\n')
+                    }`;
+                  }
+                }
+
+                return result.output;
+              },
             },
           });
         }
+        commitConnectionTools(conn.name, prepared);
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'unavailable';
         failedConnections.push(`${conn.name} (${msg.slice(0, 120)})`);
@@ -319,38 +396,43 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
         // 🔴 tool.name is THIRD-PARTY DATA — same rule as the http branch:
         // one illegal name must never poison the shared tools array.
         const skipped: string[] = [];
+        const prepared: PreparedTool[] = [];
         for (const tool of tools) {
           const namespaced = namespacedToolName(conn.name, tool.name);
           if (!namespaced) {
             skipped.push(tool.name);
             continue;
           }
-          anthropicTools.push({
-            name: namespaced,
-            description: (tool.description ?? tool.name).slice(0, 1000),
-            input_schema: tool.inputSchema ?? { type: 'object', properties: {} },
-          });
-          executors.set(namespaced, {
-            connectionId: conn.id,
-            connectionName: conn.name,
+          prepared.push({
             toolName: tool.name,
-            // Safe by default: per-tool wins; `*` is the connection-wide
-            // default; approval is the fallback. Especially right here —
-            // DiviOps exposes 74 tools that WRITE to a client's live site.
-            policy: policyMap[tool.name] ?? policyMap['*'] ?? 'approval',
-            call: async (args) => {
-              const result = await client.callTool(tool.name, args);
-              const text = result.content
-                .map(c => (c.type === 'text' ? c.text ?? '' : `[${c.type}]`))
-                .join('\n')
-                .slice(0, 20_000);
-              if (result.isError) {
-                throw new Error(text || 'Tool reported an error.');
-              }
-              return text || '(no output)';
+            def: {
+              name: namespaced,
+              description: (tool.description ?? tool.name).slice(0, 1000),
+              input_schema: tool.inputSchema ?? { type: 'object', properties: {} },
+            },
+            executor: {
+              connectionId: conn.id,
+              connectionName: conn.name,
+              toolName: tool.name,
+              // Safe by default: per-tool wins; `*` is the connection-wide
+              // default; approval is the fallback. Especially right here —
+              // DiviOps exposes 74 tools that WRITE to a client's live site.
+              policy: policyMap[tool.name] ?? policyMap['*'] ?? 'approval',
+              call: async (args) => {
+                const result = await client.callTool(tool.name, args);
+                const text = result.content
+                  .map(c => (c.type === 'text' ? c.text ?? '' : `[${c.type}]`))
+                  .join('\n')
+                  .slice(0, 20_000);
+                if (result.isError) {
+                  throw new Error(text || 'Tool reported an error.');
+                }
+                return text || '(no output)';
+              },
             },
           });
         }
+        commitConnectionTools(conn.name, prepared);
         if (skipped.length > 0) {
           failedConnections.push(
             `${conn.name} (${skipped.length} tool(s) unavailable — names are too long or use unsupported characters: ${skipped.slice(0, 5).join(', ')})`,
@@ -396,45 +478,50 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
       // rejected as a whole — killing every tool in the workspace while this
       // connection still looked healthy. Skip the offender, name it, keep going.
       const skipped: string[] = [];
+      const prepared: PreparedTool[] = [];
       for (const tool of tools) {
         const namespaced = namespacedToolName(conn.name, tool.name);
         if (!namespaced) {
           skipped.push(tool.name);
           continue;
         }
-        anthropicTools.push({
-          name: namespaced,
-          description: (tool.description ?? tool.name).slice(0, 1000),
-          input_schema: tool.inputSchema ?? { type: 'object', properties: {} },
-        });
-        executors.set(namespaced, {
-          connectionId: conn.id,
-          connectionName: conn.name,
+        prepared.push({
           toolName: tool.name,
-          // Safe by default: tools without an explicit policy need approval.
-          // Per-tool wins; `*` is the connection-wide default; approval is the
-          // fallback. The wildcard exists because per-tool config is unusable
-          // at scale — Zernio alone exposes 51 tools, and nobody is setting 51
-          // switches to say "I trust this vendor".
-          policy: policyMap[tool.name] ?? policyMap['*'] ?? 'approval',
-          call: async (args) => {
-            const result = await client.callTool(tool.name, args);
-            const text = result.content
-              .map(c => (c.type === 'text' ? c.text ?? '' : `[${c.type}]`))
-              .join('\n')
-              .slice(0, 20_000);
-            if (result.isError) {
-              throw new Error(text || 'Tool reported an error.');
-            }
-            // Meter AFTER success (a thrown error above is never billed).
-            const rule = httpRules[tool.name];
-            if (rule) {
-              await meterPlugin({ tenantId, slug: httpSlug, tool: tool.name, rule, args });
-            }
-            return text || '(no output)';
+          def: {
+            name: namespaced,
+            description: (tool.description ?? tool.name).slice(0, 1000),
+            input_schema: tool.inputSchema ?? { type: 'object', properties: {} },
+          },
+          executor: {
+            connectionId: conn.id,
+            connectionName: conn.name,
+            toolName: tool.name,
+            // Safe by default: tools without an explicit policy need approval.
+            // Per-tool wins; `*` is the connection-wide default; approval is the
+            // fallback. The wildcard exists because per-tool config is unusable
+            // at scale — Zernio alone exposes 51 tools, and nobody is setting 51
+            // switches to say "I trust this vendor".
+            policy: policyMap[tool.name] ?? policyMap['*'] ?? 'approval',
+            call: async (args) => {
+              const result = await client.callTool(tool.name, args);
+              const text = result.content
+                .map(c => (c.type === 'text' ? c.text ?? '' : `[${c.type}]`))
+                .join('\n')
+                .slice(0, 20_000);
+              if (result.isError) {
+                throw new Error(text || 'Tool reported an error.');
+              }
+              // Meter AFTER success (a thrown error above is never billed).
+              const rule = httpRules[tool.name];
+              if (rule) {
+                await meterPlugin({ tenantId, slug: httpSlug, tool: tool.name, rule, args });
+              }
+              return text || '(no output)';
+            },
           },
         });
       }
+      commitConnectionTools(conn.name, prepared);
       if (skipped.length > 0) {
         // Honest and specific: the agent is told which capabilities it does NOT
         // have and why, instead of silently missing them (or, worse, the whole
@@ -449,15 +536,81 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
     }
   }
 
+  // ── Meta-tool + summary for the deferred groups ───────────────────────────
+  // Only when something was actually deferred: add ONE tool the model can call
+  // to pull a collection's schemas into play, and build the one-line summary
+  // the assemblers append to the system prompt.
+  let deferredSummary = '';
+  if (deferredGroups.length > 0) {
+    deferredSummary = deferredGroups
+      .map((g) => {
+        const names = g.prepared.map(p => p.toolName);
+        const first = names.slice(0, 8).join(', ');
+        return `${g.connectionName} (${names.length} tools: ${first}${names.length > 8 ? ', …' : ''})`;
+      })
+      .join(', ');
+
+    anthropicTools.push({
+      name: LOAD_TOOLS_META_NAME,
+      description: 'Load the full tool schemas for a DEFERRED connection into play. Large tool collections are hidden by default to keep context small; call this once with the connection name (as listed in the "DEFERRED" note in your instructions) before using that connection\'s tools. The tools become available on your NEXT step.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          connection: { type: 'string', description: 'The connection name, e.g. "zernio" or "diviops".' },
+        },
+        required: ['connection'],
+      },
+    });
+    executors.set(LOAD_TOOLS_META_NAME, {
+      connectionId: '',
+      connectionName: 'platform',
+      toolName: LOAD_TOOLS_META_NAME,
+      policy: 'auto',
+      call: async (args) => {
+        const requested = String((args as Record<string, unknown>).connection ?? '').trim();
+        if (!requested) {
+          return 'load_connection_tools needs a connection name.';
+        }
+        const wanted = requested.toLowerCase();
+        const wantedSanitized = sanitize(requested);
+        const loaded = loadDeferredGroup(
+          g => g.connectionName.toLowerCase() === wanted || g.sanitized === wantedSanitized,
+        );
+        if (!loaded) {
+          const remaining = deferredGroups.map(g => g.connectionName);
+          return remaining.length > 0
+            ? `No deferred collection named "${requested}". Already loaded, or unknown. Deferred collections still available: ${remaining.join(', ')}.`
+            : `No deferred collection named "${requested}" — everything is already loaded.`;
+        }
+        const preview = loaded.names.slice(0, 12).join(', ');
+        return `Loaded ${loaded.names.length} tools from ${loaded.connection}: ${preview}${loaded.names.length > 12 ? ', …' : ''}. They are available from your next step.`;
+      },
+    });
+  }
+
   return {
     anthropicTools,
     failedConnections,
+    deferredSummary,
     resolve: (namespacedName) => {
       const match = NAME_RE.exec(namespacedName);
       if (!match) {
         return null;
       }
-      return executors.get(namespacedName) ?? null;
+      const found = executors.get(namespacedName);
+      if (found) {
+        return found;
+      }
+      // Not loaded yet — but it might belong to a DEFERRED collection. The
+      // deferral is a token optimization, never a functional wall: auto-load
+      // the owning group (matched by the sanitized connection segment) and
+      // retry, so a model that skipped load_connection_tools still works.
+      const connSegment = match[1] ?? '';
+      const loaded = loadDeferredGroup(g => g.sanitized === connSegment);
+      if (loaded) {
+        return executors.get(namespacedName) ?? null;
+      }
+      return null;
     },
   };
 }

@@ -170,6 +170,30 @@ expect('src/app/api/agent/history/route.ts', 'chat-memory-', 'clearing a chat mu
 forbid('src/libs/mcp/stdioClient.ts', '...process.env', 'child MCP processes must NEVER inherit the app env (DB creds, vault master key)');
 expect('src/libs/mcp/stdioCatalog.ts', 'STDIO_SERVERS', 'stdio spawning must go through the hardcoded allowlist — never user input');
 
+// ── Stop decoupling + live turn status (Phase 29 — "refreshing the page KILLED
+// the running task"). The stream was the ONLY thing driving the loop, so a
+// browser refresh / tab close / network blip aborted the fetch and the work
+// silently died. Stop is now an explicit server signal; the turn runs
+// independent of the socket; a poller shows live progress that survives
+// refresh. ──────────────────────────────────────────────────────────────────
+expect('src/app/api/agent/chat/route.ts', 'isStopRequested', 'chat loop must stop on an explicit server signal, not a dropped socket');
+forbid('src/app/api/agent/chat/route.ts', 'cancelled = true', 'stream cancel (refresh/close) must NOT abort the turn — that is the incident');
+expect('src/app/api/agent/stop/route.ts', 'requestStop', 'explicit Stop endpoint must flag the active turn to halt');
+expect('src/app/api/agent/status/route.ts', 'getTurn', 'live turn status must be pollable so progress survives a refresh');
+expect('src/features/agent/AgentChat.tsx', 'lastTool', 'chat must render live remote progress (iteration + last tool)');
+
+// ── Token diet (Phase 29 — context bloat burned budget + hit limits) ────────
+expect('src/libs/agent/loop.ts', 'elided to save context', 'old tool results must be evicted from the running context, not resent forever');
+expect('src/libs/mcp/registry.ts', 'load_connection_tools', 'big MCP tool collections defer behind a loader instead of bloating every prompt');
+expect('src/libs/agent/missionTools.ts', '12 tool calls', 'start_mission must steer the model to right-sized steps (not "write 20 articles")');
+
+// ── Runner health surfaced to humans (Phase 29 — a dead cron looked like a
+// stuck mission). ────────────────────────────────────────────────────────────
+expect('src/libs/agent/runnerHealth.ts', 'markTick', 'the runner must record a heartbeat the dashboard can read');
+expect('src/app/api/internal/run-scheduled/route.ts', 'markTick', 'every tick must stamp the heartbeat');
+expect('src/features/agent/MissionsPanel.tsx', 'lastTickAt', 'missions panel must show runner health, not just per-mission progress');
+
+
 // ── Report ──────────────────────────────────────────────────────────────────
 if (failures.length > 0) {
   console.error(`\n✗ agent-evals: ${failures.length} of ${checks} tripwires FAILED\n`);

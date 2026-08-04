@@ -6,16 +6,21 @@
  * incrementally). History is loaded server-side from the conversation store —
  * the client never supplies past messages.
  *
- * STOP (Phase 26.1): when the client aborts the fetch (Stop button, closed
- * tab), the stream's cancel() fires; the tool loop checks that flag before
- * every iteration and halts — no new model calls, no new paid tool calls.
- * Whatever streamed before the stop is still persisted as the assistant
- * message, so the transcript stays honest about what actually ran.
+ * STOP (Phase 29): Stop is now an EXPLICIT signal, not a client disconnect.
+ * A page REFRESH aborts the stream too, and the old code treated that abort as
+ * Stop (cancel() set a flag the loop read) — so a user refreshing to check on a
+ * long task was silently KILLING the run. Now: the loop reads the activeTurns
+ * registry (isStopRequested), which is only set by POST /api/agent/stop; the
+ * stream's cancel() is a documented no-op. Disconnect is harmless — the handler
+ * keeps running on Railway (Node doesn't kill the handler when the client goes
+ * away), the message is persisted in the finally block, and a refreshed page
+ * picks the live turn back up via GET /api/agent/status.
  */
 
 import { and, desc, eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
+import { beginTurn, endTurn, isStopRequested, noteProgress } from '@/libs/agent/activeTurns';
 import { runToolLoop } from '@/libs/agent/loop';
 import { buildMissionTools } from '@/libs/agent/missionTools';
 import { resolveAgentForTenant } from '@/libs/agent/persona';
@@ -163,14 +168,16 @@ export async function POST(request: Request) {
   try {
     mcpToolset = await buildTenantToolset(tenant.id);
   } catch {
-    mcpToolset = { anthropicTools: [], failedConnections: [], resolve: () => null };
+    mcpToolset = { anthropicTools: [], failedConnections: [], resolve: () => null, deferredSummary: '' };
   }
   const platform = buildPlatformTools(tenant.id);
   const mission = buildMissionTools(tenant.id);
   const toolset = {
     anthropicTools: [...platform.anthropicTools, ...mission.anthropicTools, ...mcpToolset.anthropicTools],
     failedConnections: mcpToolset.failedConnections,
+    deferredSummary: mcpToolset.deferredSummary,
     resolve: (name: string) => {
+
       const p = platform.executors.get(name) ?? mission.executors.get(name);
       if (p) {
         return { connectionId: '', connectionName: 'platform', toolName: name, policy: p.policy, call: p.call };
@@ -197,6 +204,15 @@ export async function POST(request: Request) {
     system += `\n${imageTrustNote()}`;
   }
 
+  // Deferred tool collections (Phase 29 token diet): big connections (≥10
+  // tools) are not shipped as schemas until the model calls load_connection_tools.
+  // Tell it plainly they exist and how to load them — same conditional-append
+  // pattern as imageTrustNote() above, so the system-cache prefix only carries
+  // this when there is actually something deferred.
+  if (mcpToolset.deferredSummary) {
+    system += `\nSome tool collections are DEFERRED to keep context small: ${mcpToolset.deferredSummary}. Call load_connection_tools with the connection name before using them.`;
+  }
+
   // ── Failed connections ────────────────────────────────────────────────────
   // 🔴 This note used to be appended to `system`, which put it INSIDE the
   // cache_control breakpoint that caches the ~77k-token tools+system prefix.
@@ -219,9 +235,10 @@ export async function POST(request: Request) {
     });
   }
 
-  // Set by the stream's cancel() when the client aborts (Stop button / closed
-  // tab). The loop reads it before every iteration.
-  let cancelled = false;
+  // ── Turn registry (Phase 29) ──────────────────────────────────────────────
+  // Register this turn BEFORE running the loop so a Stop request (POST
+  // /api/agent/stop) and a status poll (GET /api/agent/status) can find it.
+  beginTurn(conversationId, tenant.id);
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
@@ -230,7 +247,7 @@ export async function POST(request: Request) {
       const onDelta = (delta: string) => {
         full += delta;
         // After a client abort, enqueue() throws — but `full` must keep
-        // accumulating so the persisted message includes the [stopped] line.
+        // accumulating so the persisted message includes any trailing lines.
         try {
           controller.enqueue(encoder.encode(delta));
         } catch {
@@ -249,18 +266,26 @@ export async function POST(request: Request) {
           userBlocks: [...notices, ...userBlocks],
           toolset,
           onDelta,
-          shouldStop: () => cancelled,
+          // Stop is now EXPLICIT: only a POST /api/agent/stop sets this. A
+          // client disconnect (refresh/close) no longer stops the run.
+          shouldStop: () => isStopRequested(conversationId),
+          // Live progress → registry, so a refreshed page shows the turn alive.
+          onProgress: (i, t) => noteProgress(conversationId, i, t),
         });
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'Agent error';
         onDelta(`\n\n[error] ${msg}`);
       } finally {
+        // The message-persistence finally runs even after a client disconnect —
+        // on Railway the Node handler keeps executing, so a refreshed user
+        // picks the finished message up from history (loadHistory()).
         if (full.trim()) {
           await db
             .insert(messages)
             .values({ conversationId, role: 'assistant', content: full })
             .catch(() => {});
         }
+        endTurn(conversationId);
         try {
           controller.close();
         } catch {
@@ -269,7 +294,10 @@ export async function POST(request: Request) {
       }
     },
     cancel() {
-      cancelled = true;
+      // Client went away (refresh / closed tab). DELIBERATE no-op: keep working.
+      // The message persists via the finally block above and the user picks it
+      // up from history. Stopping is now the explicit /api/agent/stop signal —
+      // a disconnect must NOT kill the run (the Phase 29 refresh-kills-work fix).
     },
   });
 

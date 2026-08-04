@@ -31,6 +31,14 @@ import { approvals, auditLog } from '@/models/Schema';
 const DEFAULT_MAX_ITERATIONS = 24;
 const DEFAULT_WALL_CLOCK_MS = 4 * 60_000; // stay under typical route limits
 
+// Phase 29 token diet — tool-result eviction.
+// Keep the full text of only the most recent tool results; older ones get
+// elided. Long turns otherwise re-send every old tool result on EVERY
+// iteration, which is pure waste once the model has already read them.
+const KEEP_RECENT_TOOL_RESULT_MESSAGES = 6;
+const EVICT_MIN_CHARS = 2_000;
+const EVICTED_PLACEHOLDER = '[tool result elided to save context — call the tool again if you need it]';
+
 export type ToolLoopResult = {
   /** Everything streamed to the user (text + status lines). */
   text: string;
@@ -73,6 +81,13 @@ export async function runToolLoop(a: {
    * API call can't be un-made), but nothing new starts.
    */
   shouldStop?: () => boolean;
+  /**
+   * Called at the top of every iteration with the running iteration count and
+   * the tool executed on the PREVIOUS iteration (null on the first). Feeds the
+   * activeTurns registry (Phase 29) so a refreshed page can show a live
+   * "Working — N tool calls · last: X" indicator instead of looking dead.
+   */
+  onProgress?: (iteration: number, lastTool: string | null) => void;
 }): Promise<ToolLoopResult> {
   const maxIterations = a.maxIterations ?? DEFAULT_MAX_ITERATIONS;
   const wallClockMs = a.wallClockMs ?? DEFAULT_WALL_CLOCK_MS;
@@ -108,8 +123,15 @@ export async function runToolLoop(a: {
   let exhausted = false;
   // Consecutive max_tokens truncations — see the recovery block below.
   let truncations = 0;
+  // The tool executed on the PREVIOUS iteration (null on the first). Surfaced
+  // to the activeTurns registry via onProgress so a refreshed page can show
+  // what the agent is doing right now.
+  let lastTool: string | null = null;
 
   for (let i = 0; ; i++) {
+    // Progress ping (Phase 29): iteration count + the tool run last iteration.
+    a.onProgress?.(i, lastTool);
+
     // ── User stop (Phase 26.1) ───────────────────────────────────────────────
     // The human hit Stop or closed the stream. Stop BEFORE anything new runs —
     // especially before another paid tool call — and say so in the transcript
@@ -215,6 +237,7 @@ export async function runToolLoop(a: {
       const name = use.name ?? '';
       const args = use.input ?? {};
       const resolved = a.toolset.resolve(name);
+      lastTool = name; // most recent tool the agent chose this turn
 
       let resultText: string;
       let isError = false;
@@ -294,6 +317,19 @@ export async function runToolLoop(a: {
     }
 
     messages.push({ role: 'user', content: toolResults });
+
+    // ── Tool-result eviction (Phase 29 token diet) ───────────────────────────
+    // A long turn re-sends every prior tool result on every iteration. Once the
+    // model has read a large result, keeping its full text around costs input
+    // tokens forever. So after appending this iteration's results, elide the
+    // BODY of tool_result blocks in all but the most recent
+    // KEEP_RECENT_TOOL_RESULT_MESSAGES user messages that carry them — but only
+    // when the original content is long (> EVICT_MIN_CHARS), and NEVER remove
+    // or reorder a block: the API requires every tool_use to keep a matching
+    // tool_result, so we swap the content string and nothing else.
+    // This busts the message-suffix cache once per eviction — strictly cheaper
+    // than dragging the full payload through every remaining iteration.
+    evictOldToolResults(messages);
   }
 
   // ── Honest exhaustion wrap-up ─────────────────────────────────────────────
@@ -349,6 +385,48 @@ export async function runToolLoop(a: {
   }
 
   return { text: finalText, exhausted };
+}
+
+/**
+ * Elide the content of tool_result blocks in older messages (Phase 29).
+ *
+ * Walks the message array, finds user-role messages whose content array
+ * carries tool_result blocks, and — for all such messages EXCEPT the most
+ * recent KEEP_RECENT_TOOL_RESULT_MESSAGES — replaces each block's `content`
+ * with EVICTED_PLACEHOLDER, but ONLY when the current content is a string
+ * longer than EVICT_MIN_CHARS. Blocks are never removed or reordered (the API
+ * requires every tool_use to keep a matching tool_result); we only swap the
+ * body text. Already-elided blocks are skipped (idempotent).
+ */
+function evictOldToolResults(messages: BlockMessage[]): void {
+  // Indices of user messages that carry at least one tool_result block.
+  const toolResultMsgIdx: number[] = [];
+  for (let i = 0; i < messages.length; i++) {
+    const m = messages[i];
+    if (m && m.role === 'user' && Array.isArray(m.content)) {
+      const hasToolResult = (m.content as unknown[]).some(
+        b => b && typeof b === 'object' && (b as { type?: string }).type === 'tool_result',
+      );
+      if (hasToolResult) {
+        toolResultMsgIdx.push(i);
+      }
+    }
+  }
+
+  // Keep the newest N; elide the rest.
+  const evictUpTo = toolResultMsgIdx.length - KEEP_RECENT_TOOL_RESULT_MESSAGES;
+  for (let k = 0; k < evictUpTo; k++) {
+    const msg = messages[toolResultMsgIdx[k]!]!;
+    const blocks = msg.content as Array<Record<string, unknown>>;
+    for (const block of blocks) {
+      if (block && block.type === 'tool_result') {
+        const content = block.content;
+        if (typeof content === 'string' && content.length > EVICT_MIN_CHARS) {
+          block.content = EVICTED_PLACEHOLDER;
+        }
+      }
+    }
+  }
 }
 
 async function audit(tenantId: string, action: string, target: string, detail: unknown): Promise<void> {

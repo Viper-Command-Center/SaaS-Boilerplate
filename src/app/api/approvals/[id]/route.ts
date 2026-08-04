@@ -93,13 +93,14 @@ async function resumeConversation(
   try {
     mcpToolset = await buildTenantToolset(approval.tenantId);
   } catch {
-    mcpToolset = { anthropicTools: [], failedConnections: [], resolve: () => null };
+    mcpToolset = { anthropicTools: [], failedConnections: [], resolve: () => null, deferredSummary: '' };
   }
   const platform = buildPlatformTools(approval.tenantId);
   const mission = buildMissionTools(approval.tenantId);
   const toolset = {
     anthropicTools: [...platform.anthropicTools, ...mission.anthropicTools, ...mcpToolset.anthropicTools],
     failedConnections: mcpToolset.failedConnections,
+    deferredSummary: mcpToolset.deferredSummary,
     resolve: (name: string) => {
       const p = platform.executors.get(name) ?? mission.executors.get(name);
       if (p) {
@@ -110,7 +111,12 @@ async function resumeConversation(
   };
 
   const agent = await resolveAgentForTenant(approval.tenantId);
-  const system = buildSystemPrompt({ tenant: { ...tenant, role: 'owner' }, agent, memory: tenant.agentMemory });
+  let system = buildSystemPrompt({ tenant: { ...tenant, role: 'owner' }, agent, memory: tenant.agentMemory });
+  // Deferred MCP collections (Phase 29): tell the model they exist + how to load.
+  if (toolset.deferredSummary) {
+    system += `\nSome tool collections are DEFERRED to keep context small: ${toolset.deferredSummary}. Call load_connection_tools with the connection name before using them.`;
+  }
+
 
   const userText = outcome.ok
     ? `The human approved your queued call to ${approval.toolName} and it has now executed. Its result:

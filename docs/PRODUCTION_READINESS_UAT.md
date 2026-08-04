@@ -13,7 +13,7 @@ Each item has a UAT test (T-xx). Run the UAT after every significant deploy; a b
 |---|---|---|---|
 | A1 | Tool loop with policy gateway (auto / approval / deny) + audit rows | ✅ | T-01 ⚙ Ask Max to create a panel (auto → runs). Ask for a DiviOps call (approval → queues). Set a tool to Blocked, call it (deny message). Verify 3 audit rows. |
 | A2 | Iteration + wall-clock budget with honest exhaustion (done X / remaining Y) | ✅ | T-02 ⚙ Give a 30-tool-call task. Expect either completion or `[budget]` + a wrap-up naming what remains. NEVER a silent stop. |
-| A3 | User Stop (halts before next step, transcript records `[stopped]`) | ✅ | T-03 👤 Start a long task, hit Stop mid-run. Refresh: `[stopped]` line persisted. |
+| A3 | User Stop (halts before next step, transcript records `[stopped]`) | ✅ | T-03 👤 Start a long task, hit Stop mid-run. Refresh: `[stopped]` line persisted. **Phase 29: Stop is now an explicit POST `/api/agent/stop` decoupled from the socket — a refresh/disconnect no longer counts as Stop; only the button does.** |
 | A4 | Parallel tool calls in one model turn all answered | ✅ | T-04 ⚙ "Create 3 KPI panels at once." All created, no API error. |
 | A5 | Token streaming polish (true deltas via Bedrock response-stream) | ⚠️ | Text arrives in block-sized chunks. SAVED-FOR-LATER #6. |
 | A6 | Model-call retry/backoff + provider fallback | ✅ | Phase 27: `postWithRetry` — 3 attempts, backoff+jitter, honors Retry-After, retries 429/5xx/529 + network only. Both providers. |
@@ -67,7 +67,7 @@ Each item has a UAT test (T-xx). Run the UAT after every significant deploy; a b
 | F1 | Audit log: tool calls, denials, approvals, exhaustion, stops, clears | ✅ | T-22 ⚙ After a busy hour, reconcile transcript events against audit rows. |
 | F2 | Cost ledger: exact tokens incl. cache reads/writes, plugin units, markup | ✅ | T-23 👤 Compare a day's ledger vs Bedrock/Kie invoices (±5%). |
 | F3 | Issue triage + automatic operator escalation (captureIssue) | ✅ | T-24 👤 Force a platform-class error; verify Issues row + email. |
-| F4 | Per-turn trace UI (model calls, tool spans, latency, tokens per turn) | ❌ | Data exists in audit+ledger; no view. P1 — this is table stakes on every 2026 platform. |
+| F4 | Per-turn trace UI (model calls, tool spans, latency, tokens per turn) | ⚠️ | Phase 29 shipped the LIVE slice: GET `/api/agent/status` + AgentChat polling now surfaces the in-flight turn (iteration, last tool, elapsed) so an active turn is visible on any page load. Full per-turn HISTORICAL trace over audit+ledger is still P1. |
 | F5 | Eval / regression suite of golden tasks | ⚠️ | Phase 27: static tripwires SHIPPED (`node scripts/agent-evals.mjs`, 48 assertions — every past incident pinned; run before push). Still missing: automated LIVE golden-task runs against the deployed app (G1–G5 documented in the script header, manual for now). |
 | F6 | Platform health endpoint + uptime alerting for artivio.ai itself | ⚠️ | Add /api/health + UptimeRobot (same pattern as BudgetSmart). T-25 👤. |
 | F7 | Structured request logging with correlation IDs | ⚠️ | Railway stdout only. |
@@ -77,7 +77,7 @@ Each item has a UAT test (T-xx). Run the UAT after every significant deploy; a b
 |---|---|---|---|
 | G1 | Cron overlap-safe task claiming | ✅ | T-26 👤 Fire two cron ticks simultaneously; task runs once. |
 | G2 | Work survives deploy/crash mid-turn | ✅ | Phase 27: mission plans + step results live in Postgres; a crashed step is re-found `running` next tick and continued. Chat turns remain request-scoped (use missions for big work). |
-| G3 | Refresh mid-generation recovers the reply | ⚠️ | Persisted at end + shown on reload; no live re-attach. Acceptable; document it. |
+| G3 | Refresh mid-generation recovers the reply | ✅ | **Phase 29 (the headline fix): refresh no longer KILLS the turn** — Stop is decoupled from the socket (`activeTurns.ts` + POST `/api/agent/stop`), `cancel()` is a no-op, and GET `/api/agent/status` re-attaches a live progress indicator on reload; the reply persists in the stream `finally`. T-34 👤 Start a long task, REFRESH → the "Working…" indicator reappears and the task completes; verify the reply lands in history. |
 | G4 | Provider retry/backoff | ✅ | Same as A6 — Phase 27 `postWithRetry`. |
 | G5 | Migration discipline (hand-written, idempotent, journal) | ✅ | Process check. |
 
@@ -100,7 +100,7 @@ Each item has a UAT test (T-xx). Run the UAT after every significant deploy; a b
 | I3 | Chat: newest-on-load, stop, clear+consolidate, images, suggestions | ✅ | T-32 👤 Refresh lands at newest message. |
 | I4 | Multiple named conversations per workspace | ❌ | One rolling thread per user forces clears. P1. |
 | I5 | Transcript search | ❌ | P2. |
-| I6 | Notifications (email digest / push on approvals + finished missions) | ⚠️ | Escalation email exists; user-facing notifications don't. Approvals sitting unseen = stalled work. P1. |
+| I6 | Notifications (email digest / push on approvals + finished missions) | ⚠️ | Escalation email exists; user-facing push/email notifications don't. **Phase 29 added the in-dashboard `MissionsPanel` (progress bars + Pause/Resume/Cancel + runner-health chip) so missions and a dead cron are now VISIBLE without a notification.** Async push/email on approvals + finished missions is still P1. |
 | I7 | Mobile responsiveness | ⚠️ | Never audited. T-33 👤 phone-width pass on dashboard + chat. |
 | I8 | Human edit of panel CONFIG (not just layout/status) | ⚠️ | Phase 24 note stands: no inline markdown-panel editing. |
 

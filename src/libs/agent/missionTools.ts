@@ -33,12 +33,13 @@ export function buildMissionTools(tenantId: string): MissionToolset {
   const anthropicTools: MissionToolset['anthropicTools'] = [
     {
       name: 'start_mission',
-      description: 'Create a durable background mission for work too big for one turn (multi-hour builds, many-step campaigns). Decompose the goal into ordered steps FIRST — each step\'s instructions must be complete and standalone, because a separate scheduled run executes ONE step at a time with no memory of this chat. The platform runs steps automatically every few minutes and pauses the mission for a human if a step fails twice. After calling this, tell the user the mission is running in the background and roughly when to expect progress.',
+      description: 'Create a durable background mission for work too big for one turn (multi-hour builds, many-step campaigns). Decompose the goal into ordered steps FIRST — each step\'s instructions must be complete and standalone, because a separate scheduled run executes ONE step at a time with no memory of this chat. Size each step so it needs at most ~12 tool calls: a step like "write and commit 3 articles" is right, "write 20 articles" is wrong and will be cut off mid-work — split oversized work into more steps instead. The platform runs steps automatically every few minutes and pauses the mission for a human if a step fails twice. After calling this, tell the user the mission is running in the background and roughly when to expect progress.',
       input_schema: {
         type: 'object',
         properties: {
           title: { type: 'string', description: 'Short mission name, e.g. "Build 6-week growth sprint tracker".' },
           goal: { type: 'string', description: 'The user\'s ask, verbatim or near-verbatim.' },
+
           steps: {
             type: 'array',
             maxItems: MAX_STEPS,

@@ -2,6 +2,8 @@ import { setRequestLocale } from 'next-intl/server';
 import { AgentChat } from '@/features/agent/AgentChat';
 import { ApprovalsPanel } from '@/features/agent/ApprovalsPanel';
 import { EmployeePanel } from '@/features/agent/EmployeePanel';
+import { MissionsPanel } from '@/features/agent/MissionsPanel';
+
 import { PanelsGrid } from '@/features/agent/PanelsGrid';
 import { ToolsPanel } from '@/features/agent/ToolsPanel';
 import { WorkspacePanel } from '@/features/agent/WorkspacePanel';
@@ -90,9 +92,11 @@ export default async function DashboardIndexPage(props: {
         </div>
         <div className="space-y-6">
           {canManage && <EmployeePanel tenantSlug={tenant.slug} />}
+          <MissionsPanel tenantSlug={tenant.slug} canControl={canApprove} />
           {canApprove && <ApprovalsPanel tenantSlug={tenant.slug} />}
           {canManage && <ToolsPanel tenantSlug={tenant.slug} />}
         </div>
+
       </div>
 
       {canManage && (

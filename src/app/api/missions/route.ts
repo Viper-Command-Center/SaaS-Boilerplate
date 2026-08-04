@@ -5,22 +5,32 @@
  * Phase 21/24: every mechanism wired to the agent gets a control wired to the
  * human in the same change.
  *
- * GET  → missions with step summaries (any member — read-only view).
- * PATCH {id, action: 'pause' | 'resume'} → editor+.
+ * GET  → missions with step summaries + runner health (any member — read-only
+ *   view). lastTickAt is the in-memory runner heartbeat (Phase 29): the panel
+ *   turns it into "runner ticked Xm ago" vs "no tick in Xm — check GitHub
+ *   Actions" so a silently-dead cron reads as a platform problem, not a stuck
+ *   mission.
+ * PATCH {id, action: 'pause' | 'resume' | 'cancel'} → editor+.
  *   pause  — stop the runner picking up further steps (running → paused).
  *   resume — un-pause (paused → running). Resuming a mission whose step
  *   FAILED twice re-queues that step (failed → pending, attempts reset) so
  *   the human can fix the underlying problem (bad key, missing approval) and
  *   simply hit resume.
+ *   cancel — permanently close a mission (any live state → done); remaining
+ *   pending/running steps become 'skipped' with a "Cancelled from dashboard"
+ *   result. Mirrors the agent's set_mission_status cancel; there is no undo.
  */
 
-import { and, asc, desc, eq } from 'drizzle-orm';
+
+import { and, asc, desc, eq, inArray } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
+import { getLastTickAt } from '@/libs/agent/runnerHealth';
 import { getCurrentUser } from '@/libs/auth/session';
 import { db } from '@/libs/DB';
 import { getUserTenants } from '@/libs/tenants';
 import { missions, missionSteps } from '@/models/Schema';
+
 
 export const dynamic = 'force-dynamic';
 
@@ -69,13 +79,14 @@ export async function GET(request: Request) {
     };
   }));
 
-  return NextResponse.json({ missions: result });
+  return NextResponse.json({ missions: result, lastTickAt: getLastTickAt() });
 }
 
 const ActionSchema = z.object({
   id: z.string().uuid(),
-  action: z.enum(['pause', 'resume']),
+  action: z.enum(['pause', 'resume', 'cancel']),
 });
+
 
 export async function PATCH(request: Request) {
   const user = await getCurrentUser();
@@ -120,8 +131,32 @@ export async function PATCH(request: Request) {
     return NextResponse.json({ ok: true, status: 'paused' });
   }
 
+  if (body.action === 'cancel') {
+    // Same terminal bookkeeping as the agent's set_mission_status cancel:
+    // remaining pending/running steps become 'skipped' (the record of what
+    // was planned but never ran stays), and the mission closes to 'done'. No
+    // undo — a zombie mission the human explicitly killed should never run
+    // another step.
+    if (mission.status === 'done') {
+      return NextResponse.json({ error: 'Mission is already done.' }, { status: 400 });
+    }
+    await db
+      .update(missionSteps)
+      .set({ status: 'skipped', result: 'Cancelled from dashboard', updatedAt: new Date() })
+      .where(and(
+        eq(missionSteps.missionId, mission.id),
+        inArray(missionSteps.status, ['pending', 'running']),
+      ));
+    await db
+      .update(missions)
+      .set({ status: 'done', updatedAt: new Date() })
+      .where(eq(missions.id, mission.id));
+    return NextResponse.json({ ok: true, status: 'done' });
+  }
+
   // resume
   if (mission.status !== 'paused') {
+
     return NextResponse.json({ error: `Cannot resume a ${mission.status} mission.` }, { status: 400 });
   }
   // A mission usually pauses BECAUSE a step failed twice. Resuming means the
