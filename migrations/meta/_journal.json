@@ -120,6 +120,13 @@
       "when": 1785700000000,
       "tag": "0016_missions",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1785780000000,
+      "tag": "0017_agent-memory",
+      "breakpoints": true
     }
   ]
 }

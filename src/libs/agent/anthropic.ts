@@ -229,7 +229,13 @@ export async function callClaudeWithTools(a: {
   tools: Array<{ name: string; description: string; input_schema: Record<string, unknown> }>;
   maxTokens?: number;
 }): Promise<RawModelResponse> {
-  const maxTokens = a.maxTokens ?? 4096;
+  // 16k, not 4k: a start_mission call with a dozen detailed step instructions
+  // is routinely >4k output tokens. At 4096 the response stopped at
+  // max_tokens, the loop read it as a final answer, and the mission the agent
+  // had just announced was silently never created (2026-08-03 incident).
+  // Sonnet supports far more; the loop also now RECOVERS from max_tokens
+  // truncation, but headroom means it almost never has to.
+  const maxTokens = a.maxTokens ?? 16_384;
   const wantsBedrockBearer = Boolean(process.env.BEDROCK_API_KEY || process.env.AWS_BEARER_TOKEN_BEDROCK);
   const wantsAnthropic = Boolean(process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_API_KEY);
 

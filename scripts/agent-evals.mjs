@@ -133,6 +133,22 @@ forbid('src/app/api/agent/chat/route.ts', /orderBy\(asc\(messages\.createdAt\)\)
 expect('src/app/api/approvals/[id]/route.ts', /orderBy\(desc\(messages\.createdAt\)\)/, 'approval resume must see recent context, not the conversation opening');
 expect('src/app/api/agent/history/route.ts', /orderBy\(desc\(messages\.createdAt\)\)/, 'UI transcript + clear-consolidation must use the newest window');
 
+// ── Output truncation honesty (the "announced a mission, never created it"
+// incident, 2026-08-03): at max_tokens the model's giant start_mission call
+// was amputated mid-JSON and the loop read the stop as a FINAL ANSWER — the
+// agent said "creating the mission now" and the turn silently ended. Three
+// times in a row.
+expect('src/libs/agent/anthropic.ts', '16_384', 'tool responses need headroom for large tool calls (mission plans)');
+expect('src/libs/agent/loop.ts', "stop_reason === 'max_tokens'", 'truncated replies must recover/announce, never pass as final answers');
+
+// ── Standing workspace memory (Phase 28 — "Max keeps forgetting the repo") ──
+expect('src/models/Schema.ts', 'agent_memory', 'tenants.agent_memory column must exist');
+expect('migrations/meta/_journal.json', '0017_agent-memory', 'memory migration must be journaled');
+expect('src/libs/agent/platformTools.ts', "'update_memory'", 'the agent must be able to record corrections durably');
+expect('src/libs/agent/prompt.ts', 'Workspace memory', 'standing memory must be injected into the system prompt');
+expect('src/app/api/agent/chat/route.ts', 'agentMemory', 'chat turns must load workspace memory');
+expect('src/app/api/internal/run-scheduled/route.ts', 'memory: tenant.agentMemory', 'scheduled + mission runs must load workspace memory');
+
 // ── Chat UX honesty (Phase 26.1/26.2) ───────────────────────────────────────
 expect('src/features/agent/AgentChat.tsx', 'abortRef', 'Stop button must abort the in-flight stream');
 expect('src/features/agent/AgentChat.tsx', 'forceScrollRef', 'refresh must land at the NEWEST message, not the oldest');

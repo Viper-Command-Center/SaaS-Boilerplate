@@ -105,6 +105,13 @@ export const tenants = pgTable(
     personaId: uuid('persona_id'),
     // Optional per-workspace rename ("Bud" → "Buddy") without forking the persona.
     agentNameOverride: varchar('agent_name_override', { length: 60 }),
+    // ── Standing workspace memory (Phase 28) ──
+    // Durable facts the agent must never re-learn ("blog = repo X", standing
+    // rules, conventions). AUTO-INJECTED into the system prompt of every chat
+    // turn, approval resume and mission step; maintained by the agent itself
+    // via the update_memory tool. This is the CLAUDE.md / Hindsight-lite
+    // equivalent — memory the model doesn't have to remember to look up.
+    agentMemory: text('agent_memory'),
     // ── Billing & guardrails (Phase 6) ──
     planName: varchar('plan_name', { length: 40 }).notNull().default('trial'),
     // Monthly allowance the client's plan includes (what we bill them against).

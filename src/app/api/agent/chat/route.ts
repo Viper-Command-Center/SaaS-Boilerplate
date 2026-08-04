@@ -33,7 +33,7 @@ import {
   loadImageBlocks,
   selectImagesForContext,
 } from '@/libs/agent/vision';
-import { conversations, messages } from '@/models/Schema';
+import { conversations, messages, tenants } from '@/models/Schema';
 
 export const dynamic = 'force-dynamic';
 
@@ -181,7 +181,15 @@ export async function POST(request: Request) {
 
   // Which AI Employee works this account (name + personality → the prompt).
   const agent = await resolveAgentForTenant(tenant.id);
-  let system = buildSystemPrompt({ tenant, userFirstName: user.firstName, agent });
+  // Standing workspace memory (Phase 28): durable facts auto-injected into
+  // every turn, so "which repo is the blog in" never depends on the agent
+  // choosing to look it up.
+  const [memRow] = await db
+    .select({ agentMemory: tenants.agentMemory })
+    .from(tenants)
+    .where(eq(tenants.id, tenant.id))
+    .limit(1);
+  let system = buildSystemPrompt({ tenant, userFirstName: user.firstName, agent, memory: memRow?.agentMemory });
   // Only added when images are actually present — costs nothing on text turns,
   // and appending it unconditionally would also invalidate the system-prompt
   // cache for every text-only conversation.

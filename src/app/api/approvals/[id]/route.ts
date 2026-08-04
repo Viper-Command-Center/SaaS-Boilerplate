@@ -110,7 +110,7 @@ async function resumeConversation(
   };
 
   const agent = await resolveAgentForTenant(approval.tenantId);
-  const system = buildSystemPrompt({ tenant: { ...tenant, role: 'owner' }, agent });
+  const system = buildSystemPrompt({ tenant: { ...tenant, role: 'owner' }, agent, memory: tenant.agentMemory });
 
   const userText = outcome.ok
     ? `The human approved your queued call to ${approval.toolName} and it has now executed. Its result:

@@ -11,7 +11,7 @@ import { assertPublicUrl, buildWebTools } from '@/libs/agent/webTools';
 import { captureIssue } from '@/libs/support/issues';
 import { db } from '@/libs/DB';
 import { getFile, listFiles, saveFile, saveRemoteFile } from '@/libs/storage/files';
-import { dashboardPanels, dashboardViews, datasets, scheduledTasks } from '@/models/Schema';
+import { dashboardPanels, dashboardViews, datasets, scheduledTasks, tenants } from '@/models/Schema';
 
 export type PlatformExecutor = {
   policy: 'auto';
@@ -293,6 +293,18 @@ export function buildPlatformTools(tenantId: string): {
           name: { type: 'string', description: 'Filename to save it as, with extension, e.g. "budgetsmart-qr-emerald.png".' },
         },
         required: ['url', 'name'],
+      },
+    },
+    {
+      name: 'update_memory',
+      description: 'Update this workspace\'s STANDING MEMORY — the durable facts shown to you at the top of every conversation and every background run (the WORKSPACE MEMORY section of your instructions). Use it THE MOMENT the user corrects you or states a lasting fact: which repo a site lives in, account/tool conventions, standing rules, key URLs, decisions. Keep it a compact bullet list of facts, not prose or logs. mode "append" adds lines; mode "rewrite" replaces the whole thing (re-state everything worth keeping). This is how you stop repeating mistakes across conversations — if you got something wrong twice, the correction belongs here.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          mode: { type: 'string', enum: ['append', 'rewrite'], description: 'append = add lines to the end; rewrite = replace the entire memory.' },
+          content: { type: 'string', description: 'The fact lines. Compact bullets, e.g. "- budgetsmart.io blog = repo Budget-Smart-AI/web, posts in content/blog/*.md, commit direct to main".' },
+        },
+        required: ['mode', 'content'],
       },
     },
     {
@@ -777,6 +789,36 @@ export function buildPlatformTools(tenantId: string): {
         url: row?.publicUrl,
         note: 'The real file is now in the workspace Files library and will show up under Generated media. Use this URL when publishing — it is permanent.',
       });
+    },
+  });
+
+  executors.set('update_memory', {
+    policy: 'auto', // remembering a correction must never need approval
+    call: async (args) => {
+      const mode = String(args.mode ?? 'append');
+      const content = String(args.content ?? '').trim();
+      if (!content) {
+        throw new Error('update_memory needs content.');
+      }
+      const [row] = await db
+        .select({ agentMemory: tenants.agentMemory })
+        .from(tenants)
+        .where(eq(tenants.id, tenantId))
+        .limit(1);
+      const current = row?.agentMemory ?? '';
+      const next = mode === 'rewrite'
+        ? content
+        : (current ? `${current.trimEnd()}\n${content}` : content);
+      // A hard cap so memory stays a fact sheet, not a landfill. When it
+      // overflows, the agent is told to rewrite (curate), not to lose data
+      // silently.
+      if (next.length > 8_000) {
+        throw new Error(`Workspace memory would exceed 8000 characters (${next.length}). Call update_memory with mode "rewrite" and a CURATED version — keep the durable facts, drop stale detail.`);
+      }
+      await db.update(tenants).set({ agentMemory: next }).where(eq(tenants.id, tenantId));
+      return mode === 'rewrite'
+        ? `Workspace memory rewritten (${next.length} chars). It loads automatically in every future conversation and background run.`
+        : `Added to workspace memory (now ${next.length} chars). It loads automatically in every future conversation and background run.`;
     },
   });
 

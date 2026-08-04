@@ -25,8 +25,9 @@ Each item has a UAT test (T-xx). Run the UAT after every significant deploy; a b
 | B1 | Durable workspace memory (datasets, panels, notes, files) | ✅ | T-05 ⚙ Clear chat → data/panels/files all intact. |
 | B2 | MEMORY doctrine — look it up before claiming amnesia | ✅ | T-06 👤 Clear chat, then ask "how's the growth sprint going?" Max must list_files/list_panels/query_dataset and answer from findings — "I don't remember" alone = FAIL. |
 | B3 | Clear-chat consolidation → `chat-memory-<date>.md` note | ✅ | T-07 👤 Clear a substantial chat; verify the note exists in Files and is accurate. |
-| B4 | Semantic long-term memory / retrieval (Hindsight-class) | ❌ | Option: integrate Ryan's self-hosted Hindsight (hindsight.artivio.ai) as a retrieval tool. P2. |
+| B4 | Semantic long-term memory / retrieval (Hindsight-class) | ⚠️ | Phase 28 shipped the lite version: `tenants.agent_memory` standing fact sheet, auto-injected into EVERY prompt (chat/approvals/missions) + `update_memory` tool. Full semantic retrieval over history remains P2 (self-hosted Hindsight at hindsight.artivio.ai). |
 | B5 | Post-task self-notes (agent saves state summaries unprompted) | ⚠️ | Instructed in prompt; not enforced. Watch whether it actually happens. |
+| B6 | Standing workspace memory (facts that need no lookup) | ✅ | Phase 28. T-26 👤 Correct Max on a durable fact ("blog is in the web repo") → it must call update_memory the same turn; clear the chat, ask about the fact → answered without any file lookup. |
 
 ## C. Orchestration
 | # | Capability | Status | UAT |
@@ -67,7 +68,7 @@ Each item has a UAT test (T-xx). Run the UAT after every significant deploy; a b
 | F2 | Cost ledger: exact tokens incl. cache reads/writes, plugin units, markup | ✅ | T-23 👤 Compare a day's ledger vs Bedrock/Kie invoices (±5%). |
 | F3 | Issue triage + automatic operator escalation (captureIssue) | ✅ | T-24 👤 Force a platform-class error; verify Issues row + email. |
 | F4 | Per-turn trace UI (model calls, tool spans, latency, tokens per turn) | ❌ | Data exists in audit+ledger; no view. P1 — this is table stakes on every 2026 platform. |
-| F5 | Eval / regression suite of golden tasks | ⚠️ | Phase 27: static tripwires SHIPPED (`node scripts/agent-evals.mjs`, 34 assertions — every past incident pinned; run before push). Still missing: automated LIVE golden-task runs against the deployed app (G1–G5 documented in the script header, manual for now). |
+| F5 | Eval / regression suite of golden tasks | ⚠️ | Phase 27: static tripwires SHIPPED (`node scripts/agent-evals.mjs`, 42 assertions — every past incident pinned; run before push). Still missing: automated LIVE golden-task runs against the deployed app (G1–G5 documented in the script header, manual for now). |
 | F6 | Platform health endpoint + uptime alerting for artivio.ai itself | ⚠️ | Add /api/health + UptimeRobot (same pattern as BudgetSmart). T-25 👤. |
 | F7 | Structured request logging with correlation IDs | ⚠️ | Railway stdout only. |
 

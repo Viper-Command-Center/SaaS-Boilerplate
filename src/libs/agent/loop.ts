@@ -106,6 +106,8 @@ export async function runToolLoop(a: {
 
   let finalText = '';
   let exhausted = false;
+  // Consecutive max_tokens truncations — see the recovery block below.
+  let truncations = 0;
 
   for (let i = 0; ; i++) {
     // ── User stop (Phase 26.1) ───────────────────────────────────────────────
@@ -167,6 +169,39 @@ export async function runToolLoop(a: {
         a.onDelta(block.text);
       }
     }
+
+    // ── Output-limit truncation (the "announced a mission, never created it"
+    // incident, 2026-08-03) ─────────────────────────────────────────────────
+    // stop_reason 'max_tokens' means the reply was AMPUTATED mid-generation —
+    // very often mid-tool_use JSON, because big tool calls (start_mission with
+    // long step instructions) are exactly what outgrows the limit. The old
+    // code treated ANY non-tool_use stop as the final answer, so the agent
+    // streamed "Now I'm creating the mission:" and the turn silently ended —
+    // the tool call it was emitting was cut off and dropped. Three times in a
+    // row, same spot, and the agent could not know it had happened.
+    // Recovery: tell the model its reply was cut and let it continue/compact.
+    // A truncated tool_use block must NOT be pushed back (the API requires
+    // every tool_use to get a tool_result) — keep only the text blocks.
+    if (response.stop_reason === 'max_tokens') {
+      truncations += 1;
+      if (truncations >= 2) {
+        const msg = '\n\n[error] The reply hit the output-length limit twice in a row and could not complete. If this was a large tool call (like a mission plan), it was NOT executed — try again with shorter step instructions.';
+        a.onDelta(msg);
+        finalText += msg;
+        break;
+      }
+      messages.push({
+        role: 'assistant',
+        content: textBlocks.length > 0 ? textBlocks : [{ type: 'text', text: '(reply cut off)' }],
+      });
+      messages.push({
+        role: 'user',
+        content: '[system] Your previous reply hit the output-token limit and was CUT OFF — any tool call you were emitting was NOT executed. Continue from where you stopped. If you were building a large tool call (e.g. start_mission), re-issue it more compactly: shorter, reference-style step instructions (point to files/notes in the workspace instead of embedding whole documents), fewer steps per call.',
+      });
+      continue;
+    }
+
+    truncations = 0; // completed cleanly — only CONSECUTIVE truncations bail
 
     const toolUses = response.content.filter(b => b.type === 'tool_use');
     if (response.stop_reason !== 'tool_use' || toolUses.length === 0) {

@@ -18,12 +18,21 @@ export function buildSystemPrompt(a: {
   tenant: TenantWithRole;
   userFirstName?: string | null;
   agent?: ResolvedAgent;
+  /**
+   * Standing workspace memory (Phase 28) — tenants.agent_memory, passed by
+   * every entrypoint (chat, approval resume, scheduled/mission runs). Facts
+   * here need no lookup: they are simply IN the prompt, which is the whole
+   * point — the agent kept "forgetting" which repo the blog lived in because
+   * remembering required it to CHOOSE to check the file library first.
+   */
+  memory?: string | null;
 }): string {
   const { tenant } = a;
   const brandVoice
     = tenant.brandVoice && typeof tenant.brandVoice === 'object'
       ? JSON.stringify(tenant.brandVoice, null, 2)
       : null;
+  const memory = (a.memory ?? '').trim();
 
   return `You are ${a.agent?.name ?? 'the Artivio Command Center agent'} — a \
 sharp, practical AI partner that runs marketing and operations work for client \
@@ -171,6 +180,16 @@ nothing, and even then say what you DID check. When you finish a substantial \
 piece of work, write a short save_note summarising decisions and state so \
 your future self can pick it up cold.
 
+WORKSPACE MEMORY: the "## Workspace memory" section below (when present) is \
+this workspace's STANDING FACT SHEET — repos, accounts, conventions, rules \
+and decisions that persist across every conversation and background run. \
+TRUST IT and follow it; it exists precisely so you never re-learn or re-guess \
+these facts. Keep it current with the update_memory tool: the moment the \
+user corrects you ("no, the blog is in the web repo") or states a durable \
+fact, write it there IN THE SAME TURN — a correction you don't record is a \
+mistake you will repeat next week. Compact fact bullets only, never logs or \
+transcripts.
+
 MISSIONS: for work too big for one conversation turn — multi-hour builds, \
 many-step campaigns, anything you'd otherwise do "over the next while" — use \
 start_mission. Decompose the goal into ordered steps FIRST, each with \
@@ -186,6 +205,7 @@ use a mission for something you can finish right now in this turn.
 
 Be direct and concrete. Prefer actionable deliverables over generic advice. \
 Never invent tool results — only report what a tool actually returned.
+${memory ? `\n## Workspace memory (standing facts — trust these, keep them current via update_memory)\n${memory}\n` : ''}\
 ${brandVoice ? `\n## Workspace brand voice\n${brandVoice}\n` : ''}\
 ${a.agent ? personaPromptFragment(a.agent) : ''}`;
 }

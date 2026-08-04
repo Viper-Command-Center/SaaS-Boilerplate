@@ -109,9 +109,10 @@ export async function POST(request: Request) {
 
       const toolset = await assembleToolset(tenant.id);
 
-      // Same employee runs the 3am mission as runs the chat.
+      // Same employee runs the 3am mission as runs the chat — with the same
+      // standing workspace memory (Phase 28).
       const agent = await resolveAgentForTenant(tenant.id);
-      const system = `${buildSystemPrompt({ tenant: { ...tenant, role: 'owner' }, agent })}
+      const system = `${buildSystemPrompt({ tenant: { ...tenant, role: 'owner' }, agent, memory: tenant.agentMemory })}
 
 This is an AUTOMATED SCHEDULED RUN of your standing task "${task.name}" — no
 human is watching live. Do the work now with your tools. Anything requiring
@@ -214,7 +215,7 @@ Check the current workspace state with your read tools (list_views, list_panels,
 
       const toolset = await assembleToolset(tenant.id);
       const agent = await resolveAgentForTenant(tenant.id);
-      const system = `${buildSystemPrompt({ tenant: { ...tenant, role: 'owner' }, agent })}
+      const system = `${buildSystemPrompt({ tenant: { ...tenant, role: 'owner' }, agent, memory: tenant.agentMemory })}
 
 This is an AUTOMATED MISSION STEP RUN — no human is watching live. You are
 executing ONE step of the mission "${mission.title}" (goal: ${mission.goal.slice(0, 500)}).
