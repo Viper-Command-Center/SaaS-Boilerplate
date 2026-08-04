@@ -79,6 +79,18 @@ export function buildWebTools(): {
 
   const anthropicTools: AnthropicTool[] = [
     {
+      name: 'search_stock_photos',
+      description: 'Search FREE licensed stock photos (Pexels first, Pixabay fallback — both free for commercial use, no attribution required). Returns direct image URLs plus photographer credit. Use this for article featured images, social posts and page imagery BEFORE spending Kie.ai credits on generation — generation is for images that must show something specific that stock cannot (a product UI, an exact scene). Pipeline: search here → pick the best fit → save_file_from_url into the library → use the permanent R2 URL. The API keys are platform-configured; you never need them and must never store any API key in notes or workspace memory.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'What the photo should show, e.g. "person budgeting laptop coffee" — concrete nouns beat abstract themes.' },
+          orientation: { type: 'string', enum: ['landscape', 'portrait', 'square'], description: 'Default landscape (right for blog featured images).' },
+        },
+        required: ['query'],
+      },
+    },
+    {
       name: 'fetch_url',
       description: 'Fetch a web page or API and return its text. Fast and free, but it does NOT run JavaScript. If the result comes back empty, or is a shell that says "enable JavaScript", the page is client-rendered and this tool cannot read it — say so and recommend connecting a scraping MCP (e.g. Firecrawl) in the Tools panel rather than guessing at the content.',
       input_schema: {
@@ -88,6 +100,86 @@ export function buildWebTools(): {
       },
     },
   ];
+
+  executors.set('search_stock_photos', {
+    policy: 'auto', // read-only search against free-license libraries
+    call: async (args) => {
+      const query = String(args.query ?? '').trim().slice(0, 120);
+      if (!query) {
+        throw new Error('search_stock_photos needs a query.');
+      }
+      const orientation = ['landscape', 'portrait', 'square'].includes(String(args.orientation))
+        ? String(args.orientation)
+        : 'landscape';
+
+      // Keys live in platform env (Railway) ONLY — they are never sent to the
+      // model, never belong in workspace memory or notes. Results carry image
+      // URLs, which are public by nature.
+      const pexelsKey = process.env.PEXELS_API_KEY;
+      const pixabayKey = process.env.PIXABAY_API_KEY;
+      if (!pexelsKey && !pixabayKey) {
+        throw new Error('No stock photo provider is configured (PEXELS_API_KEY / PIXABAY_API_KEY missing). This is a platform configuration gap — report it rather than working around it.');
+      }
+
+      type Photo = { url: string; width: number; height: number; credit: string; source: string };
+      const photos: Photo[] = [];
+
+      // Pexels first: better editorial quality, native orientation filter.
+      if (pexelsKey) {
+        try {
+          const resp = await fetch(
+            `https://api.pexels.com/v1/search?query=${encodeURIComponent(query)}&orientation=${orientation}&per_page=6`,
+            { headers: { Authorization: pexelsKey }, signal: AbortSignal.timeout(15_000) },
+          );
+          if (resp.ok) {
+            const data = await resp.json() as { photos?: Array<{ src?: { large2x?: string; large?: string }; width: number; height: number; photographer?: string }> };
+            for (const p of data.photos ?? []) {
+              const src = p.src?.large2x || p.src?.large;
+              if (src) {
+                photos.push({ url: src, width: p.width, height: p.height, credit: p.photographer ?? 'Pexels', source: 'Pexels' });
+              }
+            }
+          }
+        } catch {
+          // fall through to Pixabay
+        }
+      }
+
+      if (photos.length === 0 && pixabayKey) {
+        try {
+          const horiz = orientation === 'landscape' ? 'horizontal' : orientation === 'portrait' ? 'vertical' : 'all';
+          const resp = await fetch(
+            `https://pixabay.com/api/?key=${encodeURIComponent(pixabayKey)}&q=${encodeURIComponent(query)}&image_type=photo&orientation=${horiz}&per_page=6&safesearch=true`,
+            { signal: AbortSignal.timeout(15_000) },
+          );
+          if (resp.ok) {
+            const data = await resp.json() as { hits?: Array<{ largeImageURL?: string; imageWidth: number; imageHeight: number; user?: string }> };
+            for (const h of data.hits ?? []) {
+              if (h.largeImageURL) {
+                photos.push({ url: h.largeImageURL, width: h.imageWidth, height: h.imageHeight, credit: h.user ?? 'Pixabay', source: 'Pixabay' });
+              }
+            }
+          }
+        } catch {
+          // reported below
+        }
+      }
+
+      if (photos.length === 0) {
+        return JSON.stringify({
+          query,
+          results: [],
+          note: 'No stock results for this query. Try more concrete nouns (e.g. "calculator receipts desk" instead of "financial wellness"), or fall back to Kie.ai generation for this one image.',
+        });
+      }
+
+      return JSON.stringify({
+        query,
+        results: photos.slice(0, 5),
+        note: 'Free license, commercial use OK, no attribution required. Pick one, then save_file_from_url it into the library and use the permanent R2 URL — these provider URLs are stable but the library copy is yours.',
+      });
+    },
+  });
 
   executors.set('fetch_url', {
     policy: 'auto', // read-only

@@ -297,7 +297,7 @@ export function buildPlatformTools(tenantId: string): {
     },
     {
       name: 'update_memory',
-      description: 'Update this workspace\'s STANDING MEMORY — the durable facts shown to you at the top of every conversation and every background run (the WORKSPACE MEMORY section of your instructions). Use it THE MOMENT the user corrects you or states a lasting fact: which repo a site lives in, account/tool conventions, standing rules, key URLs, decisions. Keep it a compact bullet list of facts, not prose or logs. mode "append" adds lines; mode "rewrite" replaces the whole thing (re-state everything worth keeping). This is how you stop repeating mistakes across conversations — if you got something wrong twice, the correction belongs here.',
+      description: 'Update this workspace\'s STANDING MEMORY — the durable facts shown to you at the top of every conversation and every background run (the WORKSPACE MEMORY section of your instructions). Use it THE MOMENT the user corrects you or states a lasting fact: which repo a site lives in, account/tool conventions, standing rules, key URLs, decisions. Keep it a compact bullet list of facts, not prose or logs. NEVER store secrets here — no API keys, tokens or passwords (the tool rejects them): secrets live in the platform vault/environment, so record only the fact that a capability exists (e.g. "stock photos: use search_stock_photos"), never the credential. mode "append" adds lines; mode "rewrite" replaces the whole thing (re-state everything worth keeping). This is how you stop repeating mistakes across conversations — if you got something wrong twice, the correction belongs here.',
       input_schema: {
         type: 'object',
         properties: {
@@ -799,6 +799,17 @@ export function buildPlatformTools(tenantId: string): {
       const content = String(args.content ?? '').trim();
       if (!content) {
         throw new Error('update_memory needs content.');
+      }
+      // 🔒 Secrets rail: memory is injected into EVERY prompt and stored in a
+      // plain text column — a key written here would ride along on every
+      // model call forever. Reject lines that pair a credential word with a
+      // long token-looking string; keys belong in the vault/env, and the
+      // memory should record capabilities ("use search_stock_photos"), not
+      // credentials.
+      for (const line of content.split('\n')) {
+        if (/key|secret|token|password|credential/i.test(line) && /[A-Za-z0-9_\-]{25,}/.test(line)) {
+          throw new Error('That looks like it contains an API key/secret. Workspace memory must NEVER hold credentials — they are injected into every prompt. Secrets stay in the platform environment/vault; store only the FACT (e.g. "stock photos available via search_stock_photos"), and tell the user any key pasted into chat should be rotated.');
+        }
       }
       const [row] = await db
         .select({ agentMemory: tenants.agentMemory })

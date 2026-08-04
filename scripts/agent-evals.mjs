@@ -149,6 +149,10 @@ expect('src/libs/agent/prompt.ts', 'Workspace memory', 'standing memory must be 
 expect('src/app/api/agent/chat/route.ts', 'agentMemory', 'chat turns must load workspace memory');
 expect('src/app/api/internal/run-scheduled/route.ts', 'memory: tenant.agentMemory', 'scheduled + mission runs must load workspace memory');
 
+// ── Stock photos + memory secrets rail (Phase 28.1) ─────────────────────────
+expect('src/libs/agent/webTools.ts', "'search_stock_photos'", 'free stock images (Pexels/Pixabay via env keys) before paid Kie generation');
+expect('src/libs/agent/platformTools.ts', 'looks like it contains an API key', 'workspace memory must REJECT credentials — it is injected into every prompt');
+
 // ── Chat UX honesty (Phase 26.1/26.2) ───────────────────────────────────────
 expect('src/features/agent/AgentChat.tsx', 'abortRef', 'Stop button must abort the in-flight stream');
 expect('src/features/agent/AgentChat.tsx', 'forceScrollRef', 'refresh must land at the NEWEST message, not the oldest');
