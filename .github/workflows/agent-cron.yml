@@ -1,20 +1,27 @@
 name: Agent scheduled tasks
 
-# Triggers the Command Center's scheduled-task runner. Each tick executes up
-# to 3 due tasks through the agent tool loop + approvals gateway.
+# Triggers the Command Center's scheduled-task + mission runner. Each tick
+# executes due scheduled tasks (time-budgeted) and then advances up to 4
+# mission steps across running missions.
 # Requires the repo secret CRON_SECRET to match the Railway variable CRON_SECRET.
+#
+# */10, not */30 (2026-08-04): missions advance a few steps per TICK, so the
+# tick interval is the floor on background throughput — at 30 minutes, four
+# concurrent missions crawled at a step every ~2 hours and read as "stalled".
+# GitHub delivers scheduled runs late sometimes; that's fine, the runner is
+# overlap-safe (tasks claim via nextRunAt, steps claim via status+staleness).
 
 on:
   schedule:
-    - cron: '*/30 * * * *'
+    - cron: '*/10 * * * *'
   workflow_dispatch: {}
 
 jobs:
   tick:
     runs-on: ubuntu-latest
     steps:
-      - name: Run due scheduled tasks
+      - name: Run due scheduled tasks + mission steps
         run: |
           curl -sS -X POST "https://artivio.ai/api/internal/run-scheduled" \
             -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" \
-            --max-time 280 || true
+            --max-time 300 || true

@@ -68,7 +68,7 @@ Each item has a UAT test (T-xx). Run the UAT after every significant deploy; a b
 | F2 | Cost ledger: exact tokens incl. cache reads/writes, plugin units, markup | ✅ | T-23 👤 Compare a day's ledger vs Bedrock/Kie invoices (±5%). |
 | F3 | Issue triage + automatic operator escalation (captureIssue) | ✅ | T-24 👤 Force a platform-class error; verify Issues row + email. |
 | F4 | Per-turn trace UI (model calls, tool spans, latency, tokens per turn) | ❌ | Data exists in audit+ledger; no view. P1 — this is table stakes on every 2026 platform. |
-| F5 | Eval / regression suite of golden tasks | ⚠️ | Phase 27: static tripwires SHIPPED (`node scripts/agent-evals.mjs`, 44 assertions — every past incident pinned; run before push). Still missing: automated LIVE golden-task runs against the deployed app (G1–G5 documented in the script header, manual for now). |
+| F5 | Eval / regression suite of golden tasks | ⚠️ | Phase 27: static tripwires SHIPPED (`node scripts/agent-evals.mjs`, 48 assertions — every past incident pinned; run before push). Still missing: automated LIVE golden-task runs against the deployed app (G1–G5 documented in the script header, manual for now). |
 | F6 | Platform health endpoint + uptime alerting for artivio.ai itself | ⚠️ | Add /api/health + UptimeRobot (same pattern as BudgetSmart). T-25 👤. |
 | F7 | Structured request logging with correlation IDs | ⚠️ | Railway stdout only. |
 

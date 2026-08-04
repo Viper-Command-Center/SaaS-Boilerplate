@@ -149,6 +149,13 @@ expect('src/libs/agent/prompt.ts', 'Workspace memory', 'standing memory must be 
 expect('src/app/api/agent/chat/route.ts', 'agentMemory', 'chat turns must load workspace memory');
 expect('src/app/api/internal/run-scheduled/route.ts', 'memory: tenant.agentMemory', 'scheduled + mission runs must load workspace memory');
 
+// ── Mission throughput + agent mission control (Phase 28.2 — "missions are
+// stalling and Max can't cancel anything") ──────────────────────────────────
+expect('src/app/api/internal/run-scheduled/route.ts', 'TASKS_TIME_BUDGET_MS', 'scheduled tasks must not starve the mission runner');
+expect('src/app/api/internal/run-scheduled/route.ts', 'STEP_STALE_MS', 'fresh running steps must not be double-run by overlapping ticks');
+expect('src/libs/agent/missionTools.ts', "'set_mission_status'", 'the agent needs pause/resume/cancel — zombie missions pile up otherwise');
+expect('src/libs/agent/missionTools.ts', 'already has', 'start_mission must refuse a pileup of concurrent running missions');
+
 // ── Stock photos + memory secrets rail (Phase 28.1) ─────────────────────────
 expect('src/libs/agent/webTools.ts', "'search_stock_photos'", 'free stock images (Pexels/Pixabay via env keys) before paid Kie generation');
 expect('src/libs/agent/platformTools.ts', 'looks like it contains an API key', 'workspace memory must REJECT credentials — it is injected into every prompt');

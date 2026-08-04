@@ -45,12 +45,22 @@ export const maxDuration = 300;
 
 const MAX_TASKS_PER_TICK = 3;
 const MISSION_MAX_ITERATIONS = 40;
-const MISSION_WALL_CLOCK_MS = 4 * 60_000; // leave headroom under maxDuration
+const MISSION_WALL_CLOCK_MS = 4 * 60_000;
 const CONTINUATION_DELAY_MS = 5 * 60_000;
-// One mission step per tick, deliberately: the route's 300s ceiling is
-// already shared with up to 3 scheduled tasks, and a step that needs more
-// time continues on the next tick anyway (exhaustion-continue below).
-const MAX_MISSION_STEPS_PER_TICK = 1;
+// ── Tick time budgeting (Phase 28.2 — the mission-starvation fix) ──────────
+// This runs on Railway (a plain Node server), so Next's maxDuration is not a
+// hard kill and the GitHub curl disconnecting doesn't stop the handler. The
+// real constraint is the NEXT tick: stay comfortably inside the cron
+// interval so ticks never overlap. Budget: tasks get the first slice,
+// missions are GUARANTEED the rest — before this, 3 slow scheduled tasks
+// (4 min each) plus a single-step mission slot meant 4 concurrent missions
+// crawled at one step every ~2 hours, which read as "stalled" to the user.
+const TASKS_TIME_BUDGET_MS = 9 * 60_000;
+const TOTAL_TIME_BUDGET_MS = 22 * 60_000;
+const MAX_MISSION_STEPS_PER_TICK = 4;
+// A step left 'running' with a FRESH updatedAt is (probably) executing in an
+// overlapping/previous tick — don't double-run it; only resume once stale.
+const STEP_STALE_MS = 10 * 60_000;
 const MAX_STEP_ATTEMPTS = 2;
 
 /** Merge platform + mission + MCP tools into one resolvable toolset. */
@@ -82,6 +92,8 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
+  const tickStartedAt = Date.now();
+
   const due = await db
     .select()
     .from(scheduledTasks)
@@ -92,6 +104,11 @@ export async function POST(request: Request) {
   const results: Array<{ id: string; name: string; ok: boolean; continued?: boolean }> = [];
 
   for (const task of due) {
+    // Tasks may not eat the missions' time slice. An unclaimed task is still
+    // due next tick — nothing is lost by deferring it.
+    if (Date.now() - tickStartedAt > TASKS_TIME_BUDGET_MS) {
+      break;
+    }
     // Claim immediately so overlapping cron ticks don't double-run it.
     await db
       .update(scheduledTasks)
@@ -169,27 +186,37 @@ Check the current workspace state with your read tools (list_views, list_panels,
     results.push({ id: task.id, name: task.name, ok, ...(continued ? { continued } : {}) });
   }
 
-  // ── Mission steps (Phase 27) ──────────────────────────────────────────────
+  // ── Mission steps (Phase 27; multi-step ticks since Phase 28.2) ──────────
+  // Up to MAX_MISSION_STEPS_PER_TICK steps per tick, each time re-selecting
+  // the least-recently-touched running mission (claiming rotates it to the
+  // back, so several missions share a tick fairly instead of one step per
+  // 30 minutes across ALL of them).
   const missionResults: Array<{ missionId: string; stepId: string; outcome: string }> = [];
 
-  const runningMissions = await db
-    .select()
-    .from(missions)
-    .where(eq(missions.status, 'running'))
-    .orderBy(asc(missions.updatedAt)) // least-recently-touched first = fair across workspaces
-    .limit(MAX_MISSION_STEPS_PER_TICK);
+  for (let slot = 0; slot < MAX_MISSION_STEPS_PER_TICK; slot++) {
+    // Leave room for the step we're about to run — never risk tick overlap.
+    if (Date.now() - tickStartedAt > TOTAL_TIME_BUDGET_MS - MISSION_WALL_CLOCK_MS) {
+      break;
+    }
 
-  for (const mission of runningMissions) {
-    // A step left 'running' is a previous tick's exhausted (or crashed) step —
-    // resume it. Otherwise claim the first pending step in plan order.
+    const [mission] = await db
+      .select()
+      .from(missions)
+      .where(eq(missions.status, 'running'))
+      .orderBy(asc(missions.updatedAt)) // least-recently-touched first = fair
+      .limit(1);
+    if (!mission) {
+      break;
+    }
+
     const steps = await db
       .select()
       .from(missionSteps)
       .where(eq(missionSteps.missionId, mission.id))
       .orderBy(asc(missionSteps.position));
-    const step = steps.find(s => s.status === 'running') ?? steps.find(s => s.status === 'pending');
 
-    if (!step) {
+    const open = steps.filter(s => s.status === 'running' || s.status === 'pending');
+    if (open.length === 0) {
       // Every step is terminal (done/skipped/failed-but-mission-resumed) —
       // close the mission out.
       await db
@@ -197,6 +224,20 @@ Check the current workspace state with your read tools (list_views, list_panels,
         .set({ status: 'done', updatedAt: new Date() })
         .where(eq(missions.id, mission.id));
       missionResults.push({ missionId: mission.id, stepId: '', outcome: 'mission-done' });
+      continue;
+    }
+
+    // A STALE 'running' step is a previous tick's exhausted (or crashed) step
+    // — resume it. A FRESH 'running' step is likely mid-flight in another
+    // invocation; don't double-run it — rotate this mission to the back and
+    // give the slot to a different mission.
+    const step = steps.find(s =>
+      s.status === 'running' && Date.now() - new Date(s.updatedAt).getTime() > STEP_STALE_MS,
+    ) ?? steps.find(s => s.status === 'pending');
+
+    if (!step) {
+      await db.update(missions).set({ updatedAt: new Date() }).where(eq(missions.id, mission.id));
+      missionResults.push({ missionId: mission.id, stepId: '', outcome: 'in-flight-skip' });
       continue;
     }
 
