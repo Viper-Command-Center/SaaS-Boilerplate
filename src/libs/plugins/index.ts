@@ -7,6 +7,7 @@
 import type { BuiltinProvider } from '@/libs/plugins/types';
 import { agentcoreBrowserProvider } from '@/libs/plugins/agentcoreBrowser';
 import { cloudflareAnalyticsProvider } from '@/libs/plugins/cloudflareAnalytics';
+import { googleAnalyticsProvider } from '@/libs/plugins/googleAnalytics';
 import { heygenProvider } from '@/libs/plugins/heygen';
 import { kieProvider } from '@/libs/plugins/kie';
 import { wordpressProvider } from '@/libs/plugins/wordpress';
@@ -17,6 +18,7 @@ export const BUILTIN_PROVIDERS: Record<string, BuiltinProvider> = {
   [agentcoreBrowserProvider.slug]: agentcoreBrowserProvider,
   [heygenProvider.slug]: heygenProvider,
   [cloudflareAnalyticsProvider.slug]: cloudflareAnalyticsProvider,
+  [googleAnalyticsProvider.slug]: googleAnalyticsProvider,
 };
 
 export function getBuiltinProvider(slug: string): BuiltinProvider | undefined {
@@ -108,6 +110,21 @@ export const CATALOG_PRESETS = [
       url: 'https://mcp.duda.co/mcp',
       authHeader: 'Authorization',
       authHint: 'Your Duda MCP Access Token (Duda dashboard → Account Settings → MCP).',
+    },
+  },
+  {
+    key: 'google-analytics',
+    label: 'Google Analytics 4 + Search Console',
+    entry: {
+      slug: 'google-analytics',
+      name: 'Google Analytics + Search Console',
+      description: 'GA4 traffic, engagement and conversions, plus the Search Console queries a site ranks for. Read-only, and free — Google does not bill these APIs.',
+      category: 'data',
+      transport: 'builtin' as const,
+      provider: 'google-analytics',
+      // Per-connection: the workspace supplies its own GA4 property ID (in the
+      // connection's site/URL field) and its own service account JSON.
+      authHint: 'The WHOLE service account JSON key file. Cloud Console → IAM → Service Accounts → Keys → Add key (JSON). Then grant that service account email Viewer on the GA4 property, and add it as a user in Search Console → Settings → Users and permissions. Do NOT use an OAuth client ID: a consent screen in "Testing" issues refresh tokens that expire after 7 days, which would silently blind the agent every week.',
     },
   },
   {

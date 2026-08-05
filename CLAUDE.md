@@ -481,6 +481,30 @@ The MCP spec has several content shapes and **file reads do not use `text`**. Gi
 
 **Also settled here (do not re-litigate):** `load_connection_tools` IS available inside mission step runs — `assembleToolset` is the same function the chat route uses, there is no tool filtering in `run-scheduled`, and the mission system prompt names the meta-tool explicitly. Max reported it as missing because `run-scheduled` injects the PREVIOUS step's stored `result` into the next run as a handoff note (line ~307), and steps that ran BEFORE 29.1 recorded "load_connection_tools is not available in automated runs" as fact. **A pre-fix step result keeps re-asserting the pre-fix world to every later step of that mission.** Cancel and relaunch a mission whose early steps ran against a since-fixed platform bug; do not let the agent write step instructions that work around a bug that no longer exists.
 
+## Phase 30 — Google Analytics 4 + Search Console (2026-08-05, no migration)
+Ryan already had GA4 running on budgetsmart.io and wanted Max reading it ("we get more detail than just traffic with Cloudflare" — the `cloudflareAnalytics` provider stays, this is additive).
+
+**🔑 SERVICE ACCOUNT, NOT OAUTH — settled, do not re-litigate.** Ryan's existing web vars were the wrong shape for an unattended agent:
+- `GOOGLE_ANALYTICS_KEY="G-…"` is a **measurement ID** — what gtag.js uses to WRITE pageviews. It is public in the page source and can read nothing.
+- `GOOGLE_OAUTH_CLIENT_ID` needs a client secret plus a human-consented refresh token, and **a consent screen with publishing status "Testing" issues refresh tokens that expire in 7 days** (documented by Google). Max would go blind every week, silently, and it would present as an Artivio bug.
+- A **service account** signs a JWT and exchanges it for a fresh access token per call — no refresh token exists, so there is no expiry cliff and no human in the loop.
+
+**Why not the official Google Analytics MCP** (`googleanalytics/google-analytics-mcp`): it is **Python / pipx / stdio**. `stdioCatalog.ts` only resolves entry scripts from npm packages pinned in our package.json and spawns `process.execPath` — adding a Python runtime to spawn a third-party process beside the vault master key is exactly what that boundary exists to prevent (ADR #1). Underneath it is one REST endpoint per question, so an in-app adapter (ADR #3b) is cheaper.
+
+**`src/libs/plugins/googleAnalytics.ts`** — per-connection built-in. `url` = the GA4 property ID (numeric; `propertyPath()` rejects a `G-…` measurement ID by name, because that is the mistake everyone makes), `credential` = the whole service account JSON sealed in the vault. RS256 JWT signing via `node:crypto` — **no new deps**, same as the hand-rolled SigV4 and TOTP. Access tokens cached per service-account email (a mission step can make twenty GA calls; it should not do twenty token exchanges).
+
+**NO METERING, on purpose**: the GA4 Data API and Search Console API are free (quota-limited, not billed). No `units`, no price rule — so none of the Phase 18 silent-$0 risk applies. This is what a genuinely free tier-2 provider looks like.
+
+**Two Phase 22 lessons applied directly:**
+- GA4 has ~200 dimensions and ~100 metrics and NO way for the model to guess them, so `ga4_metadata` reads the property's real metadata at runtime (including its custom dimensions). This is the fal.ai-style "fetch the schema" cure rather than a hand-maintained table that goes stale.
+- Search Console site strings are `sc-domain:example.com` OR `https://example.com/` and the wrong one 404s — unguessable, so `gsc_list_sites` enumerates them and every other `gsc_` tool takes the exact string.
+
+**Why Search Console matters more than GA4 for this account**: GA4 only sees people who already arrived. Search Console reports the queries a page ranks for with impressions, CTR and average position — the actual feedback loop for whether the blog strategy is working. Note `gscDates()` defaults the window to 28 days ago → 3 days ago: **Search Console finalises data on a ~2-day lag**, and asking for "today" returns an empty set that reads as "the site got no traffic."
+
+4 new tripwires (70 total).
+
+**Ryan's setup**: Cloud Console → enable Analytics Data API + Search Console API → IAM → Service Accounts → create → Keys → Add key (JSON). Then GA4 Admin → Property Access Management → add the service account email as **Viewer**; Search Console → Settings → Users and permissions → add the same email. In Artivio: Admin → Plugin catalog → Quick add → "Google Analytics 4 + Search Console", then connect it in the workspace with the property ID + the JSON. The JSON never transits chat.
+
 ## Gotchas
 - **Migration 0010 was hand-written** (SQL + `_journal.json`), because bash reads of the mounted repo are stale/truncated so drizzle-kit can't see the real `Schema.ts`. The SQL is idempotent (`IF NOT EXISTS` + `DO $$ … EXCEPTION WHEN duplicate_object`). If drizzle-kit ever regenerates from the last snapshot it may re-emit `files` — harmless, but delete the dupe.
 - **Bash cannot read mounted files reliably** (virtiofs returns NUL-padded or truncated content — `Schema.ts` read as 1KB when it's 15KB). Never typecheck/build/patch from bash on the mount; use Read/Grep/Edit/Write tools.

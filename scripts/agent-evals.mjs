@@ -210,6 +210,12 @@ expect('src/app/api/internal/run-scheduled/route.ts', 'attachToolSink', 'mission
 expect('src/libs/mcp/registry.ts', 'flattenMcpContent', 'MCP results must decode EmbeddedResource blocks — file reads do not use `text`');
 forbid('src/libs/mcp/registry.ts', "c.type === 'text' ? c.text ?? '' : `[${c.type}]`", 'the naive flattener discarded every non-text block — that is the incident');
 
+// ── Google Analytics + Search Console (Phase 30) ────────────────────────────
+expect('src/libs/plugins/googleAnalytics.ts', 'jwt-bearer', 'GA4 must authenticate as a SERVICE ACCOUNT — an OAuth consent screen in Testing expires refresh tokens after 7 days and blinds the agent weekly');
+expect('src/libs/plugins/googleAnalytics.ts', "'ga4_metadata'", 'the agent must be able to ENUMERATE real dimension/metric names — GA4 has ~200 of them (the Kie free-text-field lesson)');
+expect('src/libs/plugins/googleAnalytics.ts', "'gsc_list_sites'", 'Search Console site strings (sc-domain: vs https://) cannot be guessed — they must be listed at runtime');
+expect('src/libs/plugins/index.ts', 'googleAnalyticsProvider', 'the provider must be registered or it never reaches the admin catalog');
+
 
 // ── Report ──────────────────────────────────────────────────────────────────
 if (failures.length > 0) {
