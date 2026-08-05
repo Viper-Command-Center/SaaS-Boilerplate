@@ -75,6 +75,20 @@ export type BuiltinProvider = {
   noCredential?: boolean;
   /** Set when the provider reports its own consumption (see UsageMetering). */
   usageMetering?: UsageMetering;
+  /**
+   * 🔴 PHASE 30.1 — what the per-connection TARGET actually is.
+   * The connect form used to hardcode "Your site URL — https://yoursite.com"
+   * for every perConnection provider and validate it with z.string().url(),
+   * because WordPress was the only one and its target IS a site. Google
+   * Analytics' target is a numeric GA4 property ID, so the form asked the
+   * wrong question AND rejected the right answer — the user could only enter
+   * something wrong, and the agent then reported a config error it was blamed
+   * for. A form that can create a thing must ask for the thing it needs.
+   */
+  targetLabel?: string;
+  targetPlaceholder?: string;
+  /** Default true (a URL). False = free-form, e.g. a numeric property ID. */
+  targetIsUrl?: boolean;
   tools: BuiltinTool[];
   /**
    * Execute one tool.

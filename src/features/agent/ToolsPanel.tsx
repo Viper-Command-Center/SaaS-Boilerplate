@@ -13,6 +13,11 @@ type Connection = {
   /** Header name only — the sealed value never leaves the server. */
   authHeader: string | null;
   hasSecret: boolean;
+  /** Built-in whose target + credential live on THIS row, so it is editable. */
+  perConnection?: boolean;
+  targetLabel?: string;
+  targetPlaceholder?: string;
+  targetIsUrl?: boolean;
 };
 
 type CatalogPlugin = {
@@ -24,8 +29,12 @@ type CatalogPlugin = {
   tier: string;
   authHint: string | null;
   needsKey: boolean;
-  /** Per-site plugins (WordPress) also need the workspace's own site URL. */
+  /** Per-connection plugins also need the workspace's own target. */
   needsSiteUrl?: boolean;
+  /** What that target actually IS — not always a site URL (Phase 30.1). */
+  targetLabel?: string;
+  targetPlaceholder?: string;
+  targetIsUrl?: boolean;
   installed: boolean;
   pricing: Array<{ tool: string; unit: string; retailUsd: number }>;
 };
@@ -261,6 +270,9 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
   };
 
   const inputClass = 'w-full rounded-lg border border-white/12 bg-white/[0.04] px-3 py-2 text-sm text-white/90 outline-none transition placeholder:text-white/30 focus:border-indigo-400/40';
+  // Editing a per-connection built-in: no endpoint, no auth header, and the
+  // "url" field is really that provider's target (Phase 30.1).
+  const isBuiltinEdit = editing?.transport === 'builtin';
   const available = catalog.filter(p => !p.installed);
 
   return (
@@ -320,24 +332,44 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
           "
           >
             <input className={inputClass} value={name} onChange={e => setName(e.target.value)} placeholder="Name (e.g. github)" required />
-            <input className={inputClass} value={url} onChange={e => setUrl(e.target.value)} placeholder="https://…/mcp" required />
-            <input className={inputClass} value={headerName} onChange={e => setHeaderName(e.target.value)} placeholder="Auth header" />
+            <input
+              className={inputClass}
+              value={url}
+              onChange={e => setUrl(e.target.value)}
+              placeholder={isBuiltinEdit ? (editing?.targetPlaceholder ?? 'Target') : 'https://…/mcp'}
+              required
+            />
+            {/* A built-in has no HTTP header — its credential goes straight to
+                the adapter. Showing an "Auth header" box there invites someone
+                to fill it in and wonder why nothing happens. */}
+            {!isBuiltinEdit && (
+              <input className={inputClass} value={headerName} onChange={e => setHeaderName(e.target.value)} placeholder="Auth header" />
+            )}
             <input
               className={inputClass}
               type="password"
               value={headerValue}
               onChange={e => setHeaderValue(e.target.value)}
-              placeholder={editing?.hasSecret ? 'Stored — blank keeps it' : 'Bearer sk_… (encrypted)'}
+              placeholder={editing?.hasSecret ? 'Stored — blank keeps it' : isBuiltinEdit ? 'New credential (encrypted)' : 'Bearer sk_… (encrypted)'}
             />
           </div>
+          {isBuiltinEdit && editing?.targetLabel && (
+            <p className="text-[11px] text-white/30">
+              {editing.targetLabel}
+              {' — '}
+              {editing.targetPlaceholder}
+            </p>
+          )}
           {/* Most 401s are a key pasted without its prefix. Say so where it
               happens rather than letting the agent guess about it later. */}
+          {!isBuiltinEdit && (
           <p className="text-[11px] text-white/30">
             Include the prefix the vendor expects — usually
             {' '}
             <code className="text-white/50">Bearer sk_…</code>
             . A few (Duda) want the raw token with no prefix.
           </p>
+          )}
           {testResult && (
             <p className={`text-xs ${testResult.ok ? 'text-emerald-300' : 'text-rose-300'}`} role="status">
               {testResult.ok ? '✓ ' : '✗ '}
@@ -349,6 +381,7 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
             <Button type="submit" size="sm" disabled={busy}>
               {busy ? 'Saving…' : editing ? 'Save changes' : 'Add server'}
             </Button>
+            {!isBuiltinEdit && (
             <Button
               type="button"
               size="sm"
@@ -362,6 +395,7 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
                   ? 'Test saved key'
                   : 'Test connection'}
             </Button>
+            )}
             {editing && (
               <Button type="button" size="sm" variant="outline" onClick={resetForm}>
                 Cancel
@@ -423,7 +457,7 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
                     {p.needsSiteUrl && (
                       <input
                         className={inputClass}
-                        placeholder="Your site URL — https://yoursite.com"
+                        placeholder={p.targetPlaceholder ?? 'Your site URL — https://yoursite.com'}
                         value={siteUrl}
                         onChange={e => setSiteUrl(e.target.value)}
                       />
@@ -503,9 +537,14 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
               </div>
             </div>
             <div className="flex shrink-0 items-center gap-2">
-              {/* Built-ins have no URL or header to edit — their credential is
-                  managed in the admin catalog, not here. */}
-              {conn.transport !== 'builtin' && (
+              {/* A TIER-1 built-in (Kie, AgentCore, HeyGen) keeps its key on
+                  the admin catalog entry — nothing here to edit. A
+                  PER-CONNECTION built-in (WordPress, Google Analytics) keeps
+                  both its target and its credential on this row, so it must be
+                  editable: otherwise a mistyped GA4 property ID can only be
+                  fixed by Remove-and-recreate, which also silently drops the
+                  tool policies. Same defect as Phase 11, one table over. */}
+              {(conn.transport !== 'builtin' || conn.perConnection) && (
                 <Button variant="outline" size="sm" onClick={() => startEdit(conn)}>Edit</Button>
               )}
               <Button variant="outline" size="sm" onClick={() => toggle(conn)}>

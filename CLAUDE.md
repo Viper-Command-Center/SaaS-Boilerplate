@@ -505,6 +505,19 @@ Ryan already had GA4 running on budgetsmart.io and wanted Max reading it ("we ge
 
 **Ryan's setup**: Cloud Console → enable Analytics Data API + Search Console API → IAM → Service Accounts → create → Keys → Add key (JSON). Then GA4 Admin → Property Access Management → add the service account email as **Viewer**; Search Console → Settings → Users and permissions → add the same email. In Artivio: Admin → Plugin catalog → Quick add → "Google Analytics 4 + Search Console", then connect it in the workspace with the property ID + the JSON. The JSON never transits chat.
 
+## Phase 30.1 — the connect form asked the wrong question, then wouldn't let you fix it (2026-08-05, no migration)
+Ryan connected Google Analytics and Max reported `"https://budgetsmart.io" is not a GA4 property ID`. That reads like a user mistake. It was not: **he could not have entered the right value.**
+
+**Bug 1 — the form asked for the wrong thing.** `ToolsPanel.tsx` hardcoded the per-connection target field as `placeholder="Your site URL — https://yoursite.com"` for EVERY perConnection provider, and `/api/plugins` validated it with `siteUrl: z.string().url()`. WordPress was the only per-connection built-in when that was written and its target genuinely IS a site. Google Analytics' target is a numeric GA4 property ID — so the form asked for a URL, the API **rejected anything that wasn't one**, and the only value the user could submit was guaranteed wrong. Then the agent faithfully relayed a config error and looked like the problem. **Third time this shape has appeared (Phases 21, 24, 29.2): the platform made the mistake and the agent absorbed the blame.**
+
+Fix: `BuiltinProvider` gains `targetLabel` / `targetPlaceholder` / `targetIsUrl`. Google Analytics declares `targetIsUrl: false` and a placeholder naming the exact GA4 screen. URL shape is now checked *per provider*, where we know which provider it is, instead of blanket-enforced where we don't.
+
+**Bug 2 — built-in connections had no Edit button.** `ToolsPanel` hid Edit on `transport === 'builtin'`, with the comment "built-ins have no URL or header to edit — their credential is managed in the admin catalog". True for TIER-1 built-ins (Kie, AgentCore, HeyGen: platform key on the catalog entry). **False for PER-CONNECTION built-ins** (WordPress, Google Analytics), where both the target and the credential live on the workspace's connection row. So a mistyped property ID was unfixable except by Remove-and-recreate — which also silently drops the tool policies.
+
+This is **Phase 11's defect, one table over**: Ryan mis-configured Kie.ai, could only Remove, and catalog entries were made editable. The lesson was written down and still not carried to workspace connections until it bit again. `GET /api/mcp/connections` now returns `perConnection` + the target labels; Edit shows for `transport !== 'builtin' || perConnection`; the edit form drops the auth-header box and the HTTP "Test connection" probe for built-ins (neither applies) and labels the target field from the provider. `PATCH` no longer forces `z.string().url()` on `url` — it URL-checks only `transport === 'http'`.
+
+**The rule, stated once more because it keeps being the answer:** if a form can create a thing, it must be able to correct that thing — and it must ask for the thing it actually needs. 3 new tripwires (73 total).
+
 ## Gotchas
 - **Migration 0010 was hand-written** (SQL + `_journal.json`), because bash reads of the mounted repo are stale/truncated so drizzle-kit can't see the real `Schema.ts`. The SQL is idempotent (`IF NOT EXISTS` + `DO $$ … EXCEPTION WHEN duplicate_object`). If drizzle-kit ever regenerates from the last snapshot it may re-emit `files` — harmless, but delete the dupe.
 - **Bash cannot read mounted files reliably** (virtiofs returns NUL-padded or truncated content — `Schema.ts` read as 1KB when it's 15KB). Never typecheck/build/patch from bash on the mount; use Read/Grep/Edit/Write tools.

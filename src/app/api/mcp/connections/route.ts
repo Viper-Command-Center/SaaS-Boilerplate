@@ -4,14 +4,16 @@
  * the vault immediately and never returned. Owners/admins only.
  */
 
-import { eq } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getCurrentUser } from '@/libs/auth/session';
 import { db } from '@/libs/DB';
 import { getUserTenants } from '@/libs/tenants';
 import { sealSecret, vaultConfigured } from '@/libs/vault';
-import { auditLog, credentials, mcpConnections } from '@/models/Schema';
+import { getBuiltinProvider } from '@/libs/plugins';
+import { getStdioServer } from '@/libs/mcp/stdioCatalog';
+import { auditLog, credentials, mcpConnections, pluginCatalog } from '@/models/Schema';
 
 export const dynamic = 'force-dynamic';
 
@@ -51,6 +53,7 @@ export async function GET(request: Request) {
       // The sealed VALUE is never returned — `hasSecret` only says whether one
       // exists, so the form can show "leave blank to keep the current key".
       headerCredentials: mcpConnections.headerCredentials,
+      catalogId: mcpConnections.catalogId,
       createdAt: mcpConnections.createdAt,
     })
     .from(mcpConnections)
@@ -58,10 +61,35 @@ export async function GET(request: Request) {
 
   // Reshape before it leaves the server: the client gets the header NAME and a
   // boolean, never the credential id and never the sealed value.
-  const connections = rows.map(({ headerCredentials, ...row }) => {
+  // 🔴 PHASE 30.1 — a PER-CONNECTION built-in (WordPress, Google Analytics)
+  // keeps BOTH its target and its credential on this row, so it is editable
+  // here. A tier-1 built-in (Kie, AgentCore, HeyGen) keeps them on the catalog
+  // entry and is not. The old UI collapsed the two into "built-ins have
+  // nothing to edit", which left a mistyped GA4 property ID unfixable —
+  // Remove-and-recreate was the only path, exactly the Phase 11 defect.
+  const catalogIds = [...new Set(rows.map(r => r.catalogId).filter((v): v is string => Boolean(v)))];
+  const catalogRows = catalogIds.length > 0
+    ? await db.select().from(pluginCatalog).where(inArray(pluginCatalog.id, catalogIds))
+    : [];
+  const byCatalogId = new Map(catalogRows.map(c => [c.id, c]));
+
+  const connections = rows.map(({ headerCredentials, catalogId, ...row }) => {
     const map = (headerCredentials ?? {}) as Record<string, string>;
     const header = Object.keys(map)[0] ?? null;
-    return { ...row, authHeader: header, hasSecret: Boolean(header && map[header]) };
+    const entry = catalogId ? byCatalogId.get(catalogId) : undefined;
+    const builtin = entry?.transport === 'builtin' && entry.provider ? getBuiltinProvider(entry.provider) : undefined;
+    const stdioSpec = entry?.transport === 'stdio' && entry.provider ? getStdioServer(entry.provider) : undefined;
+    const perConnection = Boolean(builtin?.perConnection) || Boolean(stdioSpec?.perConnection);
+    return {
+      ...row,
+      authHeader: header,
+      hasSecret: Boolean(header && map[header]),
+      perConnection,
+      targetLabel: builtin?.targetLabel ?? 'Site URL',
+      targetPlaceholder: builtin?.targetPlaceholder ?? 'Your site URL — https://yoursite.com',
+      targetIsUrl: builtin ? builtin.targetIsUrl !== false : true,
+      credentialLabel: builtin?.credentialLabel ?? entry?.authHint ?? null,
+    };
   });
 
   return NextResponse.json({ connections, vaultConfigured: vaultConfigured() });

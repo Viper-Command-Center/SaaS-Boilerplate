@@ -45,7 +45,10 @@ const PatchSchema = z.object({
   enabled: z.boolean().optional(),
   toolPolicy: z.record(z.string(), z.enum(['auto', 'approval', 'deny'])).optional(),
   name: z.string().min(1).max(60).optional(),
-  url: z.string().url().max(500).optional(),
+  // NOT z.string().url(): a per-connection built-in's target may be a numeric
+  // GA4 property ID rather than an address. HTTP/stdio connections are still
+  // URL-checked below, where the transport is known (Phase 30.1).
+  url: z.string().min(1).max(500).optional(),
   authHeader: z.string().max(80).optional(),
   // Blank/omitted = keep the existing sealed value. The value is NEVER read
   // back to the client, so "leave it alone" has to be expressible.
@@ -75,6 +78,16 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
   // headerCredentials maps headerName → credentialId. Renaming the header or
   // supplying a new value means re-sealing; either way the old credential row
   // is removed so a rotated key doesn't linger in the vault.
+  // An HTTP connection's url really is an endpoint; a built-in's is whatever
+  // that provider's target is. Only enforce URL shape where it is meaningful.
+  if (body.url !== undefined && managed.conn.transport === 'http') {
+    try {
+      void new URL(body.url);
+    } catch {
+      return NextResponse.json({ error: 'The server URL must be a full URL including https://.' }, { status: 400 });
+    }
+  }
+
   const existing = (managed.conn.headerCredentials ?? {}) as Record<string, string>;
   const oldHeader = Object.keys(existing)[0] ?? null;
   const oldCredId = oldHeader ? existing[oldHeader] : undefined;

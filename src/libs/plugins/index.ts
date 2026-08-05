@@ -36,6 +36,9 @@ export function listBuiltinProviders() {
     multiKey: Boolean(p.multiKey),
     noCredential: Boolean(p.noCredential),
     usageMetering: p.usageMetering ?? null,
+    targetLabel: p.targetLabel ?? null,
+    targetPlaceholder: p.targetPlaceholder ?? null,
+    targetIsUrl: p.targetIsUrl !== false,
     tools: p.tools.map(t => ({
       name: t.name,
       description: t.description,

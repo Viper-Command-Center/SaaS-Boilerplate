@@ -76,6 +76,11 @@ export async function GET(request: Request) {
         // providers (AgentCore browser) need nothing — one click to enable.
         needsKey: !noCredential && (p.tier === 'tier2' || perConnection),
         needsSiteUrl: perConnection,
+        // Phase 30.1: what to ASK for. stdio per-connection servers (DiviOps)
+        // are genuinely site URLs; built-ins declare their own.
+        targetLabel: provider?.targetLabel ?? 'Site URL',
+        targetPlaceholder: provider?.targetPlaceholder ?? 'Your site URL — https://yoursite.com',
+        targetIsUrl: provider ? provider.targetIsUrl !== false : true,
         installed: installedIds.has(p.id),
         // Show clients what they'll be charged, never our raw cost.
         // Usage-priced plugins (Kie.ai) are one rate for every tool — collapse
@@ -106,8 +111,14 @@ const EnableSchema = z.object({
   pluginId: z.string().uuid(),
   /** tier2 / per-connection built-ins: the workspace's own credential. */
   credentialValue: z.string().max(4000).optional(),
-  /** Per-connection built-ins (e.g. WordPress): this workspace's site URL. */
-  siteUrl: z.string().url().max(500).optional(),
+  /**
+   * Per-connection target. NOT necessarily a URL — WordPress and DiviOps want a
+   * site, Google Analytics wants a numeric GA4 property ID. Shape is checked
+   * against the provider's `targetIsUrl` below, where we actually know which
+   * provider this is; a blanket z.string().url() here made valid targets
+   * unenterable (Phase 30.1).
+   */
+  siteUrl: z.string().min(1).max(500).optional(),
 });
 
 export async function POST(request: Request) {
@@ -159,6 +170,17 @@ export async function POST(request: Request) {
 
   // Per-connection plugins (WordPress, DiviOps) target the workspace's own site.
   const targetUrl = perConnection ? (body.siteUrl ?? '') : plugin.url;
+  // Validate the target against what THIS provider says it needs.
+  if (perConnection && targetUrl && provider?.targetIsUrl !== false) {
+    try {
+      void new URL(targetUrl);
+    } catch {
+      return NextResponse.json(
+        { error: `${provider?.targetLabel ?? 'Site URL'} must be a full URL including https://.` },
+        { status: 400 },
+      );
+    }
+  }
   if (perConnection && !targetUrl) {
     return NextResponse.json({ error: 'This plugin needs your site URL (e.g. https://yoursite.com).' }, { status: 400 });
   }

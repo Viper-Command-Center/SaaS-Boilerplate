@@ -394,6 +394,11 @@ export const googleAnalyticsProvider: BuiltinProvider = {
   credentialLabel:
     'Service account JSON key (the whole file). Create it in Cloud Console → IAM → Service Accounts → Keys, then grant that service account Viewer on the GA4 property and add it as a user in Search Console.',
   perConnection: true,
+  // NOT a URL — this is the numeric GA4 property ID. Naming it precisely here
+  // is what stops the "I pasted my website address" failure.
+  targetLabel: 'GA4 property ID',
+  targetPlaceholder: '531479338 — GA4 Admin → Property Settings (NOT the G-… measurement ID)',
+  targetIsUrl: false,
   tools,
 
   async call(tool, args, credential, target) {
