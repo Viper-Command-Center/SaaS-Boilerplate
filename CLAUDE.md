@@ -466,6 +466,21 @@ Triggered by the blog featured-images work: Max correctly noticed articles refer
 
 5 new tripwires (64 total), including a regex tripwire pinning the ORDER of the two lookups in `resolve()` — the ordering is the fix, and a tidy-up that moves the regex back to the top would silently restore the outage.
 
+## Phase 29.2 — every GitHub file read was the string "[resource]" (2026-08-05, no migration)
+Surfaced by the post-29.1 capability re-check: Max could load the GitHub schemas and could COMMIT fine, but `get_file_contents` still returned `[resource]` instead of file text.
+
+**Cause — two identical lines in `registry.ts`** (the HTTP branch and the stdio branch):
+```ts
+result.content.map(c => (c.type === 'text' ? c.text ?? '' : `[${c.type}]`)).join('\n')
+```
+The MCP spec has several content shapes and **file reads do not use `text`**. GitHub returns `get_file_contents` as an **EmbeddedResource** — `{ type: 'resource', resource: { uri, mimeType, text } }`. Every non-text block was replaced with the literal marker `[<type>]`, so the file body was discarded and the agent received ten characters.
+
+**Why it stayed hidden for so long:** WRITES were unaffected — `create_or_update_file` returns a `text` confirmation. So the connection looked healthy, "Max can publish to GitHub" was true, and only reads were silently empty. Max concluded it could not read private repos and fell back to `fetch_url` on raw.githubusercontent.com, which 404s on a private repo — producing the 404 spam in the Issues tab. **Same shape as Phases 21/24/29.1: the platform lied quietly and the agent took the blame for it.**
+
+**Fix**: `flattenMcpContent()` — one shared helper used by both branches. `resource` → `resource.text` when present; a base64 `resource.blob` is DESCRIBED (mime, approx KB, uri) not inlined, because dumping base64 burns the context window and the model cannot read it anyway; `resource_link` → the uri; anything else keeps the `[type]` marker. 2 new tripwires (66 total), including a `forbid` on the old naive flattener.
+
+**Also settled here (do not re-litigate):** `load_connection_tools` IS available inside mission step runs — `assembleToolset` is the same function the chat route uses, there is no tool filtering in `run-scheduled`, and the mission system prompt names the meta-tool explicitly. Max reported it as missing because `run-scheduled` injects the PREVIOUS step's stored `result` into the next run as a handoff note (line ~307), and steps that ran BEFORE 29.1 recorded "load_connection_tools is not available in automated runs" as fact. **A pre-fix step result keeps re-asserting the pre-fix world to every later step of that mission.** Cancel and relaunch a mission whose early steps ran against a since-fixed platform bug; do not let the agent write step instructions that work around a bug that no longer exists.
+
 ## Gotchas
 - **Migration 0010 was hand-written** (SQL + `_journal.json`), because bash reads of the mounted repo are stale/truncated so drizzle-kit can't see the real `Schema.ts`. The SQL is idempotent (`IF NOT EXISTS` + `DO $$ … EXCEPTION WHEN duplicate_object`). If drizzle-kit ever regenerates from the last snapshot it may re-emit `files` — harmless, but delete the dupe.
 - **Bash cannot read mounted files reliably** (virtiofs returns NUL-padded or truncated content — `Schema.ts` read as 1KB when it's 15KB). Never typecheck/build/patch from bash on the mount; use Read/Grep/Edit/Write tools.

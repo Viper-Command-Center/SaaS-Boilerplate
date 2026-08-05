@@ -69,6 +69,60 @@ export type TenantToolset = {
   attachToolSink: (sink: AnthropicTool[]) => void;
 };
 
+/** One block of an MCP tool result's `content` array. */
+type McpContentBlock = { type: string; text?: string; [k: string]: unknown };
+
+/**
+ * Flatten an MCP tool result's content blocks into the single string the agent
+ * sees.
+ *
+ * 🔴 WHY THIS IS NOT `blocks.map(b => b.text)` — the GitHub read incident
+ * (2026-08-05, Phase 29.2). The MCP spec has several content shapes and FILE
+ * READS DO NOT USE `text`: GitHub's MCP returns `get_file_contents` as an
+ * EmbeddedResource — `{ type: 'resource', resource: { uri, mimeType, text } }`.
+ * The old code mapped every non-text block to the literal marker `[<type>]`, so
+ * every file the agent read out of a repo arrived as the ten characters
+ * `[resource]` and the real contents were thrown away.
+ *
+ * The failure was invisible from the outside because WRITES were unaffected —
+ * `create_or_update_file` returns a `text` confirmation. So the connection
+ * looked healthy, the agent could commit but never read, and it concluded it
+ * "cannot read private repos" and fell back to fetch_url on
+ * raw.githubusercontent.com (which 404s on a private repo). Classic Phase
+ * 21/24 shape: the platform silently lied and the agent took the blame.
+ *
+ * Binary blobs are deliberately NOT inlined — a base64 payload would burn the
+ * context window and the model cannot read it anyway. We describe it instead.
+ */
+function flattenMcpContent(blocks: McpContentBlock[]): string {
+  return blocks
+    .map((block) => {
+      if (block.type === 'text') {
+        return block.text ?? '';
+      }
+      if (block.type === 'resource') {
+        const res = block.resource as
+          | { uri?: string; mimeType?: string; text?: string; blob?: string }
+          | undefined;
+        if (typeof res?.text === 'string') {
+          return res.text;
+        }
+        if (typeof res?.blob === 'string') {
+          const kb = Math.round((res.blob.length * 3) / 4 / 1024);
+          return `[binary resource, ${res.mimeType ?? 'unknown type'}, ~${kb}KB, uri: ${res.uri ?? 'unknown'} — not inlined. Use a tool that returns a download URL, then save_file_from_url.]`;
+        }
+        return `[resource carried neither text nor blob: ${res?.uri ?? 'unknown uri'}]`;
+      }
+      if (block.type === 'resource_link') {
+        const uri = typeof block.uri === 'string' ? block.uri : 'unknown uri';
+        const name = typeof block.name === 'string' ? ` (${block.name})` : '';
+        return `[resource link${name}: ${uri}]`;
+      }
+      return `[${block.type}]`;
+    })
+    .join('\n');
+}
+
 const NAME_RE = /^mcp__([a-z0-9-]+)__(.+)$/i;
 
 function sanitize(name: string): string {
@@ -438,10 +492,7 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
               policy: policyMap[tool.name] ?? policyMap['*'] ?? 'approval',
               call: async (args) => {
                 const result = await client.callTool(tool.name, args);
-                const text = result.content
-                  .map(c => (c.type === 'text' ? c.text ?? '' : `[${c.type}]`))
-                  .join('\n')
-                  .slice(0, 20_000);
+                const text = flattenMcpContent(result.content).slice(0, 20_000);
                 if (result.isError) {
                   throw new Error(text || 'Tool reported an error.');
                 }
@@ -522,10 +573,7 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
             policy: policyMap[tool.name] ?? policyMap['*'] ?? 'approval',
             call: async (args) => {
               const result = await client.callTool(tool.name, args);
-              const text = result.content
-                .map(c => (c.type === 'text' ? c.text ?? '' : `[${c.type}]`))
-                .join('\n')
-                .slice(0, 20_000);
+              const text = flattenMcpContent(result.content).slice(0, 20_000);
               if (result.isError) {
                 throw new Error(text || 'Tool reported an error.');
               }

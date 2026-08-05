@@ -205,6 +205,11 @@ expect('src/app/api/agent/chat/route.ts', 'attachToolSink', 'chat: loaded tools 
 expect('src/app/api/approvals/[id]/route.ts', 'attachToolSink', 'approval resume: loaded tools must become visible to the model');
 expect('src/app/api/internal/run-scheduled/route.ts', 'attachToolSink', 'mission/task runs: loaded tools must become visible to the model — this is where the incident surfaced');
 
+// ── MCP resource content must be READ, not stubbed (Phase 29.2 — every GitHub
+// file read came back as the literal string "[resource]") ──────────────────
+expect('src/libs/mcp/registry.ts', 'flattenMcpContent', 'MCP results must decode EmbeddedResource blocks — file reads do not use `text`');
+forbid('src/libs/mcp/registry.ts', "c.type === 'text' ? c.text ?? '' : `[${c.type}]`", 'the naive flattener discarded every non-text block — that is the incident');
+
 
 // ── Report ──────────────────────────────────────────────────────────────────
 if (failures.length > 0) {
