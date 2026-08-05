@@ -93,14 +93,21 @@ async function resumeConversation(
   try {
     mcpToolset = await buildTenantToolset(approval.tenantId);
   } catch {
-    mcpToolset = { anthropicTools: [], failedConnections: [], resolve: () => null, deferredSummary: '' };
+    mcpToolset = { anthropicTools: [], failedConnections: [], resolve: () => null, deferredSummary: '', attachToolSink: () => {} };
   }
   const platform = buildPlatformTools(approval.tenantId);
   const mission = buildMissionTools(approval.tenantId);
+  // 🔴 PHASE 29.1 — the combined array is what the loop sends to the model on
+  // every iteration, so load_connection_tools must push newly-loaded schemas
+  // into THIS array too, not just the registry's own. Without the sink the
+  // model is told "Loaded 51 tools" and then cannot see any of them.
+  const combinedTools = [...platform.anthropicTools, ...mission.anthropicTools, ...mcpToolset.anthropicTools];
+  mcpToolset.attachToolSink(combinedTools);
   const toolset = {
-    anthropicTools: [...platform.anthropicTools, ...mission.anthropicTools, ...mcpToolset.anthropicTools],
+    anthropicTools: combinedTools,
     failedConnections: mcpToolset.failedConnections,
     deferredSummary: mcpToolset.deferredSummary,
+    attachToolSink: mcpToolset.attachToolSink,
     resolve: (name: string) => {
       const p = platform.executors.get(name) ?? mission.executors.get(name);
       if (p) {

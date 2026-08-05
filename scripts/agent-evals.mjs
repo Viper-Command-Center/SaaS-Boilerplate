@@ -193,6 +193,18 @@ expect('src/libs/agent/runnerHealth.ts', 'markTick', 'the runner must record a h
 expect('src/app/api/internal/run-scheduled/route.ts', 'markTick', 'every tick must stamp the heartbeat');
 expect('src/features/agent/MissionsPanel.tsx', 'lastTickAt', 'missions panel must show runner health, not just per-mission progress');
 
+// ── Deferral must never be a functional wall (Phase 29.1 — "Unknown tool:
+// load_connection_tools" blocked ALL GitHub/Zernio/DiviOps work in missions) ──
+expect(
+  'src/libs/mcp/registry.ts',
+  /executors\.get\(namespacedName\)[\s\S]{0,800}NAME_RE\.exec\(namespacedName\)/,
+  'resolve() must check the flat executor map BEFORE the mcp__x__y regex — the load_connection_tools meta-tool has a BARE name and was unresolvable',
+);
+expect('src/libs/mcp/registry.ts', 'attachToolSink', 'newly-loaded deferred schemas must reach the assemblers\' combined tool array, not just the registry\'s own');
+expect('src/app/api/agent/chat/route.ts', 'attachToolSink', 'chat: loaded tools must become visible to the model on the next iteration');
+expect('src/app/api/approvals/[id]/route.ts', 'attachToolSink', 'approval resume: loaded tools must become visible to the model');
+expect('src/app/api/internal/run-scheduled/route.ts', 'attachToolSink', 'mission/task runs: loaded tools must become visible to the model — this is where the incident surfaced');
+
 
 // ── Report ──────────────────────────────────────────────────────────────────
 if (failures.length > 0) {

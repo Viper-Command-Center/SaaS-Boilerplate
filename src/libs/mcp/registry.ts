@@ -55,6 +55,18 @@ export type TenantToolset = {
    *   "zernio (51 tools: posts-create, …), diviops (74 tools: …)"
    */
   deferredSummary: string;
+  /**
+   * Register an EXTRA array that newly-loaded deferred schemas must ALSO be
+   * pushed into (Phase 29.1).
+   *
+   * Every assembler (chat, approvals-resume, run-scheduled) concatenates
+   * platform + mission + MCP tools into a NEW array and hands THAT to the tool
+   * loop. So mutating the registry's own `anthropicTools` — which is what
+   * load_connection_tools does — was invisible to the model: it got told
+   * "Loaded 51 tools" and then could not see a single one of them. Assemblers
+   * must call this with the combined array they pass to runToolLoop.
+   */
+  attachToolSink: (sink: AnthropicTool[]) => void;
 };
 
 const NAME_RE = /^mcp__([a-z0-9-]+)__(.+)$/i;
@@ -182,6 +194,9 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
   const anthropicTools: AnthropicTool[] = [];
   const failedConnections: string[] = [];
   const executors = new Map<string, ExecutorEntry>();
+  // Extra arrays (the assemblers' combined tool lists) that must also receive
+  // schemas when a deferred group loads. See attachToolSink on TenantToolset.
+  const toolSinks: AnthropicTool[][] = [];
 
   // Deferred connections: their prepared tools, kept out of anthropicTools
   // until load_connection_tools (or resolve auto-load) pulls them in.
@@ -225,6 +240,9 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
     }
     for (const p of group.prepared) {
       anthropicTools.push(p.def);
+      for (const sink of toolSinks) {
+        sink.push(p.def);
+      }
       executors.set(p.def.name, p.executor);
     }
     return { connection: group.connectionName, names: group.prepared.map(p => p.toolName) };
@@ -592,14 +610,25 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
     anthropicTools,
     failedConnections,
     deferredSummary,
+    attachToolSink: (sink) => {
+      toolSinks.push(sink);
+    },
     resolve: (namespacedName) => {
-      const match = NAME_RE.exec(namespacedName);
-      if (!match) {
-        return null;
-      }
+      // 🔴 PHASE 29.1 — look up the flat executor map FIRST.
+      // Meta-tools like `load_connection_tools` are registered under a BARE
+      // name; they are NOT namespaced `mcp__<conn>__<tool>`. Gating on NAME_RE
+      // before the map lookup made the deferral meta-tool unresolvable, so
+      // every call to it returned "Unknown tool: load_connection_tools" and
+      // every deferred connection (github, zernio, diviops) was unreachable —
+      // the deferral became the functional wall it was explicitly not allowed
+      // to be. Order matters here; do not "tidy" the regex back to the top.
       const found = executors.get(namespacedName);
       if (found) {
         return found;
+      }
+      const match = NAME_RE.exec(namespacedName);
+      if (!match) {
+        return null;
       }
       // Not loaded yet — but it might belong to a DEFERRED collection. The
       // deferral is a token optimization, never a functional wall: auto-load
