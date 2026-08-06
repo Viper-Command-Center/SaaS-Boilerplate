@@ -201,7 +201,7 @@ export const elementorProvider: BuiltinProvider = {
   tools: [
     {
       name: 'elementor_status',
-      description: 'Check the site: is the artivio-elementor-agent plugin active, which Elementor version, is Pro installed, which global kit is active. Call this FIRST on a site you have not touched before — every other tool fails the same way if the plugin is missing.',
+      description: 'Check the site: is the artivio-elementor-agent plugin active, which Elementor version, is Pro installed, which global kit is active. Call this FIRST on a site you have not touched before — every other tool fails the same way if the plugin is missing. If it fails it self-diagnoses, testing the same credential against core WordPress REST to report whether the credential was refused or only this namespace was blocked, and which roles the user actually holds. Relay that diagnosis verbatim and do not add a credential checklist on top of it.',
       input_schema: { type: 'object', properties: {} },
     },
     {
@@ -428,11 +428,52 @@ export const elementorProvider: BuiltinProvider = {
 
     switch (tool) {
       case 'elementor_status': {
-        const status = await get('/status') as Record<string, unknown>;
-        return JSON.stringify({
-          ...status,
-          ready: Boolean(status.ok) && Boolean(status.elementorActive),
-        });
+        try {
+          const status = await get('/status') as Record<string, unknown>;
+          return JSON.stringify({
+            ...status,
+            ready: Boolean(status.ok) && Boolean(status.elementorActive),
+          });
+        } catch (pluginErr) {
+          /**
+           * This is the designated "why doesn't this site work" tool, so when it
+           * fails it has to say WHICH LAYER refused — not hand back one 401 and
+           * a checklist of things to re-check, which is how a setup problem
+           * turns into an afternoon.
+           *
+           * Two very different failures look identical from outside: a
+           * credential WordPress never accepted, and a credential WordPress
+           * accepts fine while something blocks this one namespace. Probing
+           * core REST with the SAME credential separates them in one call. The
+           * probe also returns the user's real roles, which settles "is it
+           * actually an Editor?" without anyone opening wp-admin.
+           */
+          const pluginMessage = pluginErr instanceof Error ? pluginErr.message : String(pluginErr);
+
+          let coreOk = false;
+          let coreUser = '';
+          let coreRoles: string[] = [];
+          let coreError = '';
+          try {
+            const me = await core(siteUrl, credential, '/users/me?context=edit') as {
+              slug?: string;
+              username?: string;
+              roles?: string[];
+            };
+            coreOk = true;
+            coreUser = me.slug ?? me.username ?? '(unknown)';
+            coreRoles = Array.isArray(me.roles) ? me.roles : [];
+          } catch (coreErr) {
+            coreError = coreErr instanceof Error ? coreErr.message : String(coreErr);
+          }
+
+          const canEdit = coreRoles.some(r => r === 'administrator' || r === 'editor');
+          const verdict = coreOk
+            ? `The credential is VALID — WordPress accepted this exact username and Application Password on its own core REST API, as "${coreUser}" with role(s) [${coreRoles.join(', ') || 'none'}]. So the credential, the Tools panel and the Application Password are all fine and do not need re-checking. What failed is the /artivio-elementor/ namespace specifically, which means one of: (a) the artivio-elementor-agent plugin is not active in wp-admin → Plugins, or (b) a security plugin, firewall or host rule is blocking that namespace while allowing /wp/v2/.${canEdit ? '' : ' SEPARATELY: this user holds neither the editor nor the administrator role, so it will not be able to edit pages even once the namespace is reachable.'}`
+            : `WordPress rejected the SAME credential on its own core REST API too (/wp/v2/users/me), so this has nothing to do with the Elementor plugin and nothing on the Elementor side can fix it. Either the credential stored in the Tools panel is wrong or stale, or the site is not applying Application Passwords at all — most often because the Authorization header is stripped before PHP, or a plugin or filter has disabled application passwords. Core REST said: ${coreError}`;
+
+          throw new Error(`${pluginMessage}\n\nDIAGNOSIS — ${verdict}`);
+        }
       }
 
       case 'list_elementor_pages': {
