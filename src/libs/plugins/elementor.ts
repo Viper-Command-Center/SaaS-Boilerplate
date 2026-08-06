@@ -103,28 +103,54 @@ async function request(
  * burns a turn guessing — when the real answer is a plugin nobody installed.
  * Phase 24's lesson: when the platform is the thing that's missing, say so
  * instead of letting the agent take the blame.
+ *
+ * 🔴 THE NUMERIC STATUS MUST SURVIVE INTO THE MESSAGE. `classifyToolError()`
+ * reads the error STRING, and it recognises a client-fixable credential problem
+ * by matching `\b401\b` / `\b403\b` / "unauthorized" / "forbidden". The first
+ * version of this function replaced `HTTP 401` with the site's own prose the
+ * moment the body carried a `message` — and WordPress's phrasing is "You are
+ * NOT AUTHORIZED to perform this action", which matches none of those patterns
+ * ("not authorized" is not "unauthorized"). So a wrong Application Password
+ * classified as `platform`, emailed the operator as an Artivio bug, and told
+ * the client "this isn't something you can fix" about the one thing only they
+ * could fix. Keep the status code in the string.
  */
 function explain(status: number, body: string, path: string): string {
   let code = '';
-  let message = `HTTP ${status}`;
+  let detail = '';
   try {
     const j = JSON.parse(body) as { message?: string; code?: string };
     code = j.code ?? '';
-    if (j.message) {
-      message = `${j.message}${code ? ` (${code})` : ''}`;
-    }
-  } catch { /* keep the status */ }
+    detail = j.message ?? '';
+  } catch { /* body wasn't JSON — the status alone carries the meaning */ }
+
+  const head = `HTTP ${status}${code ? ` ${code}` : ''}${detail ? ` — ${detail}` : ''}`;
 
   if (status === 404 && (code === 'rest_no_route' || code === '')) {
-    return `${message} — the artivio-elementor-agent plugin is not installed or not active on this site. Elementor layouts live in the protected \`_elementor_data\` postmeta, which core WordPress REST cannot expose, so this connection cannot work until that plugin is activated in wp-admin → Plugins. This is a one-time site setup step; nothing about the credential or the page id is wrong.`;
+    return `${head} — the artivio-elementor-agent plugin is not installed or not active on this site. Elementor layouts live in the protected \`_elementor_data\` postmeta, which core WordPress REST cannot expose, so this connection cannot work until that plugin is activated in wp-admin → Plugins. This is a one-time site setup step; nothing about the credential or the page id is wrong.`;
   }
+
+  /**
+   * `wp_die` is not a WordPress error code — it is what WordPress assigns when
+   * something calls wp_die() DURING a REST request (rest_handle_wp_die wraps
+   * the message in a WP_Error with that code). Neither this plugin nor core's
+   * own permission check ever does that: a real permission failure returns
+   * `rest_forbidden` / "Sorry, you are not allowed to do that". So a `wp_die`
+   * means a THIRD plugin killed the request before it reached the route, and
+   * telling the client to re-check their password sends them somewhere the
+   * answer isn't.
+   */
+  if (code === 'wp_die') {
+    return `${head} — this did not come from the Elementor plugin or from WordPress's own permission check (those return \`rest_forbidden\`). Code \`wp_die\` means another plugin on the site — typically security, firewall, or role/access-control — halted the request before it reached the route. To find out which half is blocked, request /wp-json/wp/v2/users/me with the SAME credential: if that fails too, the block targets this user or role; if it succeeds, the block targets the /artivio-elementor/ namespace and the security plugin needs it allowlisted.`;
+  }
+
   if (status === 401 || status === 403) {
-    return `${message} — check the username and Application Password, and that the user has the Editor role on this site.`;
+    return `${head} — check the username and Application Password (the generated one from Users → Profile → Application Passwords, not the account's login password), and that the user has the Editor role on this site.`;
   }
   if (status === 409) {
-    return `${message} — the site answered, so the plugin is installed; Elementor itself may be inactive or the site has no Elementor kit yet.`;
+    return `${head} — the site answered, so the plugin is installed; Elementor itself may be inactive or the site has no Elementor kit yet.`;
   }
-  return `${message} (${path})`;
+  return `${head} (${path})`;
 }
 
 /** Keep a response inside the model's budget, and say so when it's cut. */
