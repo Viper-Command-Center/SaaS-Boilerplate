@@ -7,6 +7,7 @@
 import type { BuiltinProvider } from '@/libs/plugins/types';
 import { agentcoreBrowserProvider } from '@/libs/plugins/agentcoreBrowser';
 import { cloudflareAnalyticsProvider } from '@/libs/plugins/cloudflareAnalytics';
+import { elementorProvider } from '@/libs/plugins/elementor';
 import { googleAnalyticsProvider } from '@/libs/plugins/googleAnalytics';
 import { heygenProvider } from '@/libs/plugins/heygen';
 import { kieProvider } from '@/libs/plugins/kie';
@@ -19,6 +20,7 @@ export const BUILTIN_PROVIDERS: Record<string, BuiltinProvider> = {
   [heygenProvider.slug]: heygenProvider,
   [cloudflareAnalyticsProvider.slug]: cloudflareAnalyticsProvider,
   [googleAnalyticsProvider.slug]: googleAnalyticsProvider,
+  [elementorProvider.slug]: elementorProvider,
 };
 
 export function getBuiltinProvider(slug: string): BuiltinProvider | undefined {
@@ -141,6 +143,24 @@ export const CATALOG_PRESETS = [
       transport: 'builtin' as const,
       provider: 'wordpress',
       authHint: 'username:application password — create one in WP Admin → Users → Profile → Application Passwords.',
+    },
+  },
+  {
+    key: 'elementor',
+    label: 'Elementor (WordPress page builder)',
+    entry: {
+      slug: 'elementor',
+      name: 'Elementor',
+      description: 'Read and edit Elementor layouts on a WordPress site — sections, containers, widgets, saved templates and the global colour/font kit.',
+      category: 'dev',
+      transport: 'builtin' as const,
+      provider: 'elementor',
+      // Built-in, NOT stdio. Elementor's layout lives in the protected
+      // `_elementor_data` postmeta, so no transport reaches it without code on
+      // the site — and once a site plugin is required anyway, a third-party
+      // stdio server buys nothing and costs a child process. See the header of
+      // src/libs/plugins/elementor.ts.
+      authHint: 'username:application password — create one in WP Admin → Users → Profile → Application Passwords (use an Editor account). ⚠️ The site must ALSO have the artivio-elementor-agent plugin installed and active — it is in wordpress-plugins/artivio-elementor-agent/ in this repo. Without it every tool returns a 404, because core WordPress REST cannot read Elementor layout data. You will be asked for the site URL when enabling.',
     },
   },
   {
