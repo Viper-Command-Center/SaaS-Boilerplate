@@ -3,7 +3,7 @@
  * Plugin Name:  Artivio Elementor Agent
  * Plugin URI:   https://artivio.io
  * Description:  Exposes Elementor's page tree over the REST API so Artivio's agent can read and edit layouts. Elementor stores every page in the protected `_elementor_data` postmeta key, which core WP REST will never touch — this plugin is the only reason remote editing is possible.
- * Version:      1.0.0
+ * Version:      1.1.0
  * Requires PHP: 7.4
  * Author:       Artivio
  * License:      GPL-2.0-or-later
@@ -41,8 +41,96 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'ARTIVIO_EA_VERSION', '1.0.0' );
+define( 'ARTIVIO_EA_VERSION', '1.1.0' );
 define( 'ARTIVIO_EA_NS', 'artivio-elementor/v1' );
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * Basic-auth bootstrap (added 1.1.0)
+ *
+ * WordPress authenticates Application Passwords in
+ * wp_authenticate_application_password(), which reads ONLY
+ * $_SERVER['PHP_AUTH_USER'] and $_SERVER['PHP_AUTH_PW']. Apache/mod_php fills
+ * those in automatically. **PHP running as CGI/FastCGI — which is the norm on
+ * LiteSpeed, and on most managed hosts — does not.**
+ *
+ * The standard `.htaccess` line WordPress ships,
+ *   RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+ * only copies the header into an ENV VAR ($_SERVER['HTTP_AUTHORIZATION'] or
+ * ['REDIRECT_HTTP_AUTHORIZATION']). Core never reads those back, so the
+ * credential arrives at the server, sits in $_SERVER, and is ignored.
+ *
+ * The failure is silent and deeply misleading: the request is simply treated as
+ * ANONYMOUS. Public reads (list posts, list pages, list categories) keep
+ * working, so the integration looks healthy, while anything requiring auth
+ * returns `rest_not_logged_in` / "You are not currently logged in." That reads
+ * like a bad password, and it is not one.
+ *
+ * 🔒 THIS GRANTS NOTHING. It only re-exposes to PHP a header the client already
+ * sent, in the exact form PHP would have provided natively. WordPress still
+ * validates the username and password normally, and a wrong credential still
+ * fails. We touch it only when PHP_AUTH_USER is absent, and only for `Basic`.
+ *
+ * The alternative is a server change — `CGIPassAuth On` in .htaccess (Apache
+ * 2.4.13+ / LiteSpeed) — which not every host permits. This runs everywhere.
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+if ( ! function_exists( 'artivio_ea_bootstrap_basic_auth' ) ) {
+	function artivio_ea_bootstrap_basic_auth(): void {
+		$GLOBALS['artivio_ea_auth_shimmed'] = false;
+
+		if ( ! empty( $_SERVER['PHP_AUTH_USER'] ) ) {
+			return; // PHP already parsed it — nothing to repair.
+		}
+
+		$header = '';
+		foreach (
+			array(
+				'HTTP_AUTHORIZATION',
+				'REDIRECT_HTTP_AUTHORIZATION',
+				'REDIRECT_REDIRECT_HTTP_AUTHORIZATION',
+			) as $key
+		) {
+			if ( ! empty( $_SERVER[ $key ] ) ) {
+				$header = trim( (string) $_SERVER[ $key ] );
+				break;
+			}
+		}
+
+		if ( '' === $header && function_exists( 'apache_request_headers' ) ) {
+			foreach ( (array) apache_request_headers() as $k => $v ) {
+				if ( 'authorization' === strtolower( (string) $k ) ) {
+					$header = trim( (string) $v );
+					break;
+				}
+			}
+		}
+
+		if ( '' === $header || 0 !== stripos( $header, 'basic ' ) ) {
+			return;
+		}
+
+		$decoded = base64_decode( substr( $header, 6 ), true ); // phpcs:ignore
+		if ( false === $decoded || false === strpos( $decoded, ':' ) ) {
+			return;
+		}
+
+		// Split at the FIRST colon: application passwords contain spaces but
+		// never a colon, and a WordPress username cannot contain one either.
+		list( $user, $pass ) = explode( ':', $decoded, 2 );
+		if ( '' === $user ) {
+			return;
+		}
+
+		$_SERVER['PHP_AUTH_USER']           = $user;
+		$_SERVER['PHP_AUTH_PW']             = $pass;
+		$GLOBALS['artivio_ea_auth_shimmed'] = true;
+	}
+}
+
+// Must run at file scope: WordPress resolves the current user lazily, after
+// plugins load, so setting these here is early enough for both core REST auth
+// and our own routes.
+artivio_ea_bootstrap_basic_auth();
 
 /* ══════════════════════════════════════════════════════════════════════════
  * Storage
@@ -492,7 +580,13 @@ function artivio_ea_status() {
 		'php'               => PHP_VERSION,
 		'activeKitId'       => (int) get_option( 'elementor_active_kit' ),
 		'user'              => $user ? $user->user_login : null,
+		'roles'             => $user ? array_values( (array) $user->roles ) : array(),
 		'canUnfilteredHtml' => current_user_can( 'unfiltered_html' ),
+		// How the credential actually reached PHP. `shim` means this server does
+		// not populate PHP_AUTH_USER itself (CGI/FastCGI, typical on LiteSpeed),
+		// so core WordPress would have treated every authenticated request as
+		// anonymous without this plugin loaded — including plain /wp/v2/ writes.
+		'authSource'        => ! empty( $GLOBALS['artivio_ea_auth_shimmed'] ) ? 'shim' : 'native',
 	);
 }
 

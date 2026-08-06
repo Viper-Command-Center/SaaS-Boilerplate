@@ -18,6 +18,26 @@ So there is no "just point an MCP at the site" version of this. This plugin is t
 3. In Artivio: **Admin → Plugin catalog → Quick add → "Elementor (WordPress page builder)"**, then connect it in the workspace with the site URL and `username:application password`.
 4. Ask the agent to run `elementor_status`. If it doesn't come back `ready: true`, nothing else will work — and the message will say which half is missing.
 
+## It also repairs Application Passwords on CGI/FastCGI hosts (v1.1.0)
+
+WordPress authenticates Application Passwords from `$_SERVER['PHP_AUTH_USER']` and `$_SERVER['PHP_AUTH_PW']`. Apache with mod_php fills those in. **PHP as CGI/FastCGI — the norm on LiteSpeed and most managed hosts — does not.**
+
+The `.htaccess` line WordPress ships only copies the header into an environment variable:
+
+```
+RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+```
+
+Core never reads that back. So the credential arrives at the server, sits in `$_SERVER`, and is ignored.
+
+The failure mode is nasty because it is silent: the request is treated as **anonymous**. Public reads — list posts, list pages, list categories — keep working, so an integration looks healthy, while anything needing auth returns `rest_not_logged_in` / "You are not currently logged in." That reads like a wrong password and isn't one.
+
+This plugin repairs it at load: when `PHP_AUTH_USER` is absent, it decodes the `Basic` header the client already sent and puts it where WordPress looks. It grants nothing — WordPress still validates the credential, and a wrong one still fails. `GET /status` reports `authSource: "shim"` when this was needed, or `"native"` when the server did it properly.
+
+Because it runs on every request, it fixes plain `/wp/v2/` authentication too, not only this plugin's routes.
+
+The server-side alternative, if your host allows it, is `CGIPassAuth On` in `.htaccess` (Apache 2.4.13+ and LiteSpeed).
+
 ## Security
 
 Every route requires an authenticated user with `edit_posts`; every route that names a document also checks `edit_post` on that specific post.
