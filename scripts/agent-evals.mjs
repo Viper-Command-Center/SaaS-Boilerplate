@@ -221,6 +221,7 @@ expect('src/libs/plugins/index.ts', 'googleAnalyticsProvider', 'the provider mus
 expect('src/features/agent/ToolsPanel.tsx', 'conn.perConnection', 'a per-connection built-in must show Edit — Remove-and-recreate silently drops tool policies (the Phase 11 defect)');
 expect('src/libs/plugins/googleAnalytics.ts', 'targetIsUrl: false', 'the GA4 target is a numeric property ID; a URL-shaped form field made the right answer unenterable');
 forbid('src/app/api/plugins/route.ts', 'siteUrl: z.string().url()', 'per-connection targets are not all URLs — that validator rejected valid GA4 property IDs');
+expect('src/libs/plugins/googleAnalytics.ts', 'avgEngagementSecondsPerSession', 'userEngagementDuration is a TOTAL and was read back as an average — the tool must do the division, not the model');
 
 
 // ── Report ──────────────────────────────────────────────────────────────────

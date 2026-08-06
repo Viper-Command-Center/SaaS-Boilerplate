@@ -465,7 +465,24 @@ export const googleAnalyticsProvider: BuiltinProvider = {
         method: 'POST',
         body: JSON.stringify(body),
       });
-      return JSON.stringify(flattenGaReport(res));
+      const flat = flattenGaReport(res) as { rows: Array<Record<string, string | number>> };
+
+      // 🔴 `userEngagementDuration` is TOTAL seconds across all sessions, but it
+      // reads like an average — the first report run off this tool was reported
+      // back as "407 seconds average engagement (nearly 7 minutes)" when it was
+      // 407s across 5 sessions, i.e. ~81s each. A metric whose name invites the
+      // wrong reading is a platform problem, not a model problem: rename it and
+      // do the division here so there is nothing left to misread.
+      if (tool === 'ga4_top_pages') {
+        for (const row of flat.rows ?? []) {
+          const total = Number(row.userEngagementDuration ?? 0);
+          const sessions = Number(row.sessions ?? 0);
+          delete row.userEngagementDuration;
+          row.totalEngagementSeconds = Math.round(total);
+          row.avgEngagementSecondsPerSession = sessions > 0 ? Math.round(total / sessions) : 0;
+        }
+      }
+      return JSON.stringify(flat);
     }
 
     if (tool === 'ga4_realtime') {
