@@ -3,7 +3,7 @@
  * Plugin Name:  Artivio Elementor Agent
  * Plugin URI:   https://artivio.io
  * Description:  Exposes Elementor's page tree over the REST API so Artivio's agent can read and edit layouts. Elementor stores every page in the protected `_elementor_data` postmeta key, which core WP REST will never touch — this plugin is the only reason remote editing is possible.
- * Version:      1.2.0
+ * Version:      1.3.0
  * Requires PHP: 7.4
  * Author:       Artivio
  * License:      GPL-2.0-or-later
@@ -41,7 +41,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'ARTIVIO_EA_VERSION', '1.2.0' );
+define( 'ARTIVIO_EA_VERSION', '1.3.0' );
 define( 'ARTIVIO_EA_NS', 'artivio-elementor/v1' );
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -687,27 +687,89 @@ function artivio_ea_authcheck() {
 	$user   = wp_get_current_user();
 	$authed = ( $user instanceof WP_User ) && $user->ID > 0;
 
+	/**
+	 * "WordPress rejected it" was still too coarse (1.3.0). It covers four
+	 * causes with four different fixes: a wrong password, a wrong username,
+	 * application passwords switched off site-wide, and application passwords
+	 * switched off for that one user. Telling someone to re-check a password
+	 * they typed correctly — three times — is how a setup loses an afternoon.
+	 *
+	 * So ask WordPress directly. Re-running the application-password
+	 * authenticator returns core's OWN error code, which names the actual
+	 * cause. It is the same evaluation WordPress already performed for this
+	 * request, so it grants nothing and reveals nothing a caller holding the
+	 * credential could not learn by retrying.
+	 */
+	$supplied = isset( $_SERVER['PHP_AUTH_USER'] ) ? (string) $_SERVER['PHP_AUTH_USER'] : '';
+	$secret   = isset( $_SERVER['PHP_AUTH_PW'] ) ? (string) $_SERVER['PHP_AUTH_PW'] : '';
+
+	$ssl       = is_ssl();
+	$forwarded = isset( $_SERVER['HTTP_X_FORWARDED_PROTO'] ) ? (string) $_SERVER['HTTP_X_FORWARDED_PROTO'] : '';
+	$available = function_exists( 'wp_is_application_passwords_available' )
+		? (bool) wp_is_application_passwords_available()
+		: null;
+	$in_use = class_exists( 'WP_Application_Passwords' ) && method_exists( 'WP_Application_Passwords', 'is_in_use' )
+		? (bool) WP_Application_Passwords::is_in_use()
+		: null;
+
+	$core_reason = '';
+	if ( ! $authed && '' !== $supplied && '' !== $secret && function_exists( 'wp_authenticate_application_password' ) ) {
+		$attempt = wp_authenticate_application_password( null, $supplied, $secret );
+		if ( is_wp_error( $attempt ) ) {
+			$core_reason = $attempt->get_error_code() . ': ' . wp_strip_all_tags( (string) $attempt->get_error_message() );
+		} elseif ( $attempt instanceof WP_User ) {
+			$core_reason = 'unexpected — the credential VALIDATES when re-tested, so something else in the request rejected it (a security plugin, or a filter on determine_current_user).';
+		} else {
+			$core_reason = 'WordPress declined to evaluate the application password at all: it returned neither a user nor an error, which means application passwords are unavailable here (see isSsl / appPasswordsAvailable below) or a filter disabled them.';
+		}
+	}
+
 	if ( $authed ) {
 		$verdict = 'The credential AUTHENTICATED. If a tool still fails, the problem is that route or that user\'s capabilities, not the credential.';
 	} elseif ( 'absent' === $source ) {
 		$verdict = 'NO Authorization header reached PHP. The credential was never seen by WordPress, so this is not a wrong password and changing it will not help. Something between the client and PHP removed it — a proxy or CDN, or a server running PHP as CGI/FastCGI without CGIPassAuth. Fix at the server: add "CGIPassAuth On" to .htaccess (Apache 2.4.13+ / LiteSpeed), or ask the host to forward the Authorization header.';
 	} elseif ( 'unusable' === $source ) {
 		$verdict = 'An Authorization header arrived but was not a decodable HTTP Basic credential. Artivio sends Basic, so something in front of this site is rewriting the header.';
+	} elseif ( false === $available ) {
+		$verdict = sprintf(
+			'Application Passwords are UNAVAILABLE on this site, so WordPress refused to evaluate the credential at all — no password will work until this is fixed. WordPress gates them on HTTPS: is_ssl() reports %s%s. If the site is served over HTTPS but is_ssl() is false, a reverse proxy or CDN is terminating TLS and PHP cannot see it; the standard fix is to set $_SERVER[\'HTTPS\'] = \'on\' in wp-config.php when HTTP_X_FORWARDED_PROTO is https. A security plugin filtering wp_is_application_passwords_available would do the same thing.',
+			$ssl ? 'true' : 'false',
+			'' !== $forwarded ? sprintf( ' while X-Forwarded-Proto is "%s"', $forwarded ) : ''
+		);
+	} elseif ( '' !== $core_reason ) {
+		$verdict = sprintf(
+			'A Basic credential reached WordPress and WordPress rejected it. Core\'s own reason: %s — for the username "%s" that was sent. Compare that username against the WordPress user you generated the Application Password for; a mismatch here is the usual cause.',
+			$core_reason,
+			$supplied
+		);
 	} else {
-		$verdict = 'A Basic credential reached WordPress and WordPress REJECTED it. The username or Application Password is wrong or has been revoked, or that user account is disabled. This one IS fixable in the Tools panel.';
+		$verdict = sprintf(
+			'A Basic credential reached WordPress for username "%s" and was rejected, but core reported no specific reason. Check that the username matches the WordPress account the Application Password belongs to, and that the password has not been revoked.',
+			$supplied
+		);
 	}
 
 	return array(
-		'plugin'        => 'artivio-elementor-agent',
-		'pluginVersion' => ARTIVIO_EA_VERSION,
+		'plugin'                => 'artivio-elementor-agent',
+		'pluginVersion'         => ARTIVIO_EA_VERSION,
 		// How the credential reached PHP: native | shim | absent | unusable.
-		'authSource'    => $source,
-		'authenticated' => $authed,
+		'authSource'            => $source,
+		'authenticated'         => $authed,
+		// Echoing back the username the CALLER sent is not disclosure — they
+		// sent it — and it is the fastest way to catch the commonest fault of
+		// all: the wrong username stored at the other end. The password is
+		// never echoed in any form.
+		'receivedUsername'      => '' !== $supplied ? $supplied : null,
+		'isSsl'                 => $ssl,
+		'forwardedProto'        => '' !== $forwarded ? $forwarded : null,
+		'appPasswordsAvailable' => $available,
+		'appPasswordsInUse'     => $in_use,
+		'coreAuthError'         => '' !== $core_reason ? $core_reason : null,
 		// Identity only for a caller that proved it holds the credential.
-		'user'          => $authed ? $user->user_login : null,
-		'roles'         => $authed ? array_values( (array) $user->roles ) : array(),
-		'canEditPosts'  => $authed ? current_user_can( 'edit_posts' ) : false,
-		'verdict'       => $verdict,
+		'user'                  => $authed ? $user->user_login : null,
+		'roles'                 => $authed ? array_values( (array) $user->roles ) : array(),
+		'canEditPosts'          => $authed ? current_user_can( 'edit_posts' ) : false,
+		'verdict'               => $verdict,
 	);
 }
 
