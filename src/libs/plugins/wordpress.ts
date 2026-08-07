@@ -21,14 +21,34 @@ function auth(credential: string): string {
   return `Basic ${Buffer.from(credential.replace(/\s+/g, ' ').trim()).toString('base64')}`;
 }
 
-async function wp(
+/**
+ * The artivio-wp-agent base plugin's namespace.
+ *
+ * Builder-AGNOSTIC on purpose: SEO fields and "what does this site run" are
+ * true of every WordPress site, so they belong on the WordPress connection
+ * rather than inside a builder plugin. The first version of these routes lived
+ * in artivio-elementor-agent, which meant a Divi or plain-WordPress site could
+ * not reach them at all — the code was fine, it was just in a plugin nobody
+ * would install on a site with no Elementor.
+ */
+async function agent(
   siteUrl: string,
   credential: string,
   path: string,
   init?: RequestInit,
 ): Promise<unknown> {
+  return wp(siteUrl, credential, path, init, '/wp-json/artivio/v1');
+}
+
+async function wp(
+  siteUrl: string,
+  credential: string,
+  path: string,
+  init?: RequestInit,
+  namespace = '/wp-json/wp/v2',
+): Promise<unknown> {
   const base = siteUrl.replace(/\/$/, '');
-  const resp = await fetch(`${base}/wp-json/wp/v2${path}`, {
+  const resp = await fetch(`${base}${namespace}${path}`, {
     ...init,
     headers: {
       'Authorization': auth(credential),
@@ -73,6 +93,13 @@ async function wp(
      * at the actual fix, so the caller re-verifies an id that was right all
      * along — which is exactly what happened on the True Therapy homepage.
      */
+    // A 404 on the base plugin's own namespace means the plugin is missing, not
+    // that the page id is wrong — and saying "not found" about a route the
+    // caller cannot see is how an install step gets mistaken for a bad request.
+    if (code === 'rest_no_route' && namespace.includes('/artivio/')) {
+      msg += ' — the artivio-wp-agent plugin is not installed or not active on this site. It is the builder-agnostic base plugin (Application Password repair, /authcheck diagnostics, Rank Math and Yoast fields) and is a one-time install via wp-admin → Plugins → Add New → Upload. Nothing about the credential or the page id is wrong.';
+    }
+
     if (code === 'rest_post_invalid_id' || /invalid post id/i.test(detail)) {
       const usedPages = path.startsWith('/pages');
       msg += ` — posts and pages are SEPARATE collections in WordPress, and this call hit /${usedPages ? 'pages' : 'posts'}. If the id came from list_pages, use update_page; if it came from list_posts, use update_post. The id itself is probably fine.`;
@@ -113,6 +140,8 @@ export const wordpressProvider: BuiltinProvider = {
   perConnection: true, // each workspace supplies its own site + credential
 
   guidance: `WordPress connection:
+- On a site you have not touched before, call site_check FIRST. It names the page builder, the SEO plugin and the WordPress version, which decides which connection can actually edit layouts. Guessing is expensive: a builder page edited through post_content saves successfully and changes nothing visible.
+- SEO belongs here and works on ANY site: get_seo_meta / update_seo_meta, mapped onto Rank Math or Yoast automatically. Never write raw rank_math_* or _yoast_* meta keys. Read ignoredFields and warnings in the response rather than trusting a success.
 - Posts and pages are SEPARATE REST collections. A valid page id passed to update_post returns "Invalid post ID" — the id is fine, the tool is wrong. Ids from list_pages go to update_page; ids from list_posts go to update_post.
 - If this site ALSO has an Elementor connection, any page whose builtWithElementor is true must be edited through the Elementor tools. update_page writes post_content, and Elementor renders from its own stored layout and ignores post_content — so the call succeeds, the result looks clean, and the live page does not change.
 - create_post makes a BLOG POST and cannot make a page. For a page use create_page — or, if the site has an Elementor connection and the page needs a designed layout, create_elementor_page there. Check the "type" field in the result; it states what was actually created.
@@ -236,6 +265,44 @@ export const wordpressProvider: BuiltinProvider = {
       },
     },
     {
+      name: 'site_check',
+      description: 'What this WordPress site actually runs: WordPress and PHP versions, active theme, which PAGE BUILDER is installed (Elementor, Divi, Bricks, Beaver) with its version, which SEO plugin, and which Artivio agent plugins are reachable. Call this FIRST on a site you have not touched before — it decides which connection can edit layouts, and guessing wrong is expensive: editing a builder page through post_content succeeds and changes nothing visible. Requires the artivio-wp-agent base plugin.',
+      input_schema: { type: 'object', properties: {} },
+    },
+    {
+      name: 'get_seo_meta',
+      description: 'Read a page or post\'s SEO fields — title, meta description, focus keyword, canonical, robots, social cards — from whichever SEO plugin the site runs (Rank Math or Yoast), plus character counts against Google\'s truncation points. An EMPTY title or description means the plugin\'s own template applies, not that nothing is output. Requires the artivio-wp-agent base plugin. Works on any WordPress site regardless of page builder.',
+      input_schema: {
+        type: 'object',
+        properties: { id: { type: 'number', description: 'Post or page id.' } },
+        required: ['id'],
+      },
+    },
+    {
+      name: 'update_seo_meta',
+      description: 'Set a page or post\'s SEO fields. Send only what you want to change; anything omitted is left alone, and "" CLEARS a field back to the SEO plugin\'s template. Field names are identical on every site — this maps them onto Rank Math or Yoast automatically, so never guess at raw meta keys. Over-length titles and descriptions are saved as given and reported, never silently truncated. Requires the artivio-wp-agent base plugin.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          id: { type: 'number', description: 'Post or page id.' },
+          title: { type: 'string', description: 'SEO title. ~60 chars before Google truncates.' },
+          description: { type: 'string', description: 'Meta description. ~155 chars before Google truncates.' },
+          focusKeyword: { type: 'string' },
+          canonical: { type: 'string' },
+          breadcrumbTitle: { type: 'string' },
+          noindex: { type: 'boolean', description: 'True hides the page from search engines.' },
+          nofollow: { type: 'boolean' },
+          ogTitle: { type: 'string' },
+          ogDescription: { type: 'string' },
+          ogImage: { type: 'string' },
+          twitterTitle: { type: 'string' },
+          twitterDescription: { type: 'string' },
+          twitterImage: { type: 'string' },
+        },
+        required: ['id'],
+      },
+    },
+    {
       name: 'list_categories',
       description: 'List post categories with their ids (needed when creating posts).',
       input_schema: { type: 'object', properties: {} },
@@ -336,6 +403,41 @@ export const wordpressProvider: BuiltinProvider = {
         ...(args.search ? { search: String(args.search) } : {}),
       });
       return JSON.stringify(slim(await wp(siteUrl, credential, `/pages?${params}`)));
+    }
+
+    if (tool === 'site_check') {
+      return JSON.stringify(await agent(siteUrl, credential, '/site'));
+    }
+
+    if (tool === 'get_seo_meta') {
+      return JSON.stringify(await agent(siteUrl, credential, `/documents/${Number(args.id)}/seo`));
+    }
+
+    if (tool === 'update_seo_meta') {
+      // Forward only recognised fields: passing `id` through would have the
+      // route report it as ignored on every call, training the caller to skim
+      // past the one list that says what did NOT get set.
+      const FIELDS = [
+        'title', 'description', 'focusKeyword', 'canonical', 'breadcrumbTitle',
+        'ogTitle', 'ogDescription', 'ogImage',
+        'twitterTitle', 'twitterDescription', 'twitterImage',
+        'noindex', 'nofollow',
+      ] as const;
+      const body: Record<string, unknown> = {};
+      for (const field of FIELDS) {
+        if (args[field] !== undefined) {
+          body[field] = args[field];
+        }
+      }
+      if (Object.keys(body).length === 0) {
+        throw new Error(
+          `WordPress: update_seo_meta needs at least one field to change. Arguments received: [${Object.keys(args).join(', ') || 'none'}]. Valid fields: ${FIELDS.join(', ')}.`,
+        );
+      }
+      return JSON.stringify(await agent(siteUrl, credential, `/documents/${Number(args.id)}/seo`, {
+        method: 'PATCH',
+        body: JSON.stringify(body),
+      }));
     }
 
     if (tool === 'list_categories') {
