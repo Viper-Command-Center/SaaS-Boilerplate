@@ -469,6 +469,37 @@ export const elementorProvider: BuiltinProvider = {
            */
           const pluginMessage = pluginErr instanceof Error ? pluginErr.message : String(pluginErr);
 
+          /**
+           * Ask the site first. /authcheck needs no authentication precisely so
+           * that it still answers when authentication is what's broken, and its
+           * verdict beats anything inferred out here: it is the only observer
+           * that can see whether an Authorization header reached PHP at all.
+           * If it answers, we are done — no probing, no inference.
+           */
+          try {
+            const check = await ea(siteUrl, credential, '/artivio-elementor/v1/authcheck') as {
+              authSource?: string;
+              authenticated?: boolean;
+              user?: string | null;
+              roles?: string[];
+              canEditPosts?: boolean;
+              verdict?: string;
+              pluginVersion?: string;
+            };
+            if (check && typeof check.verdict === 'string') {
+              throw new Error(
+                `${pluginMessage}\n\nDIAGNOSIS FROM THE SITE (artivio-elementor-agent ${check.pluginVersion ?? '?'}, authSource=${check.authSource ?? '?'}, authenticated=${String(check.authenticated)}${check.user ? `, user=${check.user}` : ''}${check.roles?.length ? `, roles=[${check.roles.join(', ')}]` : ''}) — ${check.verdict}`,
+              );
+            }
+          } catch (checkErr) {
+            // Rethrow our own verdict; anything else means /authcheck itself is
+            // unreachable (plugin missing or older than 1.2.0), so fall through
+            // to the core-REST probe below rather than losing the diagnosis.
+            if (checkErr instanceof Error && checkErr.message.includes('DIAGNOSIS FROM THE SITE')) {
+              throw checkErr;
+            }
+          }
+
           let coreOk = false;
           let coreUser = '';
           let coreRoles: string[] = [];

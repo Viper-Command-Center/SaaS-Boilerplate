@@ -3,7 +3,7 @@
  * Plugin Name:  Artivio Elementor Agent
  * Plugin URI:   https://artivio.io
  * Description:  Exposes Elementor's page tree over the REST API so Artivio's agent can read and edit layouts. Elementor stores every page in the protected `_elementor_data` postmeta key, which core WP REST will never touch — this plugin is the only reason remote editing is possible.
- * Version:      1.1.0
+ * Version:      1.2.0
  * Requires PHP: 7.4
  * Author:       Artivio
  * License:      GPL-2.0-or-later
@@ -41,7 +41,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'ARTIVIO_EA_VERSION', '1.1.0' );
+define( 'ARTIVIO_EA_VERSION', '1.2.0' );
 define( 'ARTIVIO_EA_NS', 'artivio-elementor/v1' );
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -458,6 +458,36 @@ function artivio_ea_register_routes() {
 		)
 	);
 
+	/**
+	 * The only UNAUTHENTICATED route here, and it exists because of a gap this
+	 * plugin's own rollout exposed.
+	 *
+	 * Every other route requires auth, so when auth is what's broken, none of
+	 * them can say why — they can only 401, which looks identical whether the
+	 * password was wrong or the header never arrived. WordPress cannot tell
+	 * those apart either, so the caller is left guessing, and guessing wrong is
+	 * expensive: one is a two-second fix in a settings panel, the other is a
+	 * hosting ticket.
+	 *
+	 * This route answers "did my credential authenticate, and if not, why" for a
+	 * caller who by definition cannot authenticate yet.
+	 *
+	 * 🔒 It discloses nothing to an anonymous caller: no username, no roles, no
+	 * site detail beyond the plugin version. Identity is returned ONLY when the
+	 * request authenticated — and a caller who authenticated already holds the
+	 * credential, so its own roles are not a leak. It never echoes the
+	 * credential back in any form.
+	 */
+	register_rest_route(
+		ARTIVIO_EA_NS,
+		'/authcheck',
+		array(
+			'methods'             => 'GET',
+			'permission_callback' => '__return_true',
+			'callback'            => 'artivio_ea_authcheck',
+		)
+	);
+
 	register_rest_route(
 		ARTIVIO_EA_NS,
 		'/documents',
@@ -649,6 +679,35 @@ function artivio_ea_status() {
 		// including plain /wp/v2/ writes. Only these two can appear here: a
 		// request with no usable credential never reaches this handler.
 		'authSource'        => isset( $GLOBALS['artivio_ea_auth_source'] ) ? $GLOBALS['artivio_ea_auth_source'] : 'native',
+	);
+}
+
+function artivio_ea_authcheck() {
+	$source = isset( $GLOBALS['artivio_ea_auth_source'] ) ? (string) $GLOBALS['artivio_ea_auth_source'] : 'absent';
+	$user   = wp_get_current_user();
+	$authed = ( $user instanceof WP_User ) && $user->ID > 0;
+
+	if ( $authed ) {
+		$verdict = 'The credential AUTHENTICATED. If a tool still fails, the problem is that route or that user\'s capabilities, not the credential.';
+	} elseif ( 'absent' === $source ) {
+		$verdict = 'NO Authorization header reached PHP. The credential was never seen by WordPress, so this is not a wrong password and changing it will not help. Something between the client and PHP removed it — a proxy or CDN, or a server running PHP as CGI/FastCGI without CGIPassAuth. Fix at the server: add "CGIPassAuth On" to .htaccess (Apache 2.4.13+ / LiteSpeed), or ask the host to forward the Authorization header.';
+	} elseif ( 'unusable' === $source ) {
+		$verdict = 'An Authorization header arrived but was not a decodable HTTP Basic credential. Artivio sends Basic, so something in front of this site is rewriting the header.';
+	} else {
+		$verdict = 'A Basic credential reached WordPress and WordPress REJECTED it. The username or Application Password is wrong or has been revoked, or that user account is disabled. This one IS fixable in the Tools panel.';
+	}
+
+	return array(
+		'plugin'        => 'artivio-elementor-agent',
+		'pluginVersion' => ARTIVIO_EA_VERSION,
+		// How the credential reached PHP: native | shim | absent | unusable.
+		'authSource'    => $source,
+		'authenticated' => $authed,
+		// Identity only for a caller that proved it holds the credential.
+		'user'          => $authed ? $user->user_login : null,
+		'roles'         => $authed ? array_values( (array) $user->roles ) : array(),
+		'canEditPosts'  => $authed ? current_user_can( 'edit_posts' ) : false,
+		'verdict'       => $verdict,
 	);
 }
 
