@@ -118,13 +118,32 @@ async function request(
 function explain(status: number, body: string, path: string): string {
   let code = '';
   let detail = '';
+  // The companion plugin annotates its own 401/403 responses with WHY the
+  // credential failed — most importantly, whether an Authorization header
+  // reached PHP at all. That distinction is invisible from out here (WordPress
+  // renders "no header" and "wrong password" identically) and it is the single
+  // thing that decides whether the client fixes a credential or the host fixes
+  // a server. If the site told us, say so instead of guessing.
+  let siteHint = '';
   try {
-    const j = JSON.parse(body) as { message?: string; code?: string };
+    const j = JSON.parse(body) as {
+      message?: string;
+      code?: string;
+      artivioDiagnostic?: { authSource?: string; hint?: string };
+    };
     code = j.code ?? '';
     detail = j.message ?? '';
+    if (j.artivioDiagnostic?.hint) {
+      siteHint = `${j.artivioDiagnostic.hint}${j.artivioDiagnostic.authSource ? ` (authSource: ${j.artivioDiagnostic.authSource})` : ''}`;
+    }
   } catch { /* body wasn't JSON — the status alone carries the meaning */ }
 
   const head = `HTTP ${status}${code ? ` ${code}` : ''}${detail ? ` — ${detail}` : ''}`;
+
+  // A verdict from the site itself beats every heuristic below it.
+  if (siteHint) {
+    return `${head} — DIAGNOSIS FROM THE SITE: ${siteHint}`;
+  }
 
   if (status === 404 && (code === 'rest_no_route' || code === '')) {
     return `${head} — the artivio-elementor-agent plugin is not installed or not active on this site. Elementor layouts live in the protected \`_elementor_data\` postmeta, which core WordPress REST cannot expose, so this connection cannot work until that plugin is activated in wp-admin → Plugins. This is a one-time site setup step; nothing about the credential or the page id is wrong.`;

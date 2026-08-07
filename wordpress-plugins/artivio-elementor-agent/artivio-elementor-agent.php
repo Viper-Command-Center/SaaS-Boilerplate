@@ -76,9 +76,18 @@ define( 'ARTIVIO_EA_NS', 'artivio-elementor/v1' );
 
 if ( ! function_exists( 'artivio_ea_bootstrap_basic_auth' ) ) {
 	function artivio_ea_bootstrap_basic_auth(): void {
-		$GLOBALS['artivio_ea_auth_shimmed'] = false;
+		/**
+		 * Four states, not two. The first version recorded a bare
+		 * shimmed-yes/no, which collapsed the two most important cases into one
+		 * label: "PHP handled it natively" and "there was no Authorization
+		 * header to handle" both reported `native`. Those need opposite
+		 * responses — one is healthy, the other means something upstream ate
+		 * the header — so they get different names.
+		 */
+		$GLOBALS['artivio_ea_auth_source'] = 'absent';
 
 		if ( ! empty( $_SERVER['PHP_AUTH_USER'] ) ) {
+			$GLOBALS['artivio_ea_auth_source'] = 'native';
 			return; // PHP already parsed it — nothing to repair.
 		}
 
@@ -105,12 +114,17 @@ if ( ! function_exists( 'artivio_ea_bootstrap_basic_auth' ) ) {
 			}
 		}
 
-		if ( '' === $header || 0 !== stripos( $header, 'basic ' ) ) {
+		if ( '' === $header ) {
+			return; // stays 'absent' — nothing reached PHP at all.
+		}
+		if ( 0 !== stripos( $header, 'basic ' ) ) {
+			$GLOBALS['artivio_ea_auth_source'] = 'unusable';
 			return;
 		}
 
 		$decoded = base64_decode( substr( $header, 6 ), true ); // phpcs:ignore
 		if ( false === $decoded || false === strpos( $decoded, ':' ) ) {
+			$GLOBALS['artivio_ea_auth_source'] = 'unusable';
 			return;
 		}
 
@@ -118,14 +132,59 @@ if ( ! function_exists( 'artivio_ea_bootstrap_basic_auth' ) ) {
 		// never a colon, and a WordPress username cannot contain one either.
 		list( $user, $pass ) = explode( ':', $decoded, 2 );
 		if ( '' === $user ) {
+			$GLOBALS['artivio_ea_auth_source'] = 'unusable';
 			return;
 		}
 
-		$_SERVER['PHP_AUTH_USER']           = $user;
-		$_SERVER['PHP_AUTH_PW']             = $pass;
-		$GLOBALS['artivio_ea_auth_shimmed'] = true;
+		$_SERVER['PHP_AUTH_USER']          = $user;
+		$_SERVER['PHP_AUTH_PW']            = $pass;
+		$GLOBALS['artivio_ea_auth_source'] = 'shim';
 	}
 }
+
+/**
+ * Explain a 401/403 on OUR routes, in the response body.
+ *
+ * A rejected request never reaches a handler, so /status cannot report on the
+ * one case that most needs reporting: an Authorization header that never
+ * arrived. WordPress renders that as `rest_forbidden` — indistinguishable from
+ * a wrong password, which is the exact confusion that made this plugin's own
+ * rollout take an afternoon. Anyone installing this on a host that strips the
+ * header should be told so by the response, not left to guess.
+ */
+function artivio_ea_annotate_auth_failure( $response, $server, $request ) {
+	unset( $server );
+	if ( ! ( $response instanceof WP_REST_Response ) || ! ( $request instanceof WP_REST_Request ) ) {
+		return $response;
+	}
+	if ( 0 !== strpos( ltrim( (string) $request->get_route(), '/' ), 'artivio-elementor/' ) ) {
+		return $response;
+	}
+	$status = $response->get_status();
+	if ( 401 !== $status && 403 !== $status ) {
+		return $response;
+	}
+	$data = $response->get_data();
+	if ( ! is_array( $data ) ) {
+		return $response;
+	}
+
+	$source = isset( $GLOBALS['artivio_ea_auth_source'] ) ? (string) $GLOBALS['artivio_ea_auth_source'] : 'absent';
+	$hints  = array(
+		'absent'   => 'PHP received NO Authorization header for this request. The credential was never seen, so this is not a wrong password. Something upstream removed it — a proxy, CDN, or a server passing PHP as CGI/FastCGI without CGIPassAuth. Fix at the server: add "CGIPassAuth On" to .htaccess (Apache 2.4.13+ / LiteSpeed), or ask the host to forward the Authorization header.',
+		'unusable' => 'An Authorization header arrived but was not a decodable HTTP Basic credential. Artivio sends Basic; something in front of this site is rewriting it.',
+		'native'   => 'The credential reached WordPress and WordPress rejected it. The username or application password is wrong or revoked, or the user lacks the edit_posts capability.',
+		'shim'     => 'The credential reached WordPress and WordPress rejected it. The username or application password is wrong or revoked, or the user lacks the edit_posts capability.',
+	);
+
+	$data['artivioDiagnostic'] = array(
+		'authSource' => $source,
+		'hint'       => $hints[ $source ] ?? $hints['absent'],
+	);
+	$response->set_data( $data );
+	return $response;
+}
+add_filter( 'rest_post_dispatch', 'artivio_ea_annotate_auth_failure', 10, 3 );
 
 // Must run at file scope: WordPress resolves the current user lazily, after
 // plugins load, so setting these here is early enough for both core REST auth
@@ -582,11 +641,14 @@ function artivio_ea_status() {
 		'user'              => $user ? $user->user_login : null,
 		'roles'             => $user ? array_values( (array) $user->roles ) : array(),
 		'canUnfilteredHtml' => current_user_can( 'unfiltered_html' ),
-		// How the credential actually reached PHP. `shim` means this server does
-		// not populate PHP_AUTH_USER itself (CGI/FastCGI, typical on LiteSpeed),
-		// so core WordPress would have treated every authenticated request as
-		// anonymous without this plugin loaded — including plain /wp/v2/ writes.
-		'authSource'        => ! empty( $GLOBALS['artivio_ea_auth_shimmed'] ) ? 'shim' : 'native',
+		// How the credential actually reached PHP. `native` = this server
+		// populates PHP_AUTH_USER itself (Apache/mod_php); `shim` = it does not
+		// (CGI/FastCGI — LiteSpeed, PHP-FPM, most managed hosts) and this plugin
+		// recovered it, meaning core WordPress would have treated every
+		// authenticated request as anonymous without this plugin loaded,
+		// including plain /wp/v2/ writes. Only these two can appear here: a
+		// request with no usable credential never reaches this handler.
+		'authSource'        => isset( $GLOBALS['artivio_ea_auth_source'] ) ? $GLOBALS['artivio_ea_auth_source'] : 'native',
 	);
 }
 
