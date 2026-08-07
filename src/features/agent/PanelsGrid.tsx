@@ -594,6 +594,11 @@ const PanelBody = ({ panel, tenantSlug, canEdit }: { panel: Panel; tenantSlug: s
   // Optimistic per-row edits. The 30s poll delivers the server's truth; until
   // then the dropdown shows what the user just picked, not a stale value.
   const [edits, setEdits] = useState<Record<string, Record<string, unknown>>>({});
+  // Rows added and removed since the last poll. Both are reconciled against the
+  // server's list below rather than trusted indefinitely.
+  const [added, setAdded] = useState<Array<{ id: string; row: Record<string, unknown> }>>([]);
+  const [removed, setRemoved] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
 
   const patchRow = async (rowId: string, field: string, value: string) => {
     const prev = edits[rowId];
@@ -608,9 +613,60 @@ const PanelBody = ({ panel, tenantSlug, canEdit }: { panel: Panel; tenantSlug: s
         throw new Error(String(r.status));
       }
     } catch {
-      // Revert the optimistic edit — a dropdown showing a state the server
+      // Revert the optimistic edit — a cell showing a value the server
       // rejected is a lying dashboard.
       setEdits(e => ({ ...e, [rowId]: { ...prev } }));
+    }
+  };
+
+  /**
+   * Append a blank row for the user to type into.
+   *
+   * Blank on purpose: collecting every field up front needs a modal, and a
+   * modal is a far bigger thing to get right than a row you can click into.
+   * The row is created SERVER-side first so it comes back with a real id —
+   * without one it could not be edited or deleted until the next poll, which is
+   * precisely the dead end that made ten fake blank rows look like a fix.
+   */
+  const addRow = async (datasetKey: string, columns: string[]) => {
+    if (busy) {
+      return;
+    }
+    setBusy(true);
+    try {
+      const blank: Record<string, string> = {};
+      for (const c of columns.slice(0, 20)) {
+        blank[c] = '';
+      }
+      const r = await fetch(`/api/datasets?tenant=${encodeURIComponent(tenantSlug)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: datasetKey, row: blank }),
+      });
+      const data = await r.json().catch(() => null) as { id?: string; row?: Record<string, unknown> } | null;
+      if (r.ok && data?.id) {
+        setAdded(a => [...a, { id: data.id as string, row: data.row ?? blank }]);
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const deleteRow = async (rowId: string) => {
+    const prev = removed;
+    setRemoved(r => [...r, rowId]);
+    try {
+      const r = await fetch(
+        `/api/datasets?tenant=${encodeURIComponent(tenantSlug)}&id=${encodeURIComponent(rowId)}`,
+        { method: 'DELETE' },
+      );
+      if (!r.ok) {
+        throw new Error(String(r.status));
+      }
+      setAdded(a => a.filter(x => x.id !== rowId));
+    } catch {
+      // Put it back rather than hiding a row that still exists.
+      setRemoved(prev);
     }
   };
 
@@ -736,18 +792,53 @@ const PanelBody = ({ panel, tenantSlug, canEdit }: { panel: Panel; tenantSlug: s
   // unsorted panels arrive oldest → newest for chart parity, so show newest
   // first, as before.
   const sorted = typeof panel.config.sortBy === 'string' && panel.config.sortBy.length > 0;
-  const rows = sorted ? panel.rows.slice() : panel.rows.slice().reverse();
+  const serverRows = sorted ? panel.rows.slice() : panel.rows.slice().reverse();
+
+  // Reconcile optimistic state against the server's list: drop anything the
+  // poll has since delivered (else a freshly added row appears twice) and hide
+  // anything deleted (else it reappears until the next poll).
+  const serverIds = new Set(serverRows.map(r => r.id));
+  const rows = [
+    ...serverRows,
+    ...added.filter(a => !serverIds.has(a.id)),
+  ].filter(r => !removed.includes(r.id));
+
+  const datasetKey = typeof panel.config.datasetKey === 'string' ? panel.config.datasetKey : '';
+  const canAddRows = canEdit && datasetKey.length > 0;
+
+  const addRowButton = canAddRows
+    ? (
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => addRow(datasetKey, columns)}
+          className="
+            mt-2 rounded border border-white/12 px-2 py-1 text-[11px]
+            text-white/60 transition
+            hover:border-white/30 hover:text-white/85
+            disabled:opacity-40
+          "
+        >
+          {busy ? 'Adding…' : '+ Add row'}
+        </button>
+      )
+    : null;
 
   if (rows.length === 0) {
     // Distinguish "no data yet" from "your datasetKey is a typo" — an empty
     // titled card told the user nothing at all.
     return (
-      <p className="text-sm text-white/40">
-        No rows yet in
-        {' '}
-        <code className="rounded bg-white/10 px-1 text-xs">{String(panel.config.datasetKey ?? 'this dataset')}</code>
-        .
-      </p>
+      <div>
+        <p className="text-sm text-white/40">
+          No rows yet in
+          {' '}
+          <code className="rounded bg-white/10 px-1 text-xs">{String(panel.config.datasetKey ?? 'this dataset')}</code>
+          .
+        </p>
+        {/* An empty table is exactly where someone wants to add the first row,
+            so the button belongs here too — not only under a populated one. */}
+        {addRowButton}
+      </div>
     );
   }
 
@@ -765,6 +856,7 @@ const PanelBody = ({ panel, tenantSlug, canEdit }: { panel: Panel; tenantSlug: s
           "
           >
             {columns.map(c => <th key={c} className="pr-3 pb-2 font-medium">{c}</th>)}
+            {canAddRows && <th className="pb-2 font-medium" aria-label="Actions" />}
           </tr>
         </thead>
         <tbody className="text-white/75">
@@ -773,9 +865,10 @@ const PanelBody = ({ panel, tenantSlug, canEdit }: { panel: Panel; tenantSlug: s
             <tr key={r.id ?? i} className="border-t border-white/6">
               {columns.map((c) => {
                 const value = edits[r.id]?.[c] ?? r.row[c];
-                // The one editable field: status. Everyone can read it; only
-                // editors get the dropdown. Values the agent invented stay
-                // selectable instead of being clobbered.
+                // `status` keeps its dropdown — a known vocabulary is better
+                // served by a picker than a free-text box. Everything else is a
+                // text cell (below), because a table you can only edit in one
+                // column is not one a user can actually maintain.
                 if (canEdit && c.toLowerCase() === 'status' && r.id) {
                   const current = String(value ?? 'pending');
                   const options = STATUS_OPTIONS.includes(current)
@@ -801,12 +894,71 @@ const PanelBody = ({ panel, tenantSlug, canEdit }: { panel: Panel; tenantSlug: s
                     </td>
                   );
                 }
+                /**
+                 * Every other column, for editors: a text cell that commits on
+                 * blur or Enter.
+                 *
+                 * defaultValue, not value: a controlled input here would fight
+                 * the 30-second poll, and having the field you are mid-sentence
+                 * in reset under you is worse than a slightly stale cell. The
+                 * key includes the server's value so a genuine remote change
+                 * still remounts the input with the new text.
+                 */
+                if (canEdit && r.id) {
+                  const text = String(value ?? '');
+                  return (
+                    <td key={c} className="py-1 pr-3">
+                      <input
+                        key={`${r.id}-${c}-${String(r.row[c] ?? '')}`}
+                        type="text"
+                        defaultValue={text}
+                        aria-label={`${c}, row ${i + 1}`}
+                        placeholder="—"
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.currentTarget.blur();
+                          }
+                        }}
+                        onBlur={(e) => {
+                          const next = e.target.value;
+                          if (next !== text) {
+                            patchRow(r.id, c, next);
+                          }
+                        }}
+                        className="
+                          w-full min-w-24 rounded border border-transparent
+                          bg-transparent px-1 py-0.5 text-xs text-white/75
+                          transition
+                          hover:border-white/15
+                          focus:border-indigo-400 focus:outline-none
+                        "
+                      />
+                    </td>
+                  );
+                }
                 return <td key={c} className="py-1.5 pr-3">{String(value ?? '')}</td>;
               })}
+              {canAddRows && (
+                <td className="py-1 text-right">
+                  <button
+                    type="button"
+                    onClick={() => deleteRow(r.id)}
+                    aria-label={`Remove row ${i + 1}`}
+                    title="Remove row"
+                    className="
+                      rounded px-1.5 py-0.5 text-xs text-white/25 transition
+                      hover:bg-white/10 hover:text-red-300
+                    "
+                  >
+                    ×
+                  </button>
+                </td>
+              )}
             </tr>
           ))}
         </tbody>
       </table>
+      {addRowButton}
     </div>
   );
 };
