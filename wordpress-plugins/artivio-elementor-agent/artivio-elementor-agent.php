@@ -3,7 +3,7 @@
  * Plugin Name:  Artivio Elementor Agent
  * Plugin URI:   https://artivio.io
  * Description:  Exposes Elementor's page tree over the REST API so Artivio's agent can read and edit layouts. Elementor stores every page in the protected `_elementor_data` postmeta key, which core WP REST will never touch — this plugin is the only reason remote editing is possible.
- * Version:      1.4.0
+ * Version:      1.4.1
  * Requires PHP: 7.4
  * Author:       Artivio
  * License:      GPL-2.0-or-later
@@ -41,7 +41,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'ARTIVIO_EA_VERSION', '1.4.0' );
+define( 'ARTIVIO_EA_VERSION', '1.4.1' );
 define( 'ARTIVIO_EA_NS', 'artivio-elementor/v1' );
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -1263,6 +1263,19 @@ function artivio_ea_widget_schema( WP_REST_Request $r ) {
 		if ( array_key_exists( 'default', $c ) ) {
 			$row['default'] = $c['default'];
 		}
+		/**
+		 * `return_value` is the value that switches a popover_toggle or switcher
+		 * ON — and this is the single commonest reason an Elementor setting
+		 * written over the API "saves" successfully and changes nothing on the
+		 * page. Typography is the classic: `typography_font_size` is ignored
+		 * until `typography_typography` is set to "custom", because that toggle
+		 * is what activates the whole group. Without this field in the schema an
+		 * agent writes the font size, gets a success response, sees no change,
+		 * and concludes the platform is broken.
+		 */
+		if ( isset( $c['return_value'] ) ) {
+			$row['returnValue'] = $c['return_value'];
+		}
 		if ( ! empty( $c['options'] ) && is_array( $c['options'] ) ) {
 			// The KEYS are what goes into `settings`; the labels are for humans.
 			$row['options'] = array_slice( array_keys( $c['options'] ), 0, 60 );
@@ -1281,7 +1294,7 @@ function artivio_ea_widget_schema( WP_REST_Request $r ) {
 		'title'        => method_exists( $widget, 'get_title' ) ? $widget->get_title() : $name,
 		'controlCount' => count( $out ),
 		'controls'     => $out,
-		'note'         => 'These `key` values go in an element\'s `settings`. Responsive controls also accept _tablet and _mobile suffixes, e.g. "align_tablet".',
+		'note'         => 'These `key` values go in an element\'s `settings`. Responsive controls also accept _tablet and _mobile suffixes, e.g. "align_tablet" or "typography_font_size_mobile". IMPORTANT: any control with a `returnValue` is a GROUP TOGGLE — the settings it governs are ignored until you also send that toggle with its returnValue. Font size is the usual trap: send {"typography_typography":"custom","typography_font_size":{"unit":"px","size":48,"sizes":[]}} together, never the size alone. Size controls take an object, not a bare number.',
 	);
 }
 
