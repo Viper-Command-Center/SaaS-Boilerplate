@@ -39,14 +39,45 @@ async function wp(
 
   const text = await resp.text();
   if (!resp.ok) {
-    let msg = `HTTP ${resp.status}`;
+    let code = '';
+    let detail = '';
     try {
       const j = JSON.parse(text) as { message?: string; code?: string };
-      msg = j.message ? `${j.message} (${j.code ?? resp.status})` : msg;
-    } catch { /* keep the status */ }
+      code = j.code ?? '';
+      detail = j.message ?? '';
+    } catch { /* body wasn't JSON — the status alone carries the meaning */ }
+
+    /**
+     * 🔴 THE NUMERIC STATUS MUST SURVIVE INTO THE MESSAGE.
+     *
+     * `classifyToolError()` reads this string and recognises a client-fixable
+     * fault by matching `\b401\b`, `\b403\b`, `\b404\b`, "not found",
+     * "unauthorized"… This function used to REPLACE `HTTP 404` with
+     * WordPress's own prose whenever the body carried a message — and
+     * WordPress's prose for a wrong id is "Invalid post ID.", which matches
+     * none of those patterns. So calling update_post with a PAGE id was
+     * classified `platform`, escalated to the operator as an Artivio bug, and
+     * the client was told "you don't need to do anything" about a one-word
+     * fix. Identical defect, and identical fix, to elementor.ts's explain().
+     */
+    let msg = `HTTP ${resp.status}${code ? ` ${code}` : ''}${detail ? ` — ${detail}` : ''}`;
+
     if (resp.status === 401 || resp.status === 403) {
       msg += ' — check the username and Application Password, and that the user can edit posts.';
     }
+
+    /**
+     * The commonest id fault here is not an id fault at all. WordPress keeps
+     * posts and pages in SEPARATE REST collections, so a perfectly valid page
+     * id returns "Invalid post ID" from /posts. Nothing in that message hints
+     * at the actual fix, so the caller re-verifies an id that was right all
+     * along — which is exactly what happened on the True Therapy homepage.
+     */
+    if (code === 'rest_post_invalid_id' || /invalid post id/i.test(detail)) {
+      const usedPages = path.startsWith('/pages');
+      msg += ` — posts and pages are SEPARATE collections in WordPress, and this call hit /${usedPages ? 'pages' : 'posts'}. If the id came from list_pages, use update_page; if it came from list_posts, use update_post. The id itself is probably fine.`;
+    }
+
     throw new Error(`WordPress: ${msg}`);
   }
 

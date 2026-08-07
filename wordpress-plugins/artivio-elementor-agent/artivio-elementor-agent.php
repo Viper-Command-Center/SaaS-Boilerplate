@@ -3,7 +3,7 @@
  * Plugin Name:  Artivio Elementor Agent
  * Plugin URI:   https://artivio.io
  * Description:  Exposes Elementor's page tree over the REST API so Artivio's agent can read and edit layouts. Elementor stores every page in the protected `_elementor_data` postmeta key, which core WP REST will never touch — this plugin is the only reason remote editing is possible.
- * Version:      1.3.1
+ * Version:      1.4.0
  * Requires PHP: 7.4
  * Author:       Artivio
  * License:      GPL-2.0-or-later
@@ -41,7 +41,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'ARTIVIO_EA_VERSION', '1.3.1' );
+define( 'ARTIVIO_EA_VERSION', '1.4.0' );
 define( 'ARTIVIO_EA_NS', 'artivio-elementor/v1' );
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -518,6 +518,23 @@ function artivio_ea_register_routes() {
 				'methods'             => 'PUT',
 				'permission_callback' => $auth,
 				'callback'            => 'artivio_ea_put_full_tree',
+			),
+		)
+	);
+
+	register_rest_route(
+		ARTIVIO_EA_NS,
+		'/documents/(?P<id>\d+)/seo',
+		array(
+			array(
+				'methods'             => 'GET',
+				'permission_callback' => $auth,
+				'callback'            => 'artivio_ea_get_seo',
+			),
+			array(
+				'methods'             => 'PATCH',
+				'permission_callback' => $auth,
+				'callback'            => 'artivio_ea_patch_seo',
 			),
 		)
 	);
@@ -1340,6 +1357,237 @@ function artivio_ea_apply_template( WP_REST_Request $r ) {
 		'mode'     => $mode,
 		'added'    => count( $copied ),
 		'topLevel' => count( $tree ),
+	);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * SEO meta (added 1.4.0)
+ *
+ * Rank Math and Yoast both store their fields in POSTMETA, and core WP REST
+ * only exposes meta keys that were registered with show_in_rest — which these
+ * are not, reliably, across versions. So the Artivio agent could read a page,
+ * rewrite its copy, and then have no way to set the title and description that
+ * copy was written for. This closes that.
+ *
+ * The API is deliberately plugin-AGNOSTIC: callers send `title`,
+ * `description`, `focusKeyword`… and this maps them onto whichever SEO plugin
+ * the site actually runs. An agent should not have to know that Rank Math
+ * spells it `rank_math_description` and Yoast spells it `_yoast_wpseo_metadesc`
+ * — that is exactly the kind of per-site detail it will get wrong.
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+/** Which SEO plugin is active. */
+function artivio_ea_seo_plugin(): string {
+	if ( defined( 'RANK_MATH_VERSION' ) || class_exists( 'RankMath' ) ) {
+		return 'rankmath';
+	}
+	if ( defined( 'WPSEO_VERSION' ) || class_exists( 'WPSEO_Options' ) ) {
+		return 'yoast';
+	}
+	return 'none';
+}
+
+/** Friendly field name → the active plugin's postmeta key. */
+function artivio_ea_seo_map( string $which ): array {
+	if ( 'rankmath' === $which ) {
+		return array(
+			'title'              => 'rank_math_title',
+			'description'        => 'rank_math_description',
+			'focusKeyword'       => 'rank_math_focus_keyword',
+			'canonical'          => 'rank_math_canonical_url',
+			'breadcrumbTitle'    => 'rank_math_breadcrumb_title',
+			'ogTitle'            => 'rank_math_facebook_title',
+			'ogDescription'      => 'rank_math_facebook_description',
+			'ogImage'            => 'rank_math_facebook_image',
+			'twitterTitle'       => 'rank_math_twitter_title',
+			'twitterDescription' => 'rank_math_twitter_description',
+			'twitterImage'       => 'rank_math_twitter_image',
+		);
+	}
+	if ( 'yoast' === $which ) {
+		return array(
+			'title'              => '_yoast_wpseo_title',
+			'description'        => '_yoast_wpseo_metadesc',
+			'focusKeyword'       => '_yoast_wpseo_focuskw',
+			'canonical'          => '_yoast_wpseo_canonical',
+			'breadcrumbTitle'    => '_yoast_wpseo_bctitle',
+			'ogTitle'            => '_yoast_wpseo_opengraph-title',
+			'ogDescription'      => '_yoast_wpseo_opengraph-description',
+			'ogImage'            => '_yoast_wpseo_opengraph-image',
+			'twitterTitle'       => '_yoast_wpseo_twitter-title',
+			'twitterDescription' => '_yoast_wpseo_twitter-description',
+			'twitterImage'       => '_yoast_wpseo_twitter-image',
+		);
+	}
+	return array();
+}
+
+/** Fields holding a URL — sanitised differently from prose. */
+function artivio_ea_seo_url_fields(): array {
+	return array( 'canonical', 'ogImage', 'twitterImage' );
+}
+
+/**
+ * Google truncates around these lengths. We REPORT rather than truncate:
+ * silently cutting a client's meta description is worse than a long one, and
+ * the agent can only rewrite what it is told about.
+ */
+function artivio_ea_seo_limits(): array {
+	return array(
+		'title'       => 60,
+		'description' => 155,
+	);
+}
+
+function artivio_ea_seo_read( int $post_id, string $which ): array {
+	$out = array();
+	foreach ( artivio_ea_seo_map( $which ) as $field => $key ) {
+		$value        = get_post_meta( $post_id, $key, true );
+		$out[ $field ] = is_string( $value ) ? $value : ( '' === $value ? '' : $value );
+	}
+
+	// Robots differ in shape between the two plugins, so they are normalised to
+	// two booleans rather than exposed raw.
+	if ( 'rankmath' === $which ) {
+		$robots            = get_post_meta( $post_id, 'rank_math_robots', true );
+		$robots            = is_array( $robots ) ? $robots : array();
+		$out['noindex']    = in_array( 'noindex', $robots, true );
+		$out['nofollow']   = in_array( 'nofollow', $robots, true );
+	} elseif ( 'yoast' === $which ) {
+		$out['noindex']  = '1' === (string) get_post_meta( $post_id, '_yoast_wpseo_meta-robots-noindex', true );
+		$out['nofollow'] = '1' === (string) get_post_meta( $post_id, '_yoast_wpseo_meta-robots-nofollow', true );
+	}
+
+	return $out;
+}
+
+function artivio_ea_get_seo( WP_REST_Request $r ) {
+	$post_id = (int) $r['id'];
+	$guard   = artivio_ea_guard_post( $post_id );
+	if ( is_wp_error( $guard ) ) {
+		return $guard;
+	}
+	$which = artivio_ea_seo_plugin();
+	if ( 'none' === $which ) {
+		return new WP_Error(
+			'artivio_ea_no_seo_plugin',
+			'No supported SEO plugin is active on this site. This route supports Rank Math and Yoast.',
+			array( 'status' => 409 )
+		);
+	}
+
+	$values = artivio_ea_seo_read( $post_id, $which );
+	$limits = artivio_ea_seo_limits();
+
+	return array(
+		'id'         => $post_id,
+		'seoPlugin'  => $which,
+		'fields'     => $values,
+		'lengths'    => array(
+			'title'       => mb_strlen( (string) ( $values['title'] ?? '' ) ),
+			'description' => mb_strlen( (string) ( $values['description'] ?? '' ) ),
+		),
+		'limits'     => $limits,
+		'postTitle'  => get_the_title( $post_id ),
+		'link'       => get_permalink( $post_id ),
+		'note'       => 'An EMPTY title or description does not mean nothing is output — it means the SEO plugin falls back to its own template (e.g. "%title% %sep% %sitename%"). Setting a value here overrides that template for this page only. Values may contain the plugin\'s own variables.',
+	);
+}
+
+function artivio_ea_patch_seo( WP_REST_Request $r ) {
+	$post_id = (int) $r['id'];
+	$guard   = artivio_ea_guard_post( $post_id );
+	if ( is_wp_error( $guard ) ) {
+		return $guard;
+	}
+	$which = artivio_ea_seo_plugin();
+	if ( 'none' === $which ) {
+		return new WP_Error(
+			'artivio_ea_no_seo_plugin',
+			'No supported SEO plugin is active on this site. This route supports Rank Math and Yoast.',
+			array( 'status' => 409 )
+		);
+	}
+
+	$map     = artivio_ea_seo_map( $which );
+	$urls    = artivio_ea_seo_url_fields();
+	$limits  = artivio_ea_seo_limits();
+	$changed = array();
+	$cleared = array();
+	$warn    = array();
+	$unknown = array();
+
+	$params = $r->get_params();
+	foreach ( $params as $field => $value ) {
+		if ( in_array( $field, array( 'id', 'noindex', 'nofollow' ), true ) ) {
+			continue;
+		}
+		if ( ! isset( $map[ $field ] ) ) {
+			// Silently ignoring an unrecognised field is how a caller ends up
+			// believing it set something it did not.
+			$unknown[] = $field;
+			continue;
+		}
+		$key = $map[ $field ];
+
+		if ( null === $value || '' === $value ) {
+			delete_post_meta( $post_id, $key );
+			$cleared[] = $field;
+			continue;
+		}
+
+		$clean = in_array( $field, $urls, true )
+			? esc_url_raw( (string) $value )
+			: sanitize_text_field( (string) $value );
+
+		if ( isset( $limits[ $field ] ) && mb_strlen( $clean ) > $limits[ $field ] ) {
+			// Saved as given — reported, never truncated.
+			$warn[] = sprintf(
+				'%s is %d characters; Google typically truncates beyond about %d. Saved as supplied.',
+				$field,
+				mb_strlen( $clean ),
+				$limits[ $field ]
+			);
+		}
+
+		update_post_meta( $post_id, $key, wp_slash( $clean ) );
+		$changed[] = $field;
+	}
+
+	// Robots, normalised back onto whichever shape the active plugin wants.
+	if ( array_key_exists( 'noindex', $params ) || array_key_exists( 'nofollow', $params ) ) {
+		$current  = artivio_ea_seo_read( $post_id, $which );
+		$noindex  = array_key_exists( 'noindex', $params )
+			? filter_var( $params['noindex'], FILTER_VALIDATE_BOOLEAN )
+			: (bool) ( $current['noindex'] ?? false );
+		$nofollow = array_key_exists( 'nofollow', $params )
+			? filter_var( $params['nofollow'], FILTER_VALIDATE_BOOLEAN )
+			: (bool) ( $current['nofollow'] ?? false );
+
+		if ( 'rankmath' === $which ) {
+			$robots = array();
+			$robots[] = $noindex ? 'noindex' : 'index';
+			$robots[] = $nofollow ? 'nofollow' : 'follow';
+			update_post_meta( $post_id, 'rank_math_robots', wp_slash( $robots ) );
+		} else {
+			// Yoast: '1' = noindex, '2' = index, empty = site default.
+			update_post_meta( $post_id, '_yoast_wpseo_meta-robots-noindex', $noindex ? '1' : '2' );
+			update_post_meta( $post_id, '_yoast_wpseo_meta-robots-nofollow', $nofollow ? '1' : '0' );
+		}
+		$changed[] = 'robots';
+	}
+
+	clean_post_cache( $post_id );
+
+	return array(
+		'id'            => $post_id,
+		'seoPlugin'     => $which,
+		'changed'       => $changed,
+		'cleared'       => $cleared,
+		'ignoredFields' => $unknown,
+		'warnings'      => $warn,
+		'fields'        => artivio_ea_seo_read( $post_id, $which ),
+		'link'          => get_permalink( $post_id ),
 	);
 }
 

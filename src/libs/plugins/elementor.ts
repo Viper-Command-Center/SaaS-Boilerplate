@@ -187,18 +187,54 @@ function bounded(value: unknown, hint: string): string {
   });
 }
 
-function requireId(args: Record<string, unknown>, key = 'page_id'): number {
-  const id = Number(args[key]);
+/**
+ * Read an argument under any of several spellings.
+ *
+ * The schema says `page_id`, and a model that sends `pageId` is wrong — but it
+ * is wrong in a way that costs a live debugging session, because the failure
+ * reads as "51 is not a positive integer" about an id that plainly is one. The
+ * model then doubts the id, re-derives it, tries again, and reports a platform
+ * bug. Accepting the obvious synonyms removes the whole class for the price of
+ * one array, and nothing is lost: these names are unambiguous.
+ */
+function pickArg(args: Record<string, unknown>, keys: string[]): unknown {
+  for (const key of keys) {
+    const v = args[key];
+    if (v !== undefined && v !== null && v !== '') {
+      return v;
+    }
+  }
+  return undefined;
+}
+
+const PAGE_ID_KEYS = ['page_id', 'pageId', 'post_id', 'postId', 'id'];
+
+/**
+ * `keys` is explicit rather than derived from `label` because apply_template
+ * needs BOTH a page id and a template id in one call. An earlier version took
+ * only a label and always read the page-id keys, which would have sent the page
+ * id as the template id — a silent wrong-target write, not an error.
+ */
+function requireId(args: Record<string, unknown>, keys: string[] = PAGE_ID_KEYS, label = 'page_id'): number {
+  const id = Number(pickArg(args, keys));
   if (!Number.isInteger(id) || id <= 0) {
-    throw new Error(`Elementor: \`${key}\` must be a WordPress post id (a positive integer). Use list_elementor_pages to find it.`);
+    // Name what actually arrived. An error that says only "must be a positive
+    // integer" sends the caller to check the value, when the fault is the key.
+    throw new Error(
+      `Elementor: \`${label}\` must be a WordPress post id (a positive integer), and none was found. Arguments received: [${Object.keys(args).join(', ') || 'none'}]. Send it as \`${label}\`; use list_elementor_pages to find the id.`,
+    );
   }
   return id;
 }
 
 function requireElement(args: Record<string, unknown>): string {
-  const el = String(args.element_id ?? '').trim();
+  // Deliberately NOT falling back to a bare `id` here — that is the page's key,
+  // and silently reading it would edit the wrong thing rather than fail.
+  const el = String(pickArg(args, ['element_id', 'elementId', 'elementID', 'el_id', 'elId']) ?? '').trim();
   if (!el) {
-    throw new Error('Elementor: `element_id` is required. Use get_page_outline to see the element ids on a page.');
+    throw new Error(
+      `Elementor: \`element_id\` is required and none was found. Arguments received: [${Object.keys(args).join(', ') || 'none'}]. Use get_page_outline to see the element ids on a page.`,
+    );
   }
   return el;
 }
@@ -399,6 +435,39 @@ export const elementorProvider: BuiltinProvider = {
           },
         },
         required: ['title'],
+      },
+    },
+    {
+      name: 'get_seo_meta',
+      description: 'Read a page\'s SEO fields — title, meta description, focus keyword, canonical, robots, social cards — from whichever SEO plugin the site runs (Rank Math or Yoast). Also reports character counts against Google\'s truncation points. An EMPTY title or description means the plugin\'s own template applies, not that nothing is output.',
+      input_schema: {
+        type: 'object',
+        properties: { page_id: { type: 'number' } },
+        required: ['page_id'],
+      },
+    },
+    {
+      name: 'update_seo_meta',
+      description: 'Set a page\'s SEO fields. Send only the fields you want to change; anything omitted is left alone, and sending "" CLEARS a field back to the SEO plugin\'s template. Field names are the same on every site — this maps them onto Rank Math or Yoast automatically, so never guess at raw meta keys. Over-length titles and descriptions are saved as given and reported, never silently truncated.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          page_id: { type: 'number' },
+          title: { type: 'string', description: 'SEO title. ~60 chars before Google truncates.' },
+          description: { type: 'string', description: 'Meta description. ~155 chars before Google truncates.' },
+          focusKeyword: { type: 'string', description: 'Primary keyword. Comma-separate for secondary keywords.' },
+          canonical: { type: 'string' },
+          breadcrumbTitle: { type: 'string' },
+          noindex: { type: 'boolean', description: 'True hides the page from search engines.' },
+          nofollow: { type: 'boolean' },
+          ogTitle: { type: 'string', description: 'Facebook/OpenGraph title' },
+          ogDescription: { type: 'string' },
+          ogImage: { type: 'string', description: 'Image URL' },
+          twitterTitle: { type: 'string' },
+          twitterDescription: { type: 'string' },
+          twitterImage: { type: 'string', description: 'Image URL' },
+        },
+        required: ['page_id'],
       },
     },
     {
@@ -618,7 +687,7 @@ export const elementorProvider: BuiltinProvider = {
 
       case 'apply_template':
         return JSON.stringify(await send(`/documents/${requireId(args)}/apply-template`, 'POST', {
-          templateId: requireId(args, 'template_id'),
+          templateId: requireId(args, ['template_id', 'templateId'], 'template_id'),
           mode: args.mode ? String(args.mode) : 'append',
         }));
 
@@ -681,6 +750,37 @@ export const elementorProvider: BuiltinProvider = {
           link: updated.link,
           note: updated.status === 'publish' ? 'This page is now LIVE.' : `Status set to ${updated.status}.`,
         });
+      }
+
+      case 'get_seo_meta':
+        return JSON.stringify(await get(`/documents/${requireId(args)}/seo`));
+
+      case 'update_seo_meta': {
+        const pageId = requireId(args);
+        /**
+         * Forward only the recognised fields. Passing `args` through wholesale
+         * would send `page_id` to the SEO route, which would then report it as
+         * an ignored field on every single call — training the agent to skim
+         * past the one list that tells it when something did NOT get set.
+         */
+        const FIELDS = [
+          'title', 'description', 'focusKeyword', 'canonical', 'breadcrumbTitle',
+          'ogTitle', 'ogDescription', 'ogImage',
+          'twitterTitle', 'twitterDescription', 'twitterImage',
+          'noindex', 'nofollow',
+        ] as const;
+        const body: Record<string, unknown> = {};
+        for (const field of FIELDS) {
+          if (args[field] !== undefined) {
+            body[field] = args[field];
+          }
+        }
+        if (Object.keys(body).length === 0) {
+          throw new Error(
+            `Elementor: update_seo_meta needs at least one field to change. Arguments received: [${Object.keys(args).join(', ') || 'none'}]. Valid fields: ${FIELDS.join(', ')}.`,
+          );
+        }
+        return JSON.stringify(await send(`/documents/${pageId}/seo`, 'PATCH', body));
       }
 
       default:
