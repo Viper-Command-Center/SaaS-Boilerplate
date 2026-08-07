@@ -81,6 +81,38 @@ export function classifyToolError(err: unknown): Classified {
     };
   }
 
+  /**
+   * ── Any OTHER 4xx: the request itself was rejected ──
+   *
+   * A 4xx that is not 401/403/404/429 means the service understood us and said
+   * no to what we sent — a bad argument, an unsupported value, a conflicting
+   * state. That is a call to fix, not a platform defect.
+   *
+   * Without this branch every one of them fell through to `platform`, which
+   * emailed the operator and told the client "you don't need to do anything"
+   * about something the next tool call could have fixed. It fired three times in
+   * one afternoon on the True Therapy build: `rest_post_invalid_id` from a page
+   * id sent to the posts endpoint, and `rest_invalid_param` twice from
+   * status="trash" — which WordPress rejects because trashing is a DELETE, not
+   * a status. Every one produced a false "this is a platform bug" report.
+   *
+   * The conservative instinct above it is still right — an unrecognised error IS
+   * ours until proven otherwise. But a 4xx is not unrecognised. It is the
+   * service telling us precisely what it refused, and relaying that verbatim
+   * beats escalating it.
+   *
+   * These are still RECORDED as issues; `escalate: false` only suppresses the
+   * email. A genuine malformed-request bug on our side stays visible in the
+   * Issues inbox without crying wolf on the operator.
+   */
+  if (/\b4\d\d\b|invalid parameter|invalid_param|invalid post id|rest_invalid/.test(m)) {
+    return {
+      kind: 'config',
+      clientMessage: `The request was rejected as invalid: "${raw}". The service understood it and refused — usually a wrong argument, an unsupported value, or the wrong endpoint for this kind of content. The error above names what it objected to; fix that rather than retrying unchanged.`,
+      escalate: false,
+    };
+  }
+
   // ── Anything else is ours until proven otherwise ──
   return {
     kind: 'platform',

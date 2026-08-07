@@ -168,7 +168,7 @@ export async function POST(request: Request) {
   try {
     mcpToolset = await buildTenantToolset(tenant.id);
   } catch {
-    mcpToolset = { anthropicTools: [], failedConnections: [], resolve: () => null, deferredSummary: '', attachToolSink: () => {} };
+    mcpToolset = { anthropicTools: [], failedConnections: [], connectionGuidance: '', resolve: () => null, deferredSummary: '', attachToolSink: () => {} };
   }
   const platform = buildPlatformTools(tenant.id);
   const mission = buildMissionTools(tenant.id);
@@ -181,6 +181,7 @@ export async function POST(request: Request) {
   const toolset = {
     anthropicTools: combinedTools,
     failedConnections: mcpToolset.failedConnections,
+    connectionGuidance: mcpToolset.connectionGuidance,
     deferredSummary: mcpToolset.deferredSummary,
     attachToolSink: mcpToolset.attachToolSink,
     resolve: (name: string) => {
@@ -218,6 +219,12 @@ export async function POST(request: Request) {
   // this when there is actually something deferred.
   if (mcpToolset.deferredSummary) {
     system += `\nSome tool collections are DEFERRED to keep context small: ${mcpToolset.deferredSummary}. Call load_connection_tools with the connection name before using them.`;
+  }
+  // Phase 32: cross-tool operating notes from the built-in providers this
+  // workspace enabled. Versioned with the adapter, so a trap fixed once is
+  // fixed for every client site — see BuiltinProvider.guidance.
+  if (mcpToolset.connectionGuidance) {
+    system += `\n\n## How your connected tools actually behave\n${mcpToolset.connectionGuidance}`;
   }
 
   // ── Failed connections ────────────────────────────────────────────────────

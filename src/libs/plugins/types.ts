@@ -89,6 +89,30 @@ export type BuiltinProvider = {
   targetPlaceholder?: string;
   /** Default true (a URL). False = free-form, e.g. a numeric property ID. */
   targetIsUrl?: boolean;
+  /**
+   * 🔴 PHASE 32 — cross-tool operating notes, injected into the system prompt
+   * for every workspace that has this provider enabled.
+   *
+   * Per-TOOL guidance belongs in that tool's `description`. This is for the
+   * rules that span tools and therefore have nowhere else to live: which
+   * connection to reach for, which write silently does nothing, what to verify
+   * after a change. Elementor is the case that forced it — "typography_font_size
+   * is ignored unless typography_typography is 'custom'" is a fact about the
+   * PLUGIN, identical on every client site, and it was discovered the expensive
+   * way on the first one.
+   *
+   * It lives here rather than in each workspace's memory on purpose. Copied into
+   * N workspaces it would need correcting in N places the next time a provider
+   * changes, and stale guidance is worse than none — the Phase 22 failure, where
+   * a hand-maintained table drifted and the agent started guessing. Here it is
+   * versioned with the adapter it describes, so a fix reaches every site at once.
+   *
+   * COST: only for connections a workspace actually enabled, and it sits inside
+   * the cachedSystem() breakpoint, so repeat calls in a turn read it at ~10%.
+   * Keep it to the traps that cost a real debugging session; anything the model
+   * would get right anyway is pure overhead. A few hundred tokens, not a manual.
+   */
+  guidance?: string;
   tools: BuiltinTool[];
   /**
    * Execute one tool.

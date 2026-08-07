@@ -253,6 +253,21 @@ export const elementorProvider: BuiltinProvider = {
   targetLabel: 'The WordPress site URL',
   targetPlaceholder: 'https://clientsite.com',
 
+  /**
+   * Every line here was learned the expensive way on the first client site.
+   * Keep it to failures that are SILENT — the ones where a tool returns success
+   * and nothing happens — because those are the only ones the model cannot
+   * discover for itself from an error message.
+   */
+  guidance: `Elementor connection:
+- READ with get_page_outline first (compact tree of ids and labels), then get_element for the one element you need in full. get_page_tree returns hundreds of KB and will exhaust the context window.
+- update_element MERGES settings. Send only the keys you are changing; omitted keys are preserved.
+- GROUP TOGGLES are the main trap. Many settings are gated behind a toggle control and are IGNORED until it is set. Font size is the usual victim: send {"typography_typography":"custom","typography_font_size":{"unit":"px","size":48,"sizes":[]}} together — the size alone saves successfully and changes nothing. Size values are objects, never bare numbers. Responsive variants take _tablet and _mobile suffixes. In get_widget_schema, any control with a returnValue is such a toggle.
+- THERE IS NO UNDO. Writes bypass Elementor's revision system, so nothing appears in the editor's history. Before a batch of edits on a live page, call get_page_tree once and keep the JSON; set_page_tree restores it exactly.
+- VERIFY BEFORE CLAIMING SUCCESS. A successful write is not evidence the page looks right. If a cloud-browser connection is available, run check_layout on the live URL after any copy or styling change — orphaned last words, text overflowing its box, sideways scrolling on mobile and unreadably small type are only true once a browser has laid the text out, and none of them are visible in the page tree. Report what it finds without being asked.
+- SEO belongs to THIS connection: get_seo_meta and update_seo_meta, not the WordPress tools. Field names (title, description, focusKeyword, canonical, noindex) are the same on every site and are mapped onto Rank Math or Yoast automatically — never write raw rank_math_* or _yoast_* meta keys. Read ignoredFields and warnings in the response rather than trusting a success.
+- New pages are created as drafts. Publishing is a human decision.`,
+
   tools: [
     {
       name: 'elementor_status',

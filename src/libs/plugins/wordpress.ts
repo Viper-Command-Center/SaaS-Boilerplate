@@ -112,6 +112,13 @@ export const wordpressProvider: BuiltinProvider = {
   credentialLabel: 'WordPress username + Application Password, as "username:xxxx xxxx xxxx xxxx" (WP Admin → Users → Profile → Application Passwords)',
   perConnection: true, // each workspace supplies its own site + credential
 
+  guidance: `WordPress connection:
+- Posts and pages are SEPARATE REST collections. A valid page id passed to update_post returns "Invalid post ID" — the id is fine, the tool is wrong. Ids from list_pages go to update_page; ids from list_posts go to update_post.
+- If this site ALSO has an Elementor connection, any page whose builtWithElementor is true must be edited through the Elementor tools. update_page writes post_content, and Elementor renders from its own stored layout and ignores post_content — so the call succeeds, the result looks clean, and the live page does not change.
+- create_post makes a BLOG POST and cannot make a page. For a page use create_page — or, if the site has an Elementor connection and the page needs a designed layout, create_elementor_page there. Check the "type" field in the result; it states what was actually created.
+- To remove something, use trash_content. WordPress has no "trash" STATUS — passing status="trash" to an update returns a 400. Nothing here can permanently delete; trashed items stay recoverable.
+- create_post and create_page default to draft. Publishing is a human decision; do not set status="publish" unless someone asked for it in this conversation.`,
+
   tools: [
     {
       name: 'list_posts',
@@ -136,7 +143,7 @@ export const wordpressProvider: BuiltinProvider = {
     },
     {
       name: 'create_post',
-      description: 'Create a blog post. Defaults to DRAFT — set status="publish" only when the human has approved publishing. Content is HTML.',
+      description: 'Create a blog POST — a dated entry that appears in the blog feed. This cannot create a page: for a page use create_page, or create_elementor_page if the site has an Elementor connection and the page needs a built layout. Defaults to DRAFT; set status="publish" only when a human has approved publishing. Content is HTML.',
       input_schema: {
         type: 'object',
         properties: {
@@ -148,6 +155,48 @@ export const wordpressProvider: BuiltinProvider = {
           tags: { type: 'array', items: { type: 'number' } },
         },
         required: ['title', 'content'],
+      },
+    },
+    {
+      /**
+       * Added because its absence was invisible. create_post is the only
+       * creation tool a model sees when it wants "a new page", so it used that,
+       * got a 200 and a real id back, and produced a blog post on a client site
+       * — with nothing anywhere in the result saying otherwise. A separate tool
+       * beats a `type` argument on create_post: an argument can be forgotten and
+       * silently defaults to the wrong thing, which is the same failure again.
+       */
+      name: 'create_page',
+      description: 'Create a PAGE — a standalone page like About, Services or a landing page, not part of the blog feed. Defaults to DRAFT; set status="publish" only when a human has approved publishing. Content is HTML. If the site has an Elementor connection and this page needs a designed layout rather than plain HTML, use create_elementor_page there instead — a page created here renders its HTML through the theme, not through Elementor.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          title: { type: 'string' },
+          content: { type: 'string', description: 'HTML body' },
+          excerpt: { type: 'string' },
+          status: { type: 'string', description: 'draft (default) | publish' },
+          slug: { type: 'string', description: 'URL slug. Keep it short — "get-started" beats a full sentence.' },
+          parent: { type: 'number', description: 'Parent page id, for a nested URL.' },
+        },
+        required: ['title', 'content'],
+      },
+    },
+    {
+      /**
+       * WordPress has no "trash" STATUS — trashing is a DELETE, and passing
+       * status:"trash" to the update endpoint returns a 400 that reads like a
+       * platform fault. Without this tool the agent had no correct move at all,
+       * so it kept trying the wrong one.
+       */
+      name: 'trash_content',
+      description: 'Move a post or page to the WordPress trash. Reversible — the item stays in Trash until someone empties it, and nothing here can permanently delete. Use this instead of trying to set status="trash", which WordPress rejects: trashing is a delete operation, not a status change.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          id: { type: 'number' },
+          type: { type: 'string', description: 'page | post (default post). Must match where the id came from — posts and pages are separate collections.' },
+        },
+        required: ['id'],
       },
     },
     {
@@ -218,25 +267,52 @@ export const wordpressProvider: BuiltinProvider = {
       });
     }
 
-    if (tool === 'create_post') {
-      const created = await wp(siteUrl, credential, '/posts', {
+    if (tool === 'create_post' || tool === 'create_page') {
+      const isPage = tool === 'create_page';
+      const created = await wp(siteUrl, credential, isPage ? '/pages' : '/posts', {
         method: 'POST',
         body: JSON.stringify({
           title: String(args.title ?? ''),
           content: String(args.content ?? ''),
           excerpt: args.excerpt ? String(args.excerpt) : undefined,
           status: String(args.status || 'draft'),
-          categories: args.categories,
-          tags: args.tags,
+          ...(isPage
+            ? {
+                ...(args.slug ? { slug: String(args.slug) } : {}),
+                ...(args.parent ? { parent: Number(args.parent) } : {}),
+              }
+            : { categories: args.categories, tags: args.tags }),
         }),
       }) as Record<string, any>;
       return JSON.stringify({
         id: created.id,
+        // State the type back explicitly. The whole failure this fixes was a
+        // result that looked like a success and never mentioned it had made
+        // the wrong KIND of thing.
+        type: isPage ? 'page' : 'post',
         status: created.status,
+        slug: created.slug,
         link: created.link,
         note: created.status === 'draft'
-          ? 'Saved as a DRAFT — nothing is live until it is published.'
-          : 'Published live.',
+          ? `Saved as a DRAFT ${isPage ? 'page' : 'post'} — nothing is live until it is published.`
+          : `Published live as a ${isPage ? 'page' : 'post'}.`,
+      });
+    }
+
+    if (tool === 'trash_content') {
+      const type = String(args.type ?? 'post').toLowerCase() === 'page' ? 'pages' : 'posts';
+      // No `force` parameter is exposed anywhere: WordPress permanently deletes
+      // on force=true, and an agent should not hold that. Trash is reversible;
+      // emptying it is a human decision made in wp-admin.
+      const trashed = await wp(siteUrl, credential, `/${type}/${Number(args.id)}`, {
+        method: 'DELETE',
+      }) as Record<string, any>;
+      return JSON.stringify({
+        id: Number(args.id),
+        type: type === 'pages' ? 'page' : 'post',
+        trashed: true,
+        status: trashed?.status ?? trashed?.previous?.status ?? 'trash',
+        note: 'Moved to Trash and recoverable from WordPress Admin → Trash. Not permanently deleted.',
       });
     }
 

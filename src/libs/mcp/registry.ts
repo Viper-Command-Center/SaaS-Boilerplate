@@ -48,6 +48,13 @@ export type TenantToolset = {
   /** Names of connections that failed to respond (surfaced to the model). */
   failedConnections: string[];
   /**
+   * Cross-tool operating notes from the built-in providers this workspace has
+   * ENABLED (Phase 32), joined and ready for the system prompt. Empty when no
+   * enabled provider declares any. See BuiltinProvider.guidance for why this
+   * lives with the adapter rather than in each workspace's memory.
+   */
+  connectionGuidance: string;
+  /**
    * One-line summary of tool collections DEFERRED to keep context small
    * (Phase 29). Empty string when nothing was deferred. Surfaced into the
    * system prompt by every assembler so the model knows they exist and how to
@@ -247,6 +254,9 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
 
   const anthropicTools: AnthropicTool[] = [];
   const failedConnections: string[] = [];
+  /** provider slug → its guidance. A Map so two connections to the same
+   *  provider contribute the paragraph once, not twice. */
+  const guidanceByProvider = new Map<string, string>();
   const executors = new Map<string, ExecutorEntry>();
   // Extra arrays (the assemblers' combined tool lists) that must also receive
   // schemas when a deferred group loads. See attachToolSink on TenantToolset.
@@ -314,6 +324,13 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
         if (!entry || !provider || !entry.enabled) {
           failedConnections.push(`${conn.name} (plugin unavailable)`);
           continue;
+        }
+
+        // Keyed by provider slug, not connection name: two connections to the
+        // same provider (two client sites in one workspace) must not repeat the
+        // same paragraph twice in the system prompt.
+        if (provider.guidance) {
+          guidanceByProvider.set(provider.slug, provider.guidance.trim());
         }
 
         // Where the credential lives depends on the provider:
@@ -657,6 +674,7 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
   return {
     anthropicTools,
     failedConnections,
+    connectionGuidance: [...guidanceByProvider.values()].join('\n\n'),
     deferredSummary,
     attachToolSink: (sink) => {
       toolSinks.push(sink);

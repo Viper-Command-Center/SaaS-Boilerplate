@@ -71,7 +71,7 @@ async function assembleToolset(tenantId: string) {
   try {
     mcpToolset = await buildTenantToolset(tenantId);
   } catch {
-    mcpToolset = { anthropicTools: [], failedConnections: [], resolve: () => null, deferredSummary: '', attachToolSink: () => {} };
+    mcpToolset = { anthropicTools: [], failedConnections: [], connectionGuidance: '', resolve: () => null, deferredSummary: '', attachToolSink: () => {} };
   }
   const platform = buildPlatformTools(tenantId);
   const mission = buildMissionTools(tenantId);
@@ -86,6 +86,7 @@ async function assembleToolset(tenantId: string) {
     failedConnections: mcpToolset.failedConnections,
     // Surface deferred MCP collections (Phase 29) so the mission/task prompt can
     // tell the model they exist and how to load them.
+    connectionGuidance: mcpToolset.connectionGuidance,
     deferredSummary: mcpToolset.deferredSummary,
     attachToolSink: mcpToolset.attachToolSink,
     resolve: (name: string) => {
@@ -158,6 +159,12 @@ platform will requeue you within minutes to continue from that summary.`;
       // Deferred MCP collections (Phase 29): tell the model they exist + how to load.
       if (toolset.deferredSummary) {
         system += `\nSome tool collections are DEFERRED to keep context small: ${toolset.deferredSummary}. Call load_connection_tools with the connection name before using them.`;
+      }
+      // Phase 32: cross-tool operating notes from the built-in providers this
+      // workspace enabled. Versioned with the adapter, so a trap fixed once is
+      // fixed for every client site — see BuiltinProvider.guidance.
+      if (toolset.connectionGuidance) {
+        system += `\n\n## How your connected tools actually behave\n${toolset.connectionGuidance}`;
       }
 
 
@@ -295,6 +302,12 @@ platform will continue this step on the next run.`;
       // Deferred MCP collections (Phase 29): tell the model they exist + how to load.
       if (toolset.deferredSummary) {
         system += `\nSome tool collections are DEFERRED to keep context small: ${toolset.deferredSummary}. Call load_connection_tools with the connection name before using them.`;
+      }
+      // Phase 32: cross-tool operating notes from the built-in providers this
+      // workspace enabled. Versioned with the adapter, so a trap fixed once is
+      // fixed for every client site — see BuiltinProvider.guidance.
+      if (toolset.connectionGuidance) {
+        system += `\n\n## How your connected tools actually behave\n${toolset.connectionGuidance}`;
       }
 
 
