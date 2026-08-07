@@ -238,6 +238,243 @@ export type PageResult = {
   sessionSeconds: number;
 };
 
+export type LayoutIssue = {
+  type: 'horizontal-overflow' | 'widow' | 'text-overflow' | 'tiny-text';
+  tag?: string;
+  text?: string;
+  detail: string;
+};
+
+export type ViewportReport = {
+  width: number;
+  issues: LayoutIssue[];
+  elements: Array<{
+    tag: string;
+    text: string;
+    fontSizePx: number;
+    lines: number;
+    lastLineWords: number;
+    lastLine: string;
+  }>;
+};
+
+export type LayoutResult = {
+  url: string;
+  title: string;
+  viewports: ViewportReport[];
+  sessionSeconds: number;
+};
+
+export const DEFAULT_LAYOUT_SELECTORS = [
+  'h1',
+  'h2',
+  'h3',
+  '.elementor-heading-title',
+  '.elementor-button-text',
+];
+
+/**
+ * The in-page measurement pass.
+ *
+ * MEASUREMENT, NOT VISION — and that is the point. "The last line of the
+ * headline is one orphaned word" is a fact about rendered line boxes, so it can
+ * be COMPUTED rather than eyeballed. A screenshot costs ~1,500 tokens, shows one
+ * viewport, and still leaves the model interpreting pixels; this returns a few
+ * hundred tokens of JSON, is deterministic, and covers every width in one pass.
+ *
+ * Written in ES5 with NO regular expressions and NO template literals, because
+ * this string lives inside a TypeScript template literal before it is shipped
+ * over CDP. A lone backslash would be eaten silently on the way — `\S` becomes
+ * `S`, quietly turning a non-whitespace matcher into an S matcher, with no error
+ * anywhere. Hand-rolled word splitting has no escaping surface at all.
+ */
+const LAYOUT_SCRIPT = `(function(){
+  var out = { issues: [], elements: [] };
+  var vw = window.innerWidth;
+  var de = document.documentElement;
+
+  if (de && de.scrollWidth > vw + 2) {
+    out.issues.push({
+      type: 'horizontal-overflow',
+      detail: 'the page scrolls sideways by ' + (de.scrollWidth - vw) + 'px at ' + vw + 'px wide'
+    });
+  }
+
+  function wordsIn(el) {
+    var found = [];
+    var walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
+    var node;
+    while ((node = walker.nextNode())) {
+      var t = node.nodeValue;
+      if (!t) { continue; }
+      var start = -1;
+      for (var i = 0; i <= t.length; i++) {
+        var ch = i < t.length ? t.charAt(i) : ' ';
+        var code = ch.charCodeAt(0);
+        var space = (ch === ' ' || code === 10 || code === 9 || code === 13 || code === 160);
+        if (!space && start === -1) { start = i; }
+        else if (space && start !== -1) {
+          var range = document.createRange();
+          range.setStart(node, start);
+          range.setEnd(node, i);
+          var rect = range.getBoundingClientRect();
+          if (rect.width > 0 || rect.height > 0) {
+            found.push({ w: t.slice(start, i), top: Math.round(rect.top) });
+          }
+          start = -1;
+        }
+      }
+    }
+    return found;
+  }
+
+  var picked = [];
+  SELECTORS.forEach(function (s) {
+    var nodes = document.querySelectorAll(s);
+    for (var i = 0; i < nodes.length && i < 6; i++) {
+      if (picked.indexOf(nodes[i]) === -1) { picked.push(nodes[i]); }
+    }
+  });
+
+  picked.slice(0, 12).forEach(function (el) {
+    var rect = el.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) { return; }
+    var cs = window.getComputedStyle(el);
+    var ws = wordsIn(el);
+    if (!ws.length) { return; }
+
+    var lines = [];
+    ws.forEach(function (w) {
+      var last = lines[lines.length - 1];
+      if (last && Math.abs(last.top - w.top) <= 3) { last.words.push(w.w); }
+      else { lines.push({ top: w.top, words: [w.w] }); }
+    });
+
+    var lastLine = lines[lines.length - 1];
+    var rec = {
+      tag: el.tagName.toLowerCase(),
+      text: ws.map(function (w) { return w.w; }).join(' ').slice(0, 80),
+      fontSizePx: Math.round(parseFloat(cs.fontSize) || 0),
+      lines: lines.length,
+      lastLineWords: lastLine ? lastLine.words.length : 0,
+      lastLine: lastLine ? lastLine.words.join(' ').slice(0, 40) : ''
+    };
+
+    if (lines.length > 1 && rec.lastLineWords === 1) {
+      out.issues.push({
+        type: 'widow',
+        tag: rec.tag,
+        text: rec.text,
+        detail: 'wraps onto ' + lines.length + ' lines and the last line is the single word "' + rec.lastLine + '"'
+      });
+    }
+    if (el.scrollWidth > el.clientWidth + 2) {
+      out.issues.push({
+        type: 'text-overflow',
+        tag: rec.tag,
+        text: rec.text,
+        detail: 'content is ' + (el.scrollWidth - el.clientWidth) + 'px wider than its box'
+      });
+    }
+    if (vw <= 480 && rec.fontSizePx > 0 && rec.fontSizePx < 12) {
+      out.issues.push({
+        type: 'tiny-text',
+        tag: rec.tag,
+        text: rec.text,
+        detail: 'renders at ' + rec.fontSizePx + 'px on a ' + vw + 'px viewport'
+      });
+    }
+
+    out.elements.push(rec);
+  });
+
+  return JSON.stringify(out);
+})()`;
+
+/**
+ * Measure how a page actually LAYS OUT, at several viewport widths, in ONE
+ * browser session.
+ *
+ * Multi-width in a single session is the economic argument: session cost is
+ * dominated by start-up, so checking desktop, tablet and mobile costs barely
+ * more than checking one — and the headline that reads perfectly at 1440px is
+ * precisely the one that breaks at 390px.
+ */
+export async function inspectLayout(a: {
+  url: string;
+  selectors?: string[];
+  widths?: number[];
+  waitMs?: number;
+}): Promise<LayoutResult> {
+  const started = Date.now();
+  const selectors = (a.selectors?.length ? a.selectors : DEFAULT_LAYOUT_SELECTORS).slice(0, 10);
+  const widths = (a.widths?.length ? a.widths : [1440, 768, 390])
+    .map(w => Math.min(Math.max(Math.round(w), 320), 2560))
+    .slice(0, 4);
+
+  const session = await startSession(300);
+  let cdp: Cdp | undefined;
+
+  try {
+    cdp = await Cdp.connect(session.wsEndpoint);
+    const pageSession = await attachPage(cdp);
+
+    await cdp.send('Page.navigate', { url: a.url }, pageSession);
+    await new Promise(r => setTimeout(r, Math.min(Math.max(a.waitMs ?? 3000, 500), 15_000)));
+
+    const [{ result: titleResult }, { result: urlResult }] = await Promise.all([
+      cdp.send('Runtime.evaluate', { expression: 'document.title', returnByValue: true }, pageSession),
+      cdp.send('Runtime.evaluate', { expression: 'location.href', returnByValue: true }, pageSession),
+    ]) as [{ result: { value?: string } }, { result: { value?: string } }];
+
+    const expression = LAYOUT_SCRIPT.replace('SELECTORS', JSON.stringify(selectors));
+    const viewports: ViewportReport[] = [];
+
+    for (const width of widths) {
+      await cdp.send('Emulation.setDeviceMetricsOverride', {
+        width,
+        height: 900,
+        deviceScaleFactor: 1,
+        mobile: width <= 480,
+      }, pageSession);
+
+      // Reflow plus any width-driven JS needs a beat to settle. Responsive CSS
+      // alone is instant; carousels and sticky headers are not.
+      await new Promise(r => setTimeout(r, 600));
+
+      const { result } = await cdp.send(
+        'Runtime.evaluate',
+        { expression, returnByValue: true },
+        pageSession,
+      ) as { result: { value?: string } };
+
+      let parsed: { issues?: LayoutIssue[]; elements?: ViewportReport['elements'] } = {};
+      try {
+        parsed = JSON.parse(String(result?.value ?? '{}')) as typeof parsed;
+      } catch {
+        // A page that breaks the measurement script must not break the whole
+        // report — the other widths are still worth having.
+      }
+
+      viewports.push({
+        width,
+        issues: parsed.issues ?? [],
+        elements: parsed.elements ?? [],
+      });
+    }
+
+    return {
+      url: String(urlResult?.value ?? a.url),
+      title: String(titleResult?.value ?? ''),
+      viewports,
+      sessionSeconds: Math.max(1, Math.round((Date.now() - started) / 1000)),
+    };
+  } finally {
+    cdp?.close();
+    await stopSession(session.sessionId);
+  }
+}
+
 /**
  * Open a page in a real browser, let JavaScript run, and return the rendered
  * text. Stateless: the session is started and stopped inside this call, so we

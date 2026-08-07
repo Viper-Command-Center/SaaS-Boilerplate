@@ -12,7 +12,7 @@
  */
 
 import type { BuiltinProvider } from '@/libs/plugins/types';
-import { browserConfigured, renderPage } from '@/libs/browser/agentcore';
+import { browserConfigured, inspectLayout, renderPage } from '@/libs/browser/agentcore';
 
 /** $/second. AgentCore bills ~$0.0895/vCPU-hr + $0.00945/GB-hr → ≈$0.11/hr. */
 export const BROWSER_USD_PER_SECOND = 0.11 / 3600;
@@ -59,6 +59,28 @@ export const agentcoreBrowserProvider: BuiltinProvider = {
         required: ['url', 'selectors'],
       },
     },
+    {
+      name: 'check_layout',
+      description: 'Measure how a live page actually RENDERS, at desktop, tablet and mobile widths in one pass. Reports objective layout defects — a headline whose last line is a single orphaned word, text overflowing its box, a page that scrolls sideways on mobile, text too small to read — plus the real font size and line count of each heading. Use this AFTER changing page copy or styling, and BEFORE telling anyone a layout change worked: none of it is visible in a page tree, because it is only true once a browser has laid the text out. Returns compact JSON, not an image.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          url: { type: 'string', description: 'The live page URL.' },
+          widths: {
+            type: 'array',
+            items: { type: 'number' },
+            description: 'Viewport widths in px. Default [1440, 768, 390] — desktop, tablet, phone. Max 4.',
+          },
+          selectors: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'CSS selectors to measure. Defaults to headings and buttons, which is what usually breaks.',
+          },
+          wait_ms: { type: 'number', description: 'Render wait before measuring (default 3000, max 15000).' },
+        },
+        required: ['url'],
+      },
+    },
   ],
 
   call: async (tool, args) => {
@@ -82,6 +104,31 @@ export const agentcoreBrowserProvider: BuiltinProvider = {
         }),
         // Bill the seconds the session was actually alive.
         units: page.sessionSeconds,
+      };
+    }
+
+    if (tool === 'check_layout') {
+      const report = await inspectLayout({
+        url,
+        widths: Array.isArray(args.widths) ? args.widths.map(Number).filter(n => Number.isFinite(n)) : undefined,
+        selectors: Array.isArray(args.selectors) ? args.selectors.map(String) : undefined,
+        waitMs: Number(args.wait_ms) || undefined,
+      });
+
+      const issueCount = report.viewports.reduce((n, v) => n + v.issues.length, 0);
+
+      return {
+        output: JSON.stringify({
+          url: report.url,
+          title: report.title,
+          issueCount,
+          viewports: report.viewports,
+          verdict: issueCount === 0
+            ? 'No layout defects found at the widths checked.'
+            : `${issueCount} layout issue(s) found. A "widow" means the element wraps and its final line holds one lonely word — usually fixed by a small font-size reduction, shorter copy, or a non-breaking space joining the last two words (which, unlike a fixed font size, holds at every width).`,
+          note: 'Measured in a real browser after layout. These are computed facts about rendered line boxes, not opinions — and they are invisible in the page tree.',
+        }),
+        units: report.sessionSeconds,
       };
     }
 
