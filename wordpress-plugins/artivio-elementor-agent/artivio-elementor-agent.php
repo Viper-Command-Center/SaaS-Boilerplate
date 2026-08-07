@@ -3,7 +3,7 @@
  * Plugin Name:  Artivio Elementor Agent
  * Plugin URI:   https://artivio.io
  * Description:  Exposes Elementor's page tree over the REST API so Artivio's agent can read and edit layouts. Elementor stores every page in the protected `_elementor_data` postmeta key, which core WP REST will never touch — this plugin is the only reason remote editing is possible.
- * Version:      1.3.0
+ * Version:      1.3.1
  * Requires PHP: 7.4
  * Author:       Artivio
  * License:      GPL-2.0-or-later
@@ -41,7 +41,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'ARTIVIO_EA_VERSION', '1.3.0' );
+define( 'ARTIVIO_EA_VERSION', '1.3.1' );
 define( 'ARTIVIO_EA_NS', 'artivio-elementor/v1' );
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -742,6 +742,18 @@ function artivio_ea_authcheck() {
 			$core_reason,
 			$supplied
 		);
+		/**
+		 * The commonest mismatch of all, and WordPress's own UI causes it: the
+		 * "New Application Password Name" field is a LABEL for the credential,
+		 * shown in the Name column of that table. It looks like a username and
+		 * is not one. People type that label as the username, get
+		 * `invalid_username`, and reasonably conclude the password is wrong —
+		 * so they generate another one, name it the same thing, and repeat.
+		 * Naming the trap here is worth more than any amount of re-checking.
+		 */
+		if ( 0 === strpos( $core_reason, 'invalid_username' ) ) {
+			$verdict .= ' ⚠ Common cause: in WordPress, "New Application Password Name" is only a LABEL for the credential (the Name column in Users → Profile → Application Passwords) — it is NOT a username. The username is the account\'s login, shown in the Username column of Users → All Users, or that account\'s email address. If you named an application password after your integration, that name is not what belongs before the colon.';
+		}
 	} else {
 		$verdict = sprintf(
 			'A Basic credential reached WordPress for username "%s" and was rejected, but core reported no specific reason. Check that the username matches the WordPress account the Application Password belongs to, and that the password has not been revoked.',
