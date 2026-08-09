@@ -63,7 +63,7 @@ function htmlToText(html: string): string {
     .replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"')
     .replace(/[ \t]+/g, ' ')
-    .replace(/\n\s*\n\s*\n+/g, '\n\n')
+    .replace(/\n\s*\n\s*\n/g, '\n\n')
     .trim();
 }
 

@@ -39,11 +39,12 @@
  *   GET  {BASE}/api/v1/chat/credit                         → remaining credits
  */
 
+import type { KieCapability } from '@/libs/plugins/kie-models';
 import type { BuiltinProvider, BuiltinResult } from '@/libs/plugins/types';
 import {
-  type KieCapability,
-  KIE_MODELS,
   defaultKieModel,
+  KIE_MODELS,
+
   kieModel,
   kieModelsFor,
 } from '@/libs/plugins/kie-models';
@@ -102,7 +103,7 @@ let cursor = 0;
 /** The credential may hold many keys — one per line (or comma separated). */
 export function parseKeys(credential: string): string[] {
   return credential
-    .split(/[\n,\s]+/)
+    .split(/[,\s]+/)
     .map(k => k.trim())
     .filter(Boolean)
     .slice(0, MAX_KEYS);

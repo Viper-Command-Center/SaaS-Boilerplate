@@ -36,11 +36,10 @@ import { resolveAgentForTenant } from '@/libs/agent/persona';
 import { buildPlatformTools } from '@/libs/agent/platformTools';
 import { buildSystemPrompt } from '@/libs/agent/prompt';
 import { markTick } from '@/libs/agent/runnerHealth';
-import { captureIssue } from '@/libs/support/issues';
 import { db } from '@/libs/DB';
 import { buildTenantToolset } from '@/libs/mcp/registry';
+import { captureIssue } from '@/libs/support/issues';
 import { missions, missionSteps, scheduledTasks, tenants } from '@/models/Schema';
-
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -99,7 +98,6 @@ async function assembleToolset(tenantId: string) {
   };
 }
 
-
 export async function POST(request: Request) {
   const secret = process.env.CRON_SECRET;
   if (!secret || secret.length < 16 || request.headers.get('x-cron-secret') !== secret) {
@@ -111,7 +109,6 @@ export async function POST(request: Request) {
   markTick();
 
   const tickStartedAt = Date.now();
-
 
   const due = await db
     .select()
@@ -166,7 +163,6 @@ platform will requeue you within minutes to continue from that summary.`;
       if (toolset.connectionGuidance) {
         system += `\n\n## How your connected tools actually behave\n${toolset.connectionGuidance}`;
       }
-
 
       // A continuation run starts from the previous run's honest wrap-up
       // instead of cold — the [continuing] marker is set below only when the
@@ -309,7 +305,6 @@ platform will continue this step on the next run.`;
       if (toolset.connectionGuidance) {
         system += `\n\n## How your connected tools actually behave\n${toolset.connectionGuidance}`;
       }
-
 
       const userText = resuming
         ? `Step ${step.position + 1}: ${step.title}

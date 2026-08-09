@@ -110,7 +110,7 @@ expect('src/libs/agent/missionTools.ts', 'start_mission', 'the agent\'s plan-fir
 expect('src/models/Schema.ts', 'mission_steps', 'missions schema must exist');
 expect('migrations/meta/_journal.json', '0016_missions', 'missions migration must be journaled or db:migrate skips it');
 expect('src/app/api/agent/chat/route.ts', 'buildMissionTools', 'chat must merge mission tools or start_mission is unreachable');
-expect('src/app/api/missions/route.ts', "'pause'", 'humans need a pause control for running missions');
+expect('src/app/api/missions/route.ts', '\'pause\'', 'humans need a pause control for running missions');
 
 // ── Panel truthfulness (duplicate-week-panels incident) ─────────────────────
 expect('src/app/api/panels/route.ts', 'config.filter', 'table panels without filters all render the same newest slice');
@@ -119,7 +119,7 @@ expect('src/app/api/panels/route.ts', 'sortBy', 'sorted panels must be resolved 
 // ── Money + provider resilience (P0) ────────────────────────────────────────
 expect('src/libs/agent/anthropic.ts', 'postWithRetry', 'transient 429/5xx/529 must retry with backoff, not kill the turn');
 expect('src/app/api/agent/chat/route.ts', 'checkRateLimit', 'per-tenant velocity guard — a runaway client is a money problem');
-expect('src/libs/mcp/registry.ts', "?? 'approval'", 'unknown MCP tools must DEFAULT to approval, never auto');
+expect('src/libs/mcp/registry.ts', '?? \'approval\'', 'unknown MCP tools must DEFAULT to approval, never auto');
 
 // ── History window direction (the "Max is very confused" incident, 2026-08-03)
 // `orderBy(asc).limit(N)` selects the OLDEST N messages — once the rolling
@@ -129,7 +129,9 @@ expect('src/libs/mcp/registry.ts', "?? 'approval'", 'unknown MCP tools must DEFA
 // social-media era of the transcript). History must load newest-N descending
 // and flip back to chronological.
 expect('src/app/api/agent/chat/route.ts', /orderBy\(desc\(messages\.createdAt\)\)/, 'chat history must be the NEWEST window, not the oldest');
+
 forbid('src/app/api/agent/chat/route.ts', /orderBy\(asc\(messages\.createdAt\)\)[\s\S]{0,80}limit\(/, 'asc+limit on messages = oldest-window amnesia');
+
 expect('src/app/api/approvals/[id]/route.ts', /orderBy\(desc\(messages\.createdAt\)\)/, 'approval resume must see recent context, not the conversation opening');
 expect('src/app/api/agent/history/route.ts', /orderBy\(desc\(messages\.createdAt\)\)/, 'UI transcript + clear-consolidation must use the newest window');
 
@@ -139,12 +141,12 @@ expect('src/app/api/agent/history/route.ts', /orderBy\(desc\(messages\.createdAt
 // agent said "creating the mission now" and the turn silently ended. Three
 // times in a row.
 expect('src/libs/agent/anthropic.ts', '16_384', 'tool responses need headroom for large tool calls (mission plans)');
-expect('src/libs/agent/loop.ts', "stop_reason === 'max_tokens'", 'truncated replies must recover/announce, never pass as final answers');
+expect('src/libs/agent/loop.ts', 'stop_reason === \'max_tokens\'', 'truncated replies must recover/announce, never pass as final answers');
 
 // ── Standing workspace memory (Phase 28 — "Max keeps forgetting the repo") ──
 expect('src/models/Schema.ts', 'agent_memory', 'tenants.agent_memory column must exist');
 expect('migrations/meta/_journal.json', '0017_agent-memory', 'memory migration must be journaled');
-expect('src/libs/agent/platformTools.ts', "'update_memory'", 'the agent must be able to record corrections durably');
+expect('src/libs/agent/platformTools.ts', '\'update_memory\'', 'the agent must be able to record corrections durably');
 expect('src/libs/agent/prompt.ts', 'Workspace memory', 'standing memory must be injected into the system prompt');
 expect('src/app/api/agent/chat/route.ts', 'agentMemory', 'chat turns must load workspace memory');
 expect('src/app/api/internal/run-scheduled/route.ts', 'memory: tenant.agentMemory', 'scheduled + mission runs must load workspace memory');
@@ -153,11 +155,11 @@ expect('src/app/api/internal/run-scheduled/route.ts', 'memory: tenant.agentMemor
 // stalling and Max can't cancel anything") ──────────────────────────────────
 expect('src/app/api/internal/run-scheduled/route.ts', 'TASKS_TIME_BUDGET_MS', 'scheduled tasks must not starve the mission runner');
 expect('src/app/api/internal/run-scheduled/route.ts', 'STEP_STALE_MS', 'fresh running steps must not be double-run by overlapping ticks');
-expect('src/libs/agent/missionTools.ts', "'set_mission_status'", 'the agent needs pause/resume/cancel — zombie missions pile up otherwise');
+expect('src/libs/agent/missionTools.ts', '\'set_mission_status\'', 'the agent needs pause/resume/cancel — zombie missions pile up otherwise');
 expect('src/libs/agent/missionTools.ts', 'already has', 'start_mission must refuse a pileup of concurrent running missions');
 
 // ── Stock photos + memory secrets rail (Phase 28.1) ─────────────────────────
-expect('src/libs/agent/webTools.ts', "'search_stock_photos'", 'free stock images (Pexels/Pixabay via env keys) before paid Kie generation');
+expect('src/libs/agent/webTools.ts', '\'search_stock_photos\'', 'free stock images (Pexels/Pixabay via env keys) before paid Kie generation');
 expect('src/libs/agent/platformTools.ts', 'looks like it contains an API key', 'workspace memory must REJECT credentials — it is injected into every prompt');
 
 // ── Chat UX honesty (Phase 26.1/26.2) ───────────────────────────────────────
@@ -168,6 +170,7 @@ expect('src/app/api/agent/history/route.ts', 'chat-memory-', 'clearing a chat mu
 
 // ── Security tripwires ──────────────────────────────────────────────────────
 forbid('src/libs/mcp/stdioClient.ts', '...process.env', 'child MCP processes must NEVER inherit the app env (DB creds, vault master key)');
+
 expect('src/libs/mcp/stdioCatalog.ts', 'STDIO_SERVERS', 'stdio spawning must go through the hardcoded allowlist — never user input');
 
 // ── Stop decoupling + live turn status (Phase 29 — "refreshing the page KILLED
@@ -177,7 +180,9 @@ expect('src/libs/mcp/stdioCatalog.ts', 'STDIO_SERVERS', 'stdio spawning must go 
 // independent of the socket; a poller shows live progress that survives
 // refresh. ──────────────────────────────────────────────────────────────────
 expect('src/app/api/agent/chat/route.ts', 'isStopRequested', 'chat loop must stop on an explicit server signal, not a dropped socket');
+
 forbid('src/app/api/agent/chat/route.ts', 'cancelled = true', 'stream cancel (refresh/close) must NOT abort the turn — that is the incident');
+
 expect('src/app/api/agent/stop/route.ts', 'requestStop', 'explicit Stop endpoint must flag the active turn to halt');
 expect('src/app/api/agent/status/route.ts', 'getTurn', 'live turn status must be pollable so progress survives a refresh');
 expect('src/features/agent/AgentChat.tsx', 'lastTool', 'chat must render live remote progress (iteration + last tool)');
@@ -208,21 +213,23 @@ expect('src/app/api/internal/run-scheduled/route.ts', 'attachToolSink', 'mission
 // ── MCP resource content must be READ, not stubbed (Phase 29.2 — every GitHub
 // file read came back as the literal string "[resource]") ──────────────────
 expect('src/libs/mcp/registry.ts', 'flattenMcpContent', 'MCP results must decode EmbeddedResource blocks — file reads do not use `text`');
-forbid('src/libs/mcp/registry.ts', "c.type === 'text' ? c.text ?? '' : `[${c.type}]`", 'the naive flattener discarded every non-text block — that is the incident');
+
+forbid('src/libs/mcp/registry.ts', 'c.type === \'text\' ? c.text ?? \'\' : `[${c.type}]`', 'the naive flattener discarded every non-text block — that is the incident');
 
 // ── Google Analytics + Search Console (Phase 30) ────────────────────────────
 expect('src/libs/plugins/googleAnalytics.ts', 'jwt-bearer', 'GA4 must authenticate as a SERVICE ACCOUNT — an OAuth consent screen in Testing expires refresh tokens after 7 days and blinds the agent weekly');
-expect('src/libs/plugins/googleAnalytics.ts', "'ga4_metadata'", 'the agent must be able to ENUMERATE real dimension/metric names — GA4 has ~200 of them (the Kie free-text-field lesson)');
-expect('src/libs/plugins/googleAnalytics.ts', "'gsc_list_sites'", 'Search Console site strings (sc-domain: vs https://) cannot be guessed — they must be listed at runtime');
+expect('src/libs/plugins/googleAnalytics.ts', '\'ga4_metadata\'', 'the agent must be able to ENUMERATE real dimension/metric names — GA4 has ~200 of them (the Kie free-text-field lesson)');
+expect('src/libs/plugins/googleAnalytics.ts', '\'gsc_list_sites\'', 'Search Console site strings (sc-domain: vs https://) cannot be guessed — they must be listed at runtime');
 expect('src/libs/plugins/index.ts', 'googleAnalyticsProvider', 'the provider must be registered or it never reaches the admin catalog');
 
 // ── Per-connection built-ins must be CORRECTABLE (Phase 30.1 — a GA4 property
 // ID could only be entered wrong, and then could not be fixed) ─────────────
 expect('src/features/agent/ToolsPanel.tsx', 'conn.perConnection', 'a per-connection built-in must show Edit — Remove-and-recreate silently drops tool policies (the Phase 11 defect)');
 expect('src/libs/plugins/googleAnalytics.ts', 'targetIsUrl: false', 'the GA4 target is a numeric property ID; a URL-shaped form field made the right answer unenterable');
-forbid('src/app/api/plugins/route.ts', 'siteUrl: z.string().url()', 'per-connection targets are not all URLs — that validator rejected valid GA4 property IDs');
-expect('src/libs/plugins/googleAnalytics.ts', 'avgEngagementSecondsPerSession', 'userEngagementDuration is a TOTAL and was read back as an average — the tool must do the division, not the model');
 
+forbid('src/app/api/plugins/route.ts', 'siteUrl: z.string().url()', 'per-connection targets are not all URLs — that validator rejected valid GA4 property IDs');
+
+expect('src/libs/plugins/googleAnalytics.ts', 'avgEngagementSecondsPerSession', 'userEngagementDuration is a TOTAL and was read back as an average — the tool must do the division, not the model');
 
 // ── Report ──────────────────────────────────────────────────────────────────
 if (failures.length > 0) {

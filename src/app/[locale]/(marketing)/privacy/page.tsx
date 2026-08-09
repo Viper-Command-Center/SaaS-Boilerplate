@@ -64,7 +64,11 @@ export default async function PrivacyPage(props: { params: Promise<{ locale: str
         <li>to secure the Service, detect abuse, and comply with legal obligations.</li>
       </ul>
       <p>
-        We do <strong>not</strong> sell your personal information, and we do not use
+        We do
+        {' '}
+        <strong>not</strong>
+        {' '}
+        sell your personal information, and we do not use
         the contents of your workspace to train third-party AI models.
       </p>
 
@@ -74,8 +78,13 @@ export default async function PrivacyPage(props: { params: Promise<{ locale: str
         Business Platform and our messaging provider (Twilio). Your phone number
         and message content are shared with these providers solely to deliver and
         receive your messages, subject to their privacy terms
-        (<a href="https://www.whatsapp.com/legal/business-policy/" target="_blank" rel="noreferrer">WhatsApp Business</a>{' '}
-        and <a href="https://www.twilio.com/legal/privacy" target="_blank" rel="noreferrer">Twilio</a>).
+        (
+        <a href="https://www.whatsapp.com/legal/business-policy/" target="_blank" rel="noreferrer">WhatsApp Business</a>
+        {' '}
+        and
+        {' '}
+        <a href="https://www.twilio.com/legal/privacy" target="_blank" rel="noreferrer">Twilio</a>
+        ).
         We store the minimum necessary to operate the conversation and your
         opt-in/opt-out status. You can opt out at any time by replying
         {' '}
@@ -87,13 +96,20 @@ export default async function PrivacyPage(props: { params: Promise<{ locale: str
       <p>We share information only:</p>
       <ul>
         <li>
-          with <strong>infrastructure and service providers</strong> that run the
+          with
+          {' '}
+          <strong>infrastructure and service providers</strong>
+          {' '}
+          that run the
           Service (e.g. cloud hosting, database, object storage, email and
           messaging delivery, AI model providers), under contracts limiting their
           use of the data to providing their service to us;
         </li>
         <li>
-          with <strong>third-party tools you connect</strong>, as needed to perform
+          with
+          {' '}
+          <strong>third-party tools you connect</strong>
+          , as needed to perform
           the tasks you request;
         </li>
         <li>when required by law, or to protect the rights and safety of users;</li>
@@ -164,7 +180,10 @@ export default async function PrivacyPage(props: { params: Promise<{ locale: str
 
       <h2>11. Contact</h2>
       <p>
-        Questions or requests: <a href="mailto:hello@artivio.ai">hello@artivio.ai</a>.
+        Questions or requests:
+        {' '}
+        <a href="mailto:hello@artivio.ai">hello@artivio.ai</a>
+        .
       </p>
     </LegalPage>
   );

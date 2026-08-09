@@ -57,11 +57,15 @@ function renderInline(text: string): React.ReactNode[] {
     }
     const token = m[0];
     if (token.startsWith('**')) {
-      // eslint-disable-next-line react/no-array-index-key
       parts.push(<strong key={key++} className="text-white">{token.slice(2, -2)}</strong>);
     } else {
       parts.push(
-        <code key={key++} className="rounded bg-white/10 px-1 py-0.5 text-[0.85em] text-indigo-200">
+        <code
+          key={key++}
+          className="
+            rounded-sm bg-white/10 px-1 py-0.5 text-[0.85em] text-indigo-200
+          "
+        >
           {token.slice(1, -1)}
         </code>,
       );
@@ -89,13 +93,23 @@ const MessageBody = ({ text }: { text: string }) => (
           <div
             // eslint-disable-next-line react/no-array-index-key
             key={i}
-            className={`flex w-fit items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] ${
-              isError
-                ? 'border-rose-400/25 bg-rose-400/10 text-rose-200'
-                : 'border-indigo-400/25 bg-indigo-400/10 text-indigo-200'
-            }`}
+            className={`
+              flex w-fit items-center gap-1.5 rounded-full border px-2.5 py-1
+              text-[11px]
+              ${
+          isError
+            ? 'border-rose-400/25 bg-rose-400/10 text-rose-200'
+            : 'border-indigo-400/25 bg-indigo-400/10 text-indigo-200'
+          }
+            `}
           >
-            <span className={`pulse-dot size-1.5 rounded-full ${isError ? 'bg-rose-400' : 'bg-indigo-400'}`} />
+            <span className={`
+              pulse-dot size-1.5 rounded-full
+              ${isError
+            ? `bg-rose-400`
+            : `bg-indigo-400`}
+            `}
+            />
             {line.replace(/^\[[a-z]+\]\s*/, '')}
           </div>
         );
@@ -143,16 +157,22 @@ export const AgentChat = (props: {
   /** The transcript element. We scroll THIS, never the document. */
   const scrollRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
-  /** Aborting this fetch cancels the LOCAL stream read only. The server no
-   * longer treats that as Stop (Phase 29) — Stop is the explicit /stop POST. */
+  /**
+   * Aborting this fetch cancels the LOCAL stream read only. The server no
+   * longer treats that as Stop (Phase 29) — Stop is the explicit /stop POST.
+   */
   const abortRef = useRef<AbortController | null>(null);
-  /** Was a remote turn active on the previous poll? Used to detect the
+  /**
+   * Was a remote turn active on the previous poll? Used to detect the
    * active→inactive edge, which is when the finished message has landed and we
-   * should reload history. */
+   * should reload history.
+   */
   const wasRemoteActiveRef = useRef(false);
-  /** Set when history is (re)loaded from scratch: jump to the newest message
+  /**
+   * Set when history is (re)loaded from scratch: jump to the newest message
    * unconditionally. Refreshing the page used to land you at the OLDEST
-   * message because stickToBottom only follows when already near the bottom. */
+   * message because stickToBottom only follows when already near the bottom.
+   */
   const forceScrollRef = useRef(false);
   const [clearing, setClearing] = useState(false);
 
@@ -451,7 +471,7 @@ export const AgentChat = (props: {
       // line — so on an abort we just let the poller pick the run back up and
       // reload history, rather than writing a misleading "stopped" line here.
       if (err instanceof DOMException && err.name === 'AbortError') {
-        setTimeout(() => loadHistory(false), 2000);
+        setTimeout(loadHistory, 2000, false);
       } else {
         const msg = err instanceof Error ? err.message : 'Something went wrong.';
         setMsgs((prev) => {
@@ -555,10 +575,7 @@ export const AgentChat = (props: {
     "
     >
       {/* Header */}
-      <div className="
-        flex items-center gap-2 border-b border-white/8 px-4 py-3
-      "
-      >
+      <div className="flex items-center gap-2 border-b border-white/8 px-4 py-3">
         <AgentAvatar name={agentName} avatarUrl={props.agentAvatarUrl} accent={props.agentAccent} size={18} />
         <span className="text-sm font-semibold text-white">{agentName}</span>
         <span className="text-xs text-white/35">
@@ -609,11 +626,17 @@ export const AgentChat = (props: {
       </div>
 
       {/* Transcript */}
-      <div ref={scrollRef} className="flex-1 space-y-4 overflow-y-auto px-4 py-4">
+      <div
+        ref={scrollRef}
+        className="flex-1 space-y-4 overflow-y-auto p-4"
+      >
         {!loaded && <p className="text-sm text-white/40">Loading…</p>}
 
         {loaded && msgs.length === 0 && (
-          <div className="flex h-full flex-col items-center justify-center gap-4 text-center">
+          <div className="
+            flex h-full flex-col items-center justify-center gap-4 text-center
+          "
+          >
             <span className="glow-ring rounded-2xl">
               <AgentAvatar name={agentName} avatarUrl={props.agentAvatarUrl} accent={props.agentAccent} size={44} />
             </span>
@@ -674,9 +697,20 @@ export const AgentChat = (props: {
                 ? <MessageBody text={m.content} />
                 : (
                     <span className="flex gap-1 py-1.5">
-                      <span className="size-1.5 animate-bounce rounded-full bg-indigo-400/80" />
-                      <span className="size-1.5 animate-bounce rounded-full bg-fuchsia-400/80 [animation-delay:120ms]" />
-                      <span className="size-1.5 animate-bounce rounded-full bg-indigo-300/80 [animation-delay:240ms]" />
+                      <span className="
+                        size-1.5 animate-bounce rounded-full bg-indigo-400/80
+                      "
+                      />
+                      <span className="
+                        size-1.5 animate-bounce rounded-full bg-fuchsia-400/80
+                        [animation-delay:120ms]
+                      "
+                      />
+                      <span className="
+                        size-1.5 animate-bounce rounded-full bg-indigo-300/80
+                        [animation-delay:240ms]
+                      "
+                      />
                     </span>
                   )}
             </div>
@@ -695,9 +729,20 @@ export const AgentChat = (props: {
             <div className="max-w-[85%] text-sm text-white/80">
               <span className="flex items-center gap-2 py-1.5">
                 <span className="flex gap-1">
-                  <span className="size-1.5 animate-bounce rounded-full bg-indigo-400/80" />
-                  <span className="size-1.5 animate-bounce rounded-full bg-fuchsia-400/80 [animation-delay:120ms]" />
-                  <span className="size-1.5 animate-bounce rounded-full bg-indigo-300/80 [animation-delay:240ms]" />
+                  <span className="
+                    size-1.5 animate-bounce rounded-full bg-indigo-400/80
+                  "
+                  />
+                  <span className="
+                    size-1.5 animate-bounce rounded-full bg-fuchsia-400/80
+                    [animation-delay:120ms]
+                  "
+                  />
+                  <span className="
+                    size-1.5 animate-bounce rounded-full bg-indigo-300/80
+                    [animation-delay:240ms]
+                  "
+                  />
                 </span>
                 <span className="text-[12px] text-white/50">
                   {`Working — ${remote.iteration} tool call${remote.iteration === 1 ? '' : 's'}`}
@@ -724,13 +769,27 @@ export const AgentChat = (props: {
             {pending.map(p => (
               <div
                 key={p.localId}
-                className="group relative size-16 overflow-hidden rounded-lg border border-white/10 bg-white/[0.04]"
+                className="
+                  group relative size-16 overflow-hidden rounded-lg border
+                  border-white/10 bg-white/4
+                "
               >
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={p.previewUrl} alt={p.name} className="size-full object-cover" />
+                <img
+                  src={p.previewUrl}
+                  alt={p.name}
+                  className="size-full object-cover"
+                />
                 {p.uploading && (
-                  <div className="absolute inset-0 grid place-items-center bg-black/60">
-                    <div className="size-4 animate-spin rounded-full border-2 border-white/30 border-t-white/90" />
+                  <div className="
+                    absolute inset-0 grid place-items-center bg-black/60
+                  "
+                  >
+                    <div className="
+                      size-4 animate-spin rounded-full border-2 border-white/30
+                      border-t-white/90
+                    "
+                    />
                   </div>
                 )}
                 <button
@@ -738,9 +797,11 @@ export const AgentChat = (props: {
                   onClick={() => removePending(p.localId)}
                   aria-label={`Remove ${p.name}`}
                   className="
-                    absolute right-0.5 top-0.5 grid size-5 place-items-center rounded-full
-                    bg-black/70 text-xs text-white/80 opacity-0 transition
-                    hover:bg-black/90 hover:text-white group-hover:opacity-100
+                    absolute top-0.5 right-0.5 grid size-5 place-items-center
+                    rounded-full bg-black/70 text-xs text-white/80 opacity-0
+                    transition
+                    group-hover:opacity-100
+                    hover:bg-black/90 hover:text-white
                   "
                 >
                   ×
@@ -755,9 +816,9 @@ export const AgentChat = (props: {
         )}
 
         <div className="
-          flex items-end gap-2 rounded-xl border border-white/10
-          bg-white/[0.04] px-3 py-2 transition
-          focus-within:border-indigo-400/40 focus-within:bg-white/[0.06]
+          flex items-end gap-2 rounded-xl border border-white/10 bg-white/4 px-3
+          py-2 transition
+          focus-within:border-indigo-400/40 focus-within:bg-white/6
         "
         >
           <textarea
@@ -805,13 +866,19 @@ export const AgentChat = (props: {
                   disabled={!input.trim()}
                   className="
                     grad-fill flex size-8 shrink-0 items-center justify-center
-                    rounded-lg text-white shadow-lg shadow-indigo-900/40 transition
+                    rounded-lg text-white shadow-lg shadow-indigo-900/40
+                    transition
                     hover:brightness-110
                     disabled:opacity-25 disabled:shadow-none
                   "
                   aria-label="Send"
                 >
-                  <svg viewBox="0 0 24 24" className="size-4 fill-none stroke-current stroke-2" strokeLinecap="round" strokeLinejoin="round">
+                  <svg
+                    viewBox="0 0 24 24"
+                    className="size-4 fill-none stroke-current stroke-2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
                     <path d="M12 19V5M5 12l7-7 7 7" />
                   </svg>
                 </button>

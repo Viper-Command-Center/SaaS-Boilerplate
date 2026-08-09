@@ -175,8 +175,10 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
     setError(null);
   };
 
-  /** Load a connection into the form. The secret is never read back, so the
-   *  value field starts blank and blank means "keep the existing key". */
+  /**
+   * Load a connection into the form. The secret is never read back, so the
+   *  value field starts blank and blank means "keep the existing key".
+   */
   const startEdit = (conn: Connection) => {
     setEditing(conn);
     setName(conn.name);
@@ -297,10 +299,7 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
       </div>
 
       {!vaultOk && (
-        <p className="
-          border-b border-white/8 px-4 py-2 text-xs text-rose-300
-        "
-        >
+        <p className="border-b border-white/8 px-4 py-2 text-xs text-rose-300">
           Credential vault not configured — set VAULT_MASTER_KEY in Railway
           before adding tools that need credentials.
         </p>
@@ -363,15 +362,23 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
           {/* Most 401s are a key pasted without its prefix. Say so where it
               happens rather than letting the agent guess about it later. */}
           {!isBuiltinEdit && (
-          <p className="text-[11px] text-white/30">
-            Include the prefix the vendor expects — usually
-            {' '}
-            <code className="text-white/50">Bearer sk_…</code>
-            . A few (Duda) want the raw token with no prefix.
-          </p>
+            <p className="text-[11px] text-white/30">
+              Include the prefix the vendor expects — usually
+              {' '}
+              <code className="text-white/50">Bearer sk_…</code>
+              . A few (Duda) want the raw token with no prefix.
+            </p>
           )}
           {testResult && (
-            <p className={`text-xs ${testResult.ok ? 'text-emerald-300' : 'text-rose-300'}`} role="status">
+            <p
+              className={`
+                text-xs
+                ${testResult.ok
+              ? 'text-emerald-300'
+              : `text-rose-300`}
+              `}
+              role="status"
+            >
               {testResult.ok ? '✓ ' : '✗ '}
               {testResult.message}
             </p>
@@ -382,19 +389,19 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
               {busy ? 'Saving…' : editing ? 'Save changes' : 'Add server'}
             </Button>
             {!isBuiltinEdit && (
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={testing || (!editing && !url.trim())}
-              onClick={test}
-            >
-              {testing
-                ? 'Testing…'
-                : editing && !headerValue.trim()
-                  ? 'Test saved key'
-                  : 'Test connection'}
-            </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={testing || (!editing && !url.trim())}
+                onClick={test}
+              >
+                {testing
+                  ? 'Testing…'
+                  : editing && !headerValue.trim()
+                    ? 'Test saved key'
+                    : 'Test connection'}
+              </Button>
             )}
             {editing && (
               <Button type="button" size="sm" variant="outline" onClick={resetForm}>
@@ -425,8 +432,8 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
                       {p.tier === 'tier1'
                         ? (
                             <span className="
-                              rounded bg-indigo-400/15 px-1.5 py-0.5 text-[10px]
-                              text-indigo-300
+                              rounded-sm bg-indigo-400/15 px-1.5 py-0.5
+                              text-[10px] text-indigo-300
                             "
                             >
                               included · pay per use
@@ -434,7 +441,7 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
                           )
                         : (
                             <span className="
-                              rounded bg-white/10 px-1.5 py-0.5 text-[10px]
+                              rounded-sm bg-white/10 px-1.5 py-0.5 text-[10px]
                               text-white/50
                             "
                             >
@@ -442,7 +449,11 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
                             </span>
                           )}
                     </div>
-                    {p.description && <p className="mt-0.5 text-xs text-white/45">{p.description}</p>}
+                    {p.description && (
+                      <p className="mt-0.5 text-xs text-white/45">
+                        {p.description}
+                      </p>
+                    )}
                     {p.pricing.length > 0 && (
                       <p className="mt-1 text-xs text-white/35">
                         {p.pricing.map(pr => `${pr.tool}: $${pr.retailUsd}/${pr.unit}`).join(' · ')}
@@ -486,15 +497,24 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
       {/* Connected */}
       <div className="divide-y divide-white/6">
         {connections.length === 0 && (
-          <p className="px-4 py-4 text-sm text-white/40">
+          <p className="p-4 text-sm text-white/40">
             No tools enabled yet. Enable a plugin above, or connect any hosted MCP server.
           </p>
         )}
         {connections.map(conn => (
-          <div key={conn.id} className="flex items-center justify-between gap-3 px-4 py-3">
+          <div
+            key={conn.id}
+            className="flex items-center justify-between gap-3 px-4 py-3"
+          >
             <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <span className={`size-1.5 rounded-full ${conn.enabled ? 'bg-emerald-400' : 'bg-white/25'}`} />
+                <span className={`
+                  size-1.5 rounded-full
+                  ${conn.enabled
+            ? `bg-emerald-400`
+            : `bg-white/25`}
+                `}
+                />
                 <span className="text-sm font-medium text-white">{conn.name}</span>
               </div>
               <p className="truncate pl-3.5 text-xs text-white/35">
@@ -520,15 +540,21 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
                             ? 'Queue every call in Approvals for your sign-off (default)'
                             : 'Refuse all calls to this tool'
                       }
-                      className={`rounded-full border px-2 py-0.5 text-[10px] transition ${
-                        active
-                          ? p === 'auto'
-                            ? 'border-amber-400/40 bg-amber-400/10 text-amber-200'
-                            : p === 'deny'
-                              ? 'border-rose-400/40 bg-rose-400/10 text-rose-200'
-                              : 'border-white/20 bg-white/10 text-white/70'
-                          : 'border-transparent text-white/25 hover:text-white/50'
-                      }`}
+                      className={`
+                        rounded-full border px-2 py-0.5 text-[10px] transition
+                        ${
+                    active
+                      ? p === 'auto'
+                        ? `border-amber-400/40 bg-amber-400/10 text-amber-200`
+                        : p === 'deny'
+                          ? `border-rose-400/40 bg-rose-400/10 text-rose-200`
+                          : 'border-white/20 bg-white/10 text-white/70'
+                      : `
+                        border-transparent text-white/25
+                        hover:text-white/50
+                      `
+                    }
+                      `}
                     >
                       {label}
                     </button>

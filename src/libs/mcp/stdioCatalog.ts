@@ -30,8 +30,10 @@ export type StdioServerSpec = {
   credentialLabel: string;
   /** Shown next to the site/target field when enabling. */
   targetLabel: string;
-  /** Resolve the absolute path of the server's entry script. Throws if the
-   * package isn't installed — surfaced as a failedConnection, never a crash. */
+  /**
+   * Resolve the absolute path of the server's entry script. Throws if the
+   * package isn't installed — surfaced as a failedConnection, never a crash.
+   */
   resolveEntry: () => string;
   /** Map (target, decrypted credential) → the child process env. */
   buildEnv: (target: string, credential: string) => Record<string, string>;

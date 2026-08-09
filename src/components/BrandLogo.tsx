@@ -39,8 +39,18 @@ export const BrandLogo = ({
   className?: string;
   wordmarkClassName?: string;
 }) => (
-  <span className={`inline-flex items-center gap-2 ${className}`}>
+  <span className={`
+    inline-flex items-center gap-2
+    ${className}
+  `}
+  >
     <BrandMark size={size} />
-    <span className={`text-lg font-bold tracking-tight ${wordmarkClassName}`}>Artivio</span>
+    <span className={`
+      text-lg font-bold tracking-tight
+      ${wordmarkClassName}
+    `}
+    >
+      Artivio
+    </span>
   </span>
 );

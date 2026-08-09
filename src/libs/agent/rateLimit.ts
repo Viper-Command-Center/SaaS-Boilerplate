@@ -15,8 +15,10 @@
  */
 
 const WINDOW_MS = 60_000;
-/** Agent turns per tenant per minute. Generous for humans (a turn takes
- * 10-60s anyway); tight for loops. */
+/**
+ * Agent turns per tenant per minute. Generous for humans (a turn takes
+ * 10-60s anyway); tight for loops.
+ */
 const MAX_TURNS_PER_WINDOW = 10;
 
 type Bucket = { count: number; resetAt: number };

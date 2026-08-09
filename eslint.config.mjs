@@ -45,7 +45,25 @@ export default antfu(
         entryPoint: 'src/styles/global.css',
       },
     },
+    rules: {
+      // Allow the project's custom component/utility classes defined in src/styles/global.css
+      'better-tailwindcss/no-unknown-classes': ['error', {
+        ignore: [
+          'artivio',
+          'artivio-canvas',
+          'glass',
+          'glass-hover',
+          'glass-topline',
+          'grad-text',
+          'grad-fill',
+          'glow-ring',
+          'nav-active',
+          'pulse-dot',
+        ],
+      }],
+    },
   },
+
   // --- E2E Testing Rules ---
   {
     files: [
@@ -66,6 +84,8 @@ export default antfu(
       'react/prefer-destructuring-assignment': 'off', // Vscode doesn't support automatically destructuring, it's a pain to add a new variable
       'react/exhaustive-deps': 'off', // Disable exhaustive-deps in useEffect
       'node/prefer-global/process': 'off', // Allow using `process.env`
+      'node/prefer-global/buffer': 'off', // Allow using the `Buffer` global in server-side code
+
       'test/padding-around-all': 'error', // Add padding in test files
       'test/prefer-lowercase-title': 'off', // Allow using uppercase titles in test titles
       'jsdoc/require-jsdoc': 'off', // JSDoc comments are optional

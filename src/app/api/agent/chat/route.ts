@@ -27,17 +27,17 @@ import { resolveAgentForTenant } from '@/libs/agent/persona';
 import { buildPlatformTools } from '@/libs/agent/platformTools';
 import { buildSystemPrompt } from '@/libs/agent/prompt';
 import { checkRateLimit } from '@/libs/agent/rateLimit';
+import {
+  droppedImageNote,
+  imageTrustNote,
+  loadImageBlocks,
+  MAX_IMAGES_PER_MESSAGE,
+  selectImagesForContext,
+} from '@/libs/agent/vision';
 import { getCurrentUser } from '@/libs/auth/session';
 import { db } from '@/libs/DB';
 import { buildTenantToolset } from '@/libs/mcp/registry';
 import { getUserTenants } from '@/libs/tenants';
-import {
-  MAX_IMAGES_PER_MESSAGE,
-  droppedImageNote,
-  imageTrustNote,
-  loadImageBlocks,
-  selectImagesForContext,
-} from '@/libs/agent/vision';
 import { conversations, messages, tenants } from '@/models/Schema';
 
 export const dynamic = 'force-dynamic';
@@ -185,7 +185,6 @@ export async function POST(request: Request) {
     deferredSummary: mcpToolset.deferredSummary,
     attachToolSink: mcpToolset.attachToolSink,
     resolve: (name: string) => {
-
       const p = platform.executors.get(name) ?? mission.executors.get(name);
       if (p) {
         return { connectionId: '', connectionName: 'platform', toolName: name, policy: p.policy, call: p.call };

@@ -21,7 +21,6 @@
  *   result. Mirrors the agent's set_mission_status cancel; there is no undo.
  */
 
-
 import { and, asc, desc, eq, inArray } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
@@ -30,7 +29,6 @@ import { getCurrentUser } from '@/libs/auth/session';
 import { db } from '@/libs/DB';
 import { getUserTenants } from '@/libs/tenants';
 import { missions, missionSteps } from '@/models/Schema';
-
 
 export const dynamic = 'force-dynamic';
 
@@ -86,7 +84,6 @@ const ActionSchema = z.object({
   id: z.string().uuid(),
   action: z.enum(['pause', 'resume', 'cancel']),
 });
-
 
 export async function PATCH(request: Request) {
   const user = await getCurrentUser();
@@ -156,7 +153,6 @@ export async function PATCH(request: Request) {
 
   // resume
   if (mission.status !== 'paused') {
-
     return NextResponse.json({ error: `Cannot resume a ${mission.status} mission.` }, { status: 400 });
   }
   // A mission usually pauses BECAUSE a step failed twice. Resuming means the

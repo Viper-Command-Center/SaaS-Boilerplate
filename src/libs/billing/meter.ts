@@ -19,11 +19,11 @@ type ModelPrice = { input: number; output: number; cacheRead: number };
 
 const MODEL_PRICES: Record<string, ModelPrice> = {
   // Claude Sonnet class
-  'sonnet': { input: 3, output: 15, cacheRead: 0.30 },
+  sonnet: { input: 3, output: 15, cacheRead: 0.30 },
   // Claude Haiku class
-  'haiku': { input: 0.80, output: 4, cacheRead: 0.08 },
+  haiku: { input: 0.80, output: 4, cacheRead: 0.08 },
   // Claude Opus class
-  'opus': { input: 15, output: 75, cacheRead: 1.50 },
+  opus: { input: 15, output: 75, cacheRead: 1.50 },
 };
 
 /** Markup applied to raw provider cost when billing the client. */

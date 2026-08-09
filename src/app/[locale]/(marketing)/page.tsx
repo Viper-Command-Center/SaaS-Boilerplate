@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
-import Link from 'next/link';
 import { setRequestLocale } from 'next-intl/server';
+import Link from 'next/link';
 import { BrandLogo } from '@/components/BrandLogo';
 
 export const metadata: Metadata = {
@@ -49,7 +49,10 @@ export default async function Index(props: IndexProps) {
 
   return (
     <main className="min-h-screen bg-white text-slate-900">
-      <header className="mx-auto flex max-w-6xl items-center justify-between px-6 py-5">
+      <header className="
+        mx-auto flex max-w-6xl items-center justify-between px-6 py-5
+      "
+      >
         <BrandLogo size={30} />
         <nav className="flex items-center gap-3 text-sm">
           <Link
@@ -89,7 +92,7 @@ export default async function Index(props: IndexProps) {
           An AI employee for
           {' '}
           <span className="
-            bg-gradient-to-r from-indigo-500 to-fuchsia-500 bg-clip-text
+            bg-linear-to-r from-indigo-500 to-fuchsia-500 bg-clip-text
             text-transparent
           "
           >
@@ -134,9 +137,12 @@ export default async function Index(props: IndexProps) {
         "
         >
           {FEATURES.map(f => (
-            <div key={f.title} className="rounded-2xl border border-slate-200 p-6">
+            <div
+              key={f.title}
+              className="rounded-2xl border border-slate-200 p-6"
+            >
               <h3 className="text-base font-semibold">{f.title}</h3>
-              <p className="mt-2 text-sm leading-relaxed text-slate-600">{f.body}</p>
+              <p className="mt-2 text-sm/relaxed text-slate-600">{f.body}</p>
             </div>
           ))}
         </div>
@@ -159,7 +165,7 @@ export default async function Index(props: IndexProps) {
                 {s.n}
               </div>
               <h3 className="mt-4 font-semibold">{s.title}</h3>
-              <p className="mt-2 text-sm leading-relaxed text-slate-600">{s.body}</p>
+              <p className="mt-2 text-sm/relaxed text-slate-600">{s.body}</p>
             </div>
           ))}
         </div>

@@ -60,7 +60,15 @@ export const ApprovalsPanel = (props: { tenantSlug: string }) => {
       failed: 'text-red-600',
       pending: 'text-amber-600',
     };
-    return <span className={`text-xs font-medium ${styles[status] ?? ''}`}>{status}</span>;
+    return (
+      <span className={`
+        text-xs font-medium
+        ${styles[status] ?? ''}
+      `}
+      >
+        {status}
+      </span>
+    );
   };
 
   return (
@@ -77,7 +85,7 @@ export const ApprovalsPanel = (props: { tenantSlug: string }) => {
 
       <div className="divide-y">
         {items.length === 0 && (
-          <p className="px-4 py-4 text-sm text-muted-foreground">
+          <p className="p-4 text-sm text-muted-foreground">
             Nothing waiting. When the agent proposes an action that needs
             approval, it shows up here.
           </p>
@@ -90,7 +98,7 @@ export const ApprovalsPanel = (props: { tenantSlug: string }) => {
               {badge(item.status)}
             </div>
             <pre className="
-              max-h-32 overflow-auto rounded bg-muted p-2 text-xs
+              max-h-32 overflow-auto rounded-sm bg-muted p-2 text-xs
             "
             >
               {JSON.stringify(item.args, null, 2)}
@@ -107,10 +115,17 @@ export const ApprovalsPanel = (props: { tenantSlug: string }) => {
         ))}
 
         {decided.map(item => (
-          <div key={item.id} className="flex items-center justify-between gap-2 px-4 py-2">
+          <div
+            key={item.id}
+            className="flex items-center justify-between gap-2 px-4 py-2"
+          >
             <span className="truncate text-xs text-muted-foreground">{item.toolName}</span>
             <div className="flex items-center gap-2">
-              {item.result?.error && <span className="max-w-56 truncate text-xs text-red-600">{item.result.error}</span>}
+              {item.result?.error && (
+                <span className="max-w-56 truncate text-xs text-red-600">
+                  {item.result.error}
+                </span>
+              )}
               {badge(item.status)}
             </div>
           </div>

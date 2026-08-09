@@ -14,19 +14,32 @@ export function LegalPage({ title, updated, children }: {
 }) {
   return (
     <main className="min-h-screen bg-white text-slate-800">
-      <header className="mx-auto flex max-w-3xl items-center justify-between px-6 py-5">
+      <header className="
+        mx-auto flex max-w-3xl items-center justify-between px-6 py-5
+      "
+      >
         <Link href="/" aria-label="Artivio home">
           <BrandLogo />
         </Link>
-        <Link href="/sign-in" className="text-sm text-slate-500 hover:text-slate-900">Sign in</Link>
+        <Link
+          href="/sign-in"
+          className="
+            text-sm text-slate-500
+            hover:text-slate-900
+          "
+        >
+          Sign in
+        </Link>
       </header>
 
       <article className="
         mx-auto max-w-3xl px-6 py-10
         [&_a]:text-indigo-600 [&_a]:underline
-        [&_h2]:mt-10 [&_h2]:mb-3 [&_h2]:text-xl [&_h2]:font-semibold [&_h2]:text-slate-900
+        [&_h2]:mt-10 [&_h2]:mb-3 [&_h2]:text-xl [&_h2]:font-semibold
+        [&_h2]:text-slate-900
         [&_h3]:mt-6 [&_h3]:mb-2 [&_h3]:font-semibold [&_h3]:text-slate-900
-        [&_li]:mt-1.5 [&_p]:mt-4 [&_p]:leading-relaxed
+        [&_li]:mt-1.5
+        [&_p]:mt-4 [&_p]:leading-relaxed
         [&_ul]:mt-3 [&_ul]:list-disc [&_ul]:pl-6
       "
       >

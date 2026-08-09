@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 
 type Mode = 'sign-in' | 'sign-up';
@@ -190,7 +190,11 @@ export const AuthForm = (props: { mode: Mode }) => {
       </Button>
 
       {!isSignUp && !needsCode && (
-        <button type="button" onClick={requestReset} className="w-full text-center text-sm text-muted-foreground underline">
+        <button
+          type="button"
+          onClick={requestReset}
+          className="w-full text-center text-sm text-muted-foreground underline"
+        >
           Forgot password?
         </button>
       )}

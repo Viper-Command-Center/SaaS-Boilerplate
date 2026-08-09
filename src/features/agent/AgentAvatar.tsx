@@ -48,7 +48,11 @@ export const AgentAvatar = (props: {
   const grad = ACCENTS[props.accent ?? 'indigo'] ?? FALLBACK_ACCENT;
   return (
     <span
-      className={`flex shrink-0 items-center justify-center rounded-lg bg-gradient-to-br ${grad} font-semibold text-white ring-1 ring-white/15`}
+      className={`
+        flex shrink-0 items-center justify-center rounded-lg bg-linear-to-br
+        ${grad}
+        font-semibold text-white ring-1 ring-white/15
+      `}
       style={{ width: size, height: size, fontSize: Math.max(9, size * 0.45) }}
       aria-hidden
     >

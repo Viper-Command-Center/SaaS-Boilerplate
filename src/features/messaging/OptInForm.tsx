@@ -39,14 +39,20 @@ export function OptInForm() {
   return (
     <form onSubmit={submit} className="mt-8 space-y-4">
       <div>
-        <label htmlFor="optin-name" className="mb-1 block text-sm font-medium text-slate-700">
+        <label
+          htmlFor="optin-name"
+          className="mb-1 block text-sm font-medium text-slate-700"
+        >
           First name (optional)
         </label>
         <input id="optin-name" className={input} value={name} onChange={e => setName(e.target.value)} placeholder="Alex" />
       </div>
 
       <div>
-        <label htmlFor="optin-phone" className="mb-1 block text-sm font-medium text-slate-700">
+        <label
+          htmlFor="optin-phone"
+          className="mb-1 block text-sm font-medium text-slate-700"
+        >
           WhatsApp number
         </label>
         <input
@@ -61,7 +67,11 @@ export function OptInForm() {
         <p className="mt-1 text-xs text-slate-500">Use international format, starting with your country code (e.g. +1).</p>
       </div>
 
-      <label className="flex cursor-pointer items-start gap-3 rounded-lg bg-slate-50 p-3 text-sm text-slate-700">
+      <label className="
+        flex cursor-pointer items-start gap-3 rounded-lg bg-slate-50 p-3 text-sm
+        text-slate-700
+      "
+      >
         <input
           type="checkbox"
           checked={consent}
@@ -91,7 +101,15 @@ export function OptInForm() {
       </label>
 
       {status && (
-        <p className={`text-sm ${status.ok ? 'text-emerald-600' : 'text-rose-600'}`} role="status">
+        <p
+          className={`
+            text-sm
+            ${status.ok
+          ? 'text-emerald-600'
+          : `text-rose-600`}
+          `}
+          role="status"
+        >
           {status.message}
         </p>
       )}
@@ -101,7 +119,8 @@ export function OptInForm() {
         disabled={busy}
         className="
           w-full rounded-lg bg-slate-900 px-4 py-2.5 font-semibold text-white
-          hover:bg-slate-800 disabled:opacity-50
+          hover:bg-slate-800
+          disabled:opacity-50
         "
       >
         {busy ? 'Subscribing…' : 'Subscribe on WhatsApp'}

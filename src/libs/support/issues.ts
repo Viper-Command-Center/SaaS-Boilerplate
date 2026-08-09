@@ -19,7 +19,6 @@ import { db } from '@/libs/DB';
 import { issues } from '@/models/Schema';
 import { notifyOperator } from './notify';
 
-
 export type IssueKind = 'config' | 'provider' | 'platform';
 
 export type Classified = {

@@ -19,14 +19,18 @@
 
 let lastTickAt: number | null = null;
 
-/** Record that the scheduled runner just executed. Called at the top of the
- * run-scheduled handler, after auth. */
+/**
+ * Record that the scheduled runner just executed. Called at the top of the
+ * run-scheduled handler, after auth.
+ */
 export function markTick(): void {
   lastTickAt = Date.now();
 }
 
-/** Epoch ms of the most recent runner tick since this container started, or
- * null if it has not ticked since the last deploy. */
+/**
+ * Epoch ms of the most recent runner tick since this container started, or
+ * null if it has not ticked since the last deploy.
+ */
 export function getLastTickAt(): number | null {
   return lastTickAt;
 }

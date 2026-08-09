@@ -370,9 +370,14 @@ export const CatalogTab = (props: {
                 key={k}
                 type="button"
                 onClick={() => setKind(k)}
-                className={`rounded-lg border px-3 py-1.5 text-xs font-medium ${
-                  kind === k ? 'grad-fill border-transparent text-white' : 'border-white/12 text-white/50'
-                }`}
+                className={`
+                  rounded-lg border px-3 py-1.5 text-xs font-medium
+                  ${
+              kind === k
+                ? 'grad-fill border-transparent text-white'
+                : `border-white/12 text-white/50`
+              }
+                `}
               >
                 {k === 'builtin' ? 'Built-in provider (REST API we wrap)' : 'Hosted MCP server (URL)'}
               </button>
@@ -396,13 +401,21 @@ export const CatalogTab = (props: {
                 </div>
               )
             : (
-                <div className="grid gap-3 sm:grid-cols-2">
+                <div className="
+                  grid gap-3
+                  sm:grid-cols-2
+                "
+                >
                   <input className={input} placeholder="MCP server URL" value={form.url} onChange={e => setForm({ ...form, url: e.target.value })} required />
                   <input className={input} placeholder="Auth header (Authorization)" value={form.authHeader} onChange={e => setForm({ ...form, authHeader: e.target.value })} />
                 </div>
               )}
 
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className="
+            grid gap-3
+            sm:grid-cols-2
+          "
+          >
             <div>
               <label className="mb-1 block text-sm font-medium" htmlFor="cat-slug">
                 Slug
@@ -412,7 +425,10 @@ export const CatalogTab = (props: {
               </label>
               <input
                 id="cat-slug"
-                className={`${input} ${editingId ? 'opacity-60' : ''}`}
+                className={`
+                  ${input}
+                  ${editingId ? 'opacity-60' : ''}
+                `}
                 placeholder="kie-ai"
                 value={form.slug}
                 onChange={e => setForm({ ...form, slug: e.target.value.toLowerCase() })}
@@ -452,7 +468,10 @@ export const CatalogTab = (props: {
                     <div>
                       <label className="mb-1 block text-sm font-medium" htmlFor="cat-key">
                         {multiKey ? 'Your API keys — one per line, up to 20' : 'Your API key'}
-                        <span className="ml-1 text-xs font-normal text-muted-foreground">
+                        <span className="
+                          ml-1 text-xs font-normal text-muted-foreground
+                        "
+                        >
                           (encrypted; never shown again)
                         </span>
                       </label>
@@ -461,7 +480,10 @@ export const CatalogTab = (props: {
                             <textarea
                               id="cat-key"
                               rows={4}
-                              className={`${input} font-mono text-xs`}
+                              className={`
+                                ${input}
+                                font-mono text-xs
+                              `}
                               placeholder={editing?.hasCredential
                                 ? `Leave blank to keep the ${editing.keyCount ?? 0} key(s) already stored`
                                 : 'sk-key-one\nsk-key-two\nsk-key-three'}
@@ -507,12 +529,17 @@ export const CatalogTab = (props: {
                             <p className="text-xs text-muted-foreground">{usage.note}</p>
                           </div>
                           <div className="
-                            grid gap-3 px-3 py-3
+                            grid gap-3 p-3
                             sm:grid-cols-3
                           "
                           >
                             <div>
-                              <label className="mb-1 block text-xs text-muted-foreground" htmlFor="cat-unit-cost">
+                              <label
+                                className="
+                                  mb-1 block text-xs text-muted-foreground
+                                "
+                                htmlFor="cat-unit-cost"
+                              >
                                 Your cost per
                                 {' '}
                                 {usage.unitLabel}
@@ -530,7 +557,12 @@ export const CatalogTab = (props: {
                               />
                             </div>
                             <div>
-                              <label className="mb-1 block text-xs text-muted-foreground" htmlFor="cat-unit-markup">
+                              <label
+                                className="
+                                  mb-1 block text-xs text-muted-foreground
+                                "
+                                htmlFor="cat-unit-markup"
+                              >
                                 Markup %
                               </label>
                               <input
@@ -543,13 +575,22 @@ export const CatalogTab = (props: {
                               />
                             </div>
                             <div>
-                              <p className="mb-1 text-xs text-muted-foreground">Client pays per {usage.unitLabel}</p>
-                              <p className="grad-text py-2 text-lg font-semibold">
+                              <p className="mb-1 text-xs text-muted-foreground">
+                                Client pays per
+                                {usage.unitLabel}
+                              </p>
+                              <p className="
+                                grad-text py-2 text-lg font-semibold
+                              "
+                              >
                                 {retailPerUnit > 0 ? `$${retailPerUnit.toFixed(4)}` : '—'}
                               </p>
                             </div>
                           </div>
-                          <p className="border-t px-3 py-2 text-xs text-muted-foreground">
+                          <p className="
+                            border-t px-3 py-2 text-xs text-muted-foreground
+                          "
+                          >
                             Every job is billed on the
                             {' '}
                             {usage.unitLabel}
@@ -563,145 +604,163 @@ export const CatalogTab = (props: {
                     : (
 
                         <div className="rounded-xl border">
-                    <div className="
-                      flex flex-wrap items-center justify-between gap-2 border-b
-                      px-3 py-2
-                    "
-                    >
-                      <div>
-                        <p className="text-sm font-medium">Pricing</p>
-                        <p className="text-xs text-muted-foreground">
-                          Enter what each call costs YOU. Retail is what the client is billed.
-                        </p>
-                      </div>
-                      <label className="flex items-center gap-2 text-xs">
-                        Markup on all
-                        <input
-                          type="number"
-                          min="0"
-                          className="
-                            w-16 rounded border border-input bg-background px-2
-                            py-1 text-xs
+                          <div className="
+                            flex flex-wrap items-center justify-between gap-2
+                            border-b px-3 py-2
                           "
-                          value={defaultMarkup}
-                          onChange={e => applyMarkupToAll(e.target.value)}
-                        />
-                        %
-                      </label>
-                    </div>
+                          >
+                            <div>
+                              <p className="text-sm font-medium">Pricing</p>
+                              <p className="text-xs text-muted-foreground">
+                                Enter what each call costs YOU. Retail is what the client is billed.
+                              </p>
+                            </div>
+                            <label className="flex items-center gap-2 text-xs">
+                              Markup on all
+                              <input
+                                type="number"
+                                min="0"
+                                className="
+                                  w-16 rounded-sm border border-input
+                                  bg-background px-2 py-1 text-xs
+                                "
+                                value={defaultMarkup}
+                                onChange={e => applyMarkupToAll(e.target.value)}
+                              />
+                              %
+                            </label>
+                          </div>
 
-                    {rows.length === 0
-                      ? (
-                          <p className="px-3 py-4 text-xs text-muted-foreground">
-                            {kind === 'builtin'
-                              ? 'Pick a provider above and its tools will appear here to price.'
-                              : 'Add a row for each tool you want to meter (the tool name must match the MCP server\'s).'}
-                          </p>
-                        )
-                      : (
-                          <table className="w-full text-xs">
-                            <thead className="text-left text-muted-foreground">
-                              <tr>
-                                <th className="p-2">Tool</th>
-                                <th className="p-2">Charged per</th>
-                                <th className="p-2">Your cost (USD)</th>
-                                <th className="p-2">Markup %</th>
-                                <th className="p-2">Client pays</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {rows.map((r, i) => {
-                                const cost = Number(r.costUsd) || 0;
-                                const retail = cost * (1 + (Number(r.markupPct) || 0) / 100);
-                                return (
-                                  <tr key={r.tool || i} className="border-t">
-                                    <td className="p-2 font-medium">
-                                      {kind === 'builtin'
-                                        ? r.tool
-                                        : (
-                                            <input
+                          {rows.length === 0
+                            ? (
+                                <p className="
+                                  px-3 py-4 text-xs text-muted-foreground
+                                "
+                                >
+                                  {kind === 'builtin'
+                                    ? 'Pick a provider above and its tools will appear here to price.'
+                                    : 'Add a row for each tool you want to meter (the tool name must match the MCP server\'s).'}
+                                </p>
+                              )
+                            : (
+                                <table className="w-full text-xs">
+                                  <thead className="
+                                    text-left text-muted-foreground
+                                  "
+                                  >
+                                    <tr>
+                                      <th className="p-2">Tool</th>
+                                      <th className="p-2">Charged per</th>
+                                      <th className="p-2">Your cost (USD)</th>
+                                      <th className="p-2">Markup %</th>
+                                      <th className="p-2">Client pays</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {rows.map((r, i) => {
+                                      const cost = Number(r.costUsd) || 0;
+                                      const retail = cost * (1 + (Number(r.markupPct) || 0) / 100);
+                                      return (
+                                        <tr
+                                          key={r.tool || i}
+                                          className="border-t"
+                                        >
+                                          <td className="p-2 font-medium">
+                                            {kind === 'builtin'
+                                              ? r.tool
+                                              : (
+                                                  <input
+                                                    className="
+                                                      w-32 rounded-sm border
+                                                      border-input bg-background
+                                                      px-2 py-1
+                                                    "
+                                                    placeholder="tool name"
+                                                    value={r.tool}
+                                                    onChange={e => setRow(i, { tool: e.target.value })}
+                                                  />
+                                                )}
+                                          </td>
+                                          <td className="p-2">
+                                            <select
                                               className="
-                                                w-32 rounded border border-input
-                                                bg-background px-2 py-1
+                                                rounded-sm border border-input
+                                                bg-background p-1
                                               "
-                                              placeholder="tool name"
-                                              value={r.tool}
-                                              onChange={e => setRow(i, { tool: e.target.value })}
+                                              value={r.unit}
+                                              onChange={e => setRow(i, { unit: e.target.value as 'call' | 'arg' })}
+                                            >
+                                              <option value="call">each call</option>
+                                              <option value="arg">
+                                                per
+                                                {' '}
+                                                {r.argField || 'unit'}
+                                              </option>
+                                            </select>
+                                          </td>
+                                          <td className="p-2">
+                                            <input
+                                              type="number"
+                                              step="0.0001"
+                                              min="0"
+                                              placeholder="0.00"
+                                              className="
+                                                w-24 rounded-sm border
+                                                border-input bg-background px-2
+                                                py-1
+                                              "
+                                              value={r.costUsd}
+                                              onChange={e => setRow(i, { costUsd: e.target.value })}
                                             />
-                                          )}
-                                    </td>
-                                    <td className="p-2">
-                                      <select
-                                        className="rounded border border-input bg-background px-1 py-1"
-                                        value={r.unit}
-                                        onChange={e => setRow(i, { unit: e.target.value as 'call' | 'arg' })}
-                                      >
-                                        <option value="call">each call</option>
-                                        <option value="arg">
-                                          per
-                                          {' '}
-                                          {r.argField || 'unit'}
-                                        </option>
-                                      </select>
-                                    </td>
-                                    <td className="p-2">
-                                      <input
-                                        type="number"
-                                        step="0.0001"
-                                        min="0"
-                                        placeholder="0.00"
-                                        className="
-                                          w-24 rounded border border-input
-                                          bg-background px-2 py-1
-                                        "
-                                        value={r.costUsd}
-                                        onChange={e => setRow(i, { costUsd: e.target.value })}
-                                      />
-                                    </td>
-                                    <td className="p-2">
-                                      <input
-                                        type="number"
-                                        min="0"
-                                        className="
-                                          w-16 rounded border border-input
-                                          bg-background px-2 py-1
-                                        "
-                                        value={r.markupPct}
-                                        onChange={e => setRow(i, { markupPct: e.target.value })}
-                                      />
-                                    </td>
-                                    <td className="p-2 font-medium text-green-600">
-                                      {cost > 0 ? money(retail) : '—'}
-                                    </td>
-                                  </tr>
-                                );
-                              })}
-                            </tbody>
-                          </table>
-                        )}
+                                          </td>
+                                          <td className="p-2">
+                                            <input
+                                              type="number"
+                                              min="0"
+                                              className="
+                                                w-16 rounded-sm border
+                                                border-input bg-background px-2
+                                                py-1
+                                              "
+                                              value={r.markupPct}
+                                              onChange={e => setRow(i, { markupPct: e.target.value })}
+                                            />
+                                          </td>
+                                          <td className="
+                                            p-2 font-medium text-green-600
+                                          "
+                                          >
+                                            {cost > 0 ? money(retail) : '—'}
+                                          </td>
+                                        </tr>
+                                      );
+                                    })}
+                                  </tbody>
+                                </table>
+                              )}
 
-                    <div className="
-                      flex items-center justify-between border-t px-3 py-2
-                    "
-                    >
-                      <p className="text-xs text-muted-foreground">
-                        Leave a cost blank to leave that tool unmetered (free to the client).
-                        Set markup to 0% to pass through at wholesale.
-                      </p>
-                      {kind === 'http' && (
-                        <button
-                          type="button"
-                          className="
-                            shrink-0 rounded border border-white/12 px-2 py-1
-                            text-xs
+                          <div className="
+                            flex items-center justify-between border-t px-3 py-2
                           "
-                          onClick={() => setRows(rs => [...rs, { tool: '', unit: 'call', argField: '', costUsd: '', markupPct: defaultMarkup }])}
-                        >
-                          + Add tool
-                        </button>
-                      )}
+                          >
+                            <p className="text-xs text-muted-foreground">
+                              Leave a cost blank to leave that tool unmetered (free to the client).
+                              Set markup to 0% to pass through at wholesale.
+                            </p>
+                            {kind === 'http' && (
+                              <button
+                                type="button"
+                                className="
+                                  shrink-0 rounded-sm border border-white/12
+                                  px-2 py-1 text-xs
+                                "
+                                onClick={() => setRows(rs => [...rs, { tool: '', unit: 'call', argField: '', costUsd: '', markupPct: defaultMarkup }])}
+                              >
+                                + Add tool
+                              </button>
+                            )}
+                          </div>
                         </div>
-                      </div>
                       )}
                 </>
               )
@@ -726,24 +785,47 @@ export const CatalogTab = (props: {
           </p>
         )}
         {props.catalog.map(p => (
-          <div key={p.id} className="flex items-start justify-between gap-3 px-4 py-3">
+          <div
+            key={p.id}
+            className="flex items-start justify-between gap-3 px-4 py-3"
+          >
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-sm font-medium">{p.name}</span>
-                <span className={`rounded px-1.5 py-0.5 text-xs ${
-                  p.tier === 'tier1' ? 'bg-indigo-400/15 text-indigo-300' : 'bg-white/10 text-white/50'
-                }`}
+                <span className={`
+                  rounded-sm px-1.5 py-0.5 text-xs
+                  ${
+          p.tier === 'tier1'
+            ? 'bg-indigo-400/15 text-indigo-300'
+            : `bg-white/10 text-white/50`
+          }
+                `}
                 >
                   {p.tier === 'tier1' ? 'Tier 1 · metered' : 'Tier 2 · BYO key'}
                 </span>
                 {p.transport === 'builtin' && (
-                  <span className="rounded bg-emerald-400/15 px-1.5 py-0.5 text-xs text-emerald-300">built-in</span>
+                  <span className="
+                    rounded-sm bg-emerald-400/15 px-1.5 py-0.5 text-xs
+                    text-emerald-300
+                  "
+                  >
+                    built-in
+                  </span>
                 )}
                 {!p.enabled && (
-                  <span className="rounded bg-amber-400/15 px-1.5 py-0.5 text-xs text-amber-300">hidden</span>
+                  <span className="
+                    rounded-sm bg-amber-400/15 px-1.5 py-0.5 text-xs
+                    text-amber-300
+                  "
+                  >
+                    hidden
+                  </span>
                 )}
                 {(p.keyCount ?? 0) > 1 && (
-                  <span className="rounded bg-sky-400/15 px-1.5 py-0.5 text-xs text-sky-300">
+                  <span className="
+                    rounded-sm bg-sky-400/15 px-1.5 py-0.5 text-xs text-sky-300
+                  "
+                  >
                     {p.keyCount}
                     {' '}
                     keys in rotation
@@ -751,7 +833,11 @@ export const CatalogTab = (props: {
                 )}
                 {p.category && <span className="text-xs text-muted-foreground">{p.category}</span>}
               </div>
-              {p.description && <p className="mt-0.5 text-xs text-muted-foreground">{p.description}</p>}
+              {p.description && (
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  {p.description}
+                </p>
+              )}
               {(() => {
                 const rules = Object.entries(p.priceRules ?? {});
                 if (rules.length === 0) {

@@ -16,7 +16,7 @@
  * Cost is per session-second, so every session is stopped in a `finally`.
  */
 
-import { Buffer } from 'node:buffer';
+import type { Buffer } from 'node:buffer';
 import WebSocket from 'ws';
 import { awsCreds, awsRegion, signRequest } from '@/libs/aws/sigv4';
 

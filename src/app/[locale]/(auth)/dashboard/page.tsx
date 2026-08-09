@@ -52,10 +52,7 @@ export default async function DashboardIndexPage(props: {
           >
             Command Center
           </p>
-          <h1 className="
-            grad-text mt-1 text-3xl font-extrabold tracking-tight
-          "
-          >
+          <h1 className="grad-text mt-1 text-3xl font-extrabold tracking-tight">
             {tenant.name}
           </h1>
           <p className="mt-1 text-sm text-white/45">

@@ -97,31 +97,30 @@ export const FileLibrary = (props: { tenantSlug: string; canWrite: boolean }) =>
         setProgress({ name: file.name, pct: 0 });
 
         // 1. reserve a key + presigned URL
-        // eslint-disable-next-line no-await-in-loop
+
         const startRes = await fetch(`/api/files/upload?tenant=${tenant}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ name: file.name, sizeBytes: file.size }),
         });
-        // eslint-disable-next-line no-await-in-loop
+
         const start = await startRes.json().catch(() => null);
         if (!startRes.ok) {
           throw new Error(start?.error ?? 'Could not start the upload.');
         }
 
         // 2. the bytes go browser → Cloudflare, not through us
-        // eslint-disable-next-line no-await-in-loop
+
         await putToR2(start.uploadUrl, file, pct => setProgress({ name: file.name, pct }));
 
         // 3. index it (HEAD proves it landed)
-        // eslint-disable-next-line no-await-in-loop
+
         const doneRes = await fetch(`/api/files/upload?tenant=${tenant}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ key: start.key, name: file.name, mime: file.type }),
         });
         if (!doneRes.ok) {
-          // eslint-disable-next-line no-await-in-loop
           const d = await doneRes.json().catch(() => null);
           throw new Error(d?.error ?? 'Upload finished but could not be saved.');
         }
@@ -176,9 +175,17 @@ export const FileLibrary = (props: { tenantSlug: string; canWrite: boolean }) =>
               key={x.id}
               type="button"
               onClick={() => setTab(x.id)}
-              className={`rounded-lg px-3 py-1.5 text-xs font-medium ${
-                tab === x.id ? 'grad-fill text-white' : 'border border-white/12 text-white/50 hover:bg-white/5'
-              }`}
+              className={`
+                rounded-lg px-3 py-1.5 text-xs font-medium
+                ${
+            tab === x.id
+              ? 'grad-fill text-white'
+              : `
+                border border-white/12 text-white/50
+                hover:bg-white/5
+              `
+            }
+              `}
             >
               {x.label}
             </button>
@@ -212,7 +219,9 @@ export const FileLibrary = (props: { tenantSlug: string; canWrite: boolean }) =>
           </div>
           <div className="h-1.5 overflow-hidden rounded-full bg-white/8">
             <div
-              className="grad-fill h-full rounded-full transition-[width] duration-200"
+              className="
+                grad-fill h-full rounded-full transition-[width] duration-200
+              "
               style={{ width: `${progress.pct}%` }}
             />
           </div>
@@ -257,7 +266,7 @@ export const FileLibrary = (props: { tenantSlug: string; canWrite: boolean }) =>
                     <span className="truncate text-sm font-medium text-white">{f.name}</span>
                     {f.kind === 'asset' && (
                       <span className="
-                        rounded bg-fuchsia-400/15 px-1.5 py-0.5 text-[10px]
+                        rounded-sm bg-fuchsia-400/15 px-1.5 py-0.5 text-[10px]
                         text-fuchsia-300
                       "
                       >
@@ -266,7 +275,7 @@ export const FileLibrary = (props: { tenantSlug: string; canWrite: boolean }) =>
                     )}
                     {f.hasText && (
                       <span className="
-                        rounded bg-emerald-400/15 px-1.5 py-0.5 text-[10px]
+                        rounded-sm bg-emerald-400/15 px-1.5 py-0.5 text-[10px]
                         text-emerald-300
                       "
                       >

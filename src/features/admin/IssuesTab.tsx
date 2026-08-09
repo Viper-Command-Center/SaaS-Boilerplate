@@ -58,7 +58,7 @@ export const IssuesTab = () => {
   const copy = async (issue: Issue) => {
     await navigator.clipboard.writeText(issue.bundle).catch(() => {});
     setCopied(issue.id);
-    setTimeout(() => setCopied(null), 2000);
+    setTimeout(setCopied, 2000, null);
   };
 
   const ourBugs = items.filter(i => i.kind === 'platform' && i.status === 'open').length;
@@ -87,9 +87,17 @@ export const IssuesTab = () => {
               key={s}
               type="button"
               onClick={() => setStatus(s)}
-              className={`rounded-lg px-3 py-1.5 text-xs font-medium ${
-                status === s ? 'grad-fill text-white' : 'border border-white/12 text-white/50 hover:bg-white/5'
-              }`}
+              className={`
+                rounded-lg px-3 py-1.5 text-xs font-medium
+                ${
+            status === s
+              ? 'grad-fill text-white'
+              : `
+                border border-white/12 text-white/50
+                hover:bg-white/5
+              `
+            }
+              `}
             >
               {s === 'open' ? 'Open' : 'All'}
             </button>
@@ -120,12 +128,20 @@ export const IssuesTab = () => {
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${KIND_STYLE[i.kind] ?? 'bg-white/10 text-white/50'}`}>
+                  <span className={`
+                    rounded-sm px-1.5 py-0.5 text-[10px] font-medium
+                    ${KIND_STYLE[i.kind] ?? `bg-white/10 text-white/50`}
+                  `}
+                  >
                     {KIND_LABEL[i.kind] ?? i.kind}
                   </span>
                   <span className="truncate text-sm font-medium text-white">{i.source}</span>
                   {i.reportedByAgent && (
-                    <span className="rounded bg-indigo-400/15 px-1.5 py-0.5 text-[10px] text-indigo-300">
+                    <span className="
+                      rounded-sm bg-indigo-400/15 px-1.5 py-0.5 text-[10px]
+                      text-indigo-300
+                    "
+                    >
                       agent-reported
                     </span>
                   )}
@@ -152,8 +168,8 @@ export const IssuesTab = () => {
 
             {open === i.id && (
               <pre className="
-                mt-3 max-h-80 overflow-auto rounded-lg bg-black/30 p-3 text-[11px]
-                whitespace-pre-wrap text-white/60
+                mt-3 max-h-80 overflow-auto rounded-lg bg-black/30 p-3
+                text-[11px] whitespace-pre-wrap text-white/60
               "
               >
                 {i.bundle}

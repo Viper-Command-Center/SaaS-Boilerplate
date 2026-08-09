@@ -59,8 +59,8 @@ export const Sidebar = (props: {
       {props.workspaces.length > 0 && (
         <div>
           <p className="
-            px-1 pb-2 text-[10px] font-semibold tracking-[0.14em]
-            text-white/35 uppercase
+            px-1 pb-2 text-[10px] font-semibold tracking-[0.14em] text-white/35
+            uppercase
           "
           >
             Workspaces
@@ -73,24 +73,38 @@ export const Sidebar = (props: {
                   key={w.id}
                   href={`/dashboard?t=${w.slug}`}
                   onClick={() => setOpen(false)}
-                  className={`flex items-center gap-2.5 rounded-xl px-2 py-2 text-sm transition ${
-                    isActive
-                      ? 'nav-active font-medium text-white'
-                      : `
-                        text-white/55
-                        hover:bg-white/5 hover:text-white
-                      `
-                  }`}
+                  className={`
+                    flex items-center gap-2.5 rounded-xl p-2 text-sm transition
+                    ${
+                isActive
+                  ? 'nav-active font-medium text-white'
+                  : `
+                    text-white/55
+                    hover:bg-white/5 hover:text-white
+                  `
+                }
+                  `}
                 >
                   <span
-                    className={`flex size-7 shrink-0 items-center justify-center rounded-lg text-[11px] font-bold ${
-                      isActive ? 'grad-fill text-white glow-ring' : 'bg-white/8 text-white/60'
-                    }`}
+                    className={`
+                      flex size-7 shrink-0 items-center justify-center
+                      rounded-lg text-[11px] font-bold
+                      ${
+                isActive
+                  ? 'grad-fill glow-ring text-white'
+                  : `bg-white/8 text-white/60`
+                }
+                    `}
                   >
                     {w.name.slice(0, 1).toUpperCase()}
                   </span>
                   <span className="truncate">{w.name}</span>
-                  {isActive && <span className="pulse-dot ml-auto size-1.5 rounded-full bg-emerald-400" />}
+                  {isActive && (
+                    <span className="
+                      pulse-dot ml-auto size-1.5 rounded-full bg-emerald-400
+                    "
+                    />
+                  )}
                 </Link>
               );
             })}
@@ -113,14 +127,18 @@ export const Sidebar = (props: {
               key={item.label}
               href={item.href}
               onClick={() => setOpen(false)}
-              className={`flex items-center gap-2.5 rounded-xl px-2.5 py-2 text-sm transition ${
-                isActive
-                  ? 'nav-active font-medium text-white'
-                  : `
-                    text-white/55
-                    hover:bg-white/5 hover:text-white
-                  `
-              }`}
+              className={`
+                flex items-center gap-2.5 rounded-xl px-2.5 py-2 text-sm
+                transition
+                ${
+            isActive
+              ? 'nav-active font-medium text-white'
+              : `
+                text-white/55
+                hover:bg-white/5 hover:text-white
+              `
+            }
+              `}
             >
               <Icon name={item.icon} />
               {item.label}
@@ -152,7 +170,12 @@ export const Sidebar = (props: {
               hover:text-white
             "
           >
-            <svg viewBox="0 0 24 24" className="size-4 fill-none stroke-current stroke-[1.6]" strokeLinecap="round" strokeLinejoin="round">
+            <svg
+              viewBox="0 0 24 24"
+              className="size-4 fill-none stroke-current stroke-[1.6]"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
               <path d="M15 17l5-5-5-5M20 12H9M13 3H6a1 1 0 00-1 1v16a1 1 0 001 1h7" />
             </svg>
           </a>
@@ -181,12 +204,20 @@ export const Sidebar = (props: {
           Menu
         </button>
       </div>
-      {open && <div className="border-b border-white/10 lg:hidden">{body}</div>}
+      {open && (
+        <div className="
+          border-b border-white/10
+          lg:hidden
+        "
+        >
+          {body}
+        </div>
+      )}
 
       {/* Desktop rail */}
       <aside className="
         sticky top-0 hidden h-svh w-64 shrink-0 border-r border-white/8
-        bg-white/[0.02] backdrop-blur-xl
+        bg-white/2 backdrop-blur-xl
         lg:block
       "
       >

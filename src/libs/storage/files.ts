@@ -28,8 +28,9 @@ import { files } from '@/models/Schema';
 export const MAX_TEXT_CHARS = 400_000;
 
 /** Formats we can read as text today. Binary formats are stored, not parsed. */
-const TEXT_MIME = /^(text\/|application\/(json|xml|x-yaml|yaml|csv))/i;
-const TEXT_EXT = /\.(txt|md|markdown|csv|tsv|json|ya?ml|html?|xml|log)$/i;
+const TEXT_MIME = /^(?:text\/|application\/(?:json|xml|x-yaml|yaml|csv))/i;
+const TEXT_EXT = /\.(?:txt|md|markdown|csv|tsv|json|ya?ml|html?|xml|log)$/i;
+
 
 export function isTextual(name: string, mime?: string | null): boolean {
   return (mime ? TEXT_MIME.test(mime) : false) || TEXT_EXT.test(name);

@@ -8,9 +8,9 @@
 import type { AnthropicTool } from '@/libs/mcp/registry';
 import { and, asc, desc, eq } from 'drizzle-orm';
 import { assertPublicUrl, buildWebTools } from '@/libs/agent/webTools';
-import { captureIssue } from '@/libs/support/issues';
 import { db } from '@/libs/DB';
 import { getFile, listFiles, saveFile, saveRemoteFile } from '@/libs/storage/files';
+import { captureIssue } from '@/libs/support/issues';
 import { dashboardPanels, dashboardViews, datasets, scheduledTasks, tenants } from '@/models/Schema';
 
 export type PlatformExecutor = {
@@ -807,7 +807,7 @@ export function buildPlatformTools(tenantId: string): {
       // memory should record capabilities ("use search_stock_photos"), not
       // credentials.
       for (const line of content.split('\n')) {
-        if (/key|secret|token|password|credential/i.test(line) && /[A-Za-z0-9_\-]{25,}/.test(line)) {
+        if (/key|secret|token|password|credential/i.test(line) && /[\w\-]{25,}/.test(line)) {
           throw new Error('That looks like it contains an API key/secret. Workspace memory must NEVER hold credentials — they are injected into every prompt. Secrets stay in the platform environment/vault; store only the FACT (e.g. "stock photos available via search_stock_photos"), and tell the user any key pasted into chat should be rotated.');
         }
       }

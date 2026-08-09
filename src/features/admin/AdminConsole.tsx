@@ -121,7 +121,11 @@ export const AdminConsole = () => {
       {tab === 'workspaces' && (
         <div className="glass glass-topline relative overflow-x-auto">
           <table className="w-full text-sm">
-            <thead className="border-b border-white/8 text-left text-[10px] uppercase tracking-wider text-white/40">
+            <thead className="
+              border-b border-white/8 text-left text-[10px] tracking-wider
+              text-white/40 uppercase
+            "
+            >
               <tr>
                 <th className="p-3">Workspace</th>
                 <th className="p-3">Plan</th>
@@ -150,10 +154,20 @@ export const AdminConsole = () => {
                     <td className="p-3">{w.planName}</td>
                     <td className="p-3">{money(w.monthCostUsd)}</td>
                     <td className="p-3">{money(w.monthBilledUsd)}</td>
-                    <td className={`p-3 font-medium ${w.marginUsd >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                    <td className={`
+                      p-3 font-medium
+                      ${w.marginUsd >= 0
+                    ? `text-green-600`
+                    : `text-red-600`}
+                    `}
+                    >
                       {money(w.marginUsd)}
                     </td>
-                    <td className={`p-3 ${overCap ? 'font-semibold text-red-600' : ''}`}>
+                    <td className={`
+                      p-3
+                      ${overCap ? 'font-semibold text-red-600' : ''}
+                    `}
+                    >
                       {money(w.todayCostUsd)}
                     </td>
                     <td className="p-3">
@@ -164,7 +178,7 @@ export const AdminConsole = () => {
                         defaultValue={w.dailyCapUsd}
                         onBlur={e => patchWorkspace(w.id, { dailyCapUsd: Number(e.target.value) })}
                         className="
-                          w-20 rounded border border-input bg-background px-2
+                          w-20 rounded-sm border border-input bg-background px-2
                           py-1 text-sm
                         "
                       />
@@ -215,13 +229,16 @@ const Stat = ({ label, value, accent }: { label: string; value: string; accent?:
       {label}
     </div>
     <div
-      className={`mt-1.5 text-2xl font-extrabold tracking-tight ${
-        accent === undefined
-          ? 'grad-text'
-          : accent
-            ? 'text-emerald-400'
-            : 'text-rose-400'
-      }`}
+      className={`
+        mt-1.5 text-2xl font-extrabold tracking-tight
+        ${
+  accent === undefined
+    ? 'grad-text'
+    : accent
+      ? 'text-emerald-400'
+      : 'text-rose-400'
+  }
+      `}
     >
       {value}
     </div>

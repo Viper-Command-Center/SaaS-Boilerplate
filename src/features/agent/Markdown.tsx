@@ -75,12 +75,24 @@ function renderInline(text: string, keyPrefix: string): ReactNode[] {
 
     if (token.startsWith('`')) {
       out.push(
-        <code key={`${keyPrefix}-c${i}`} className="rounded bg-white/10 px-1 py-0.5 text-[0.85em] text-white/85">
+        <code
+          key={`${keyPrefix}-c${i}`}
+          className="
+            rounded-sm bg-white/10 px-1 py-0.5 text-[0.85em] text-white/85
+          "
+        >
           {token.slice(1, -1)}
         </code>,
       );
     } else if (token.startsWith('**')) {
-      out.push(<strong key={`${keyPrefix}-b${i}`} className="font-semibold text-white/90">{token.slice(2, -2)}</strong>);
+      out.push(
+        <strong
+          key={`${keyPrefix}-b${i}`}
+          className="font-semibold text-white/90"
+        >
+          {token.slice(2, -2)}
+        </strong>,
+      );
     } else {
       const label = token.slice(1, token.indexOf(']'));
       const href = safeHref(token.slice(token.indexOf('(') + 1, -1));
@@ -93,7 +105,11 @@ function renderInline(text: string, keyPrefix: string): ReactNode[] {
             // noopener: stop the new tab reaching back via window.opener.
             // noreferrer: don't leak the dashboard URL (it carries the tenant).
             rel="noopener noreferrer"
-            className="text-indigo-300 underline decoration-indigo-300/40 underline-offset-2 transition hover:text-indigo-200 hover:decoration-indigo-200"
+            className="
+              text-indigo-300 underline decoration-indigo-300/40
+              underline-offset-2 transition
+              hover:text-indigo-200 hover:decoration-indigo-200
+            "
           >
             {label}
           </a>,
@@ -115,7 +131,7 @@ function renderInline(text: string, keyPrefix: string): ReactNode[] {
 }
 
 function isTableDivider(line: string): boolean {
-  return /^\s*\|?[\s:|-]+\|[\s:|-]*$/.test(line) && line.includes('-');
+  return /^[-\s:|][-\s:]*\|[-\s:|]*$/.test(line) && line.includes('-');
 }
 
 function splitRow(line: string): string[] {
@@ -159,7 +175,13 @@ export const Markdown = ({ text }: { text: string }) => {
             <thead>
               <tr className="border-b border-white/10">
                 {headers.map((h, hi) => (
-                  <th key={hi} className="px-2 py-1.5 text-xs font-medium uppercase tracking-wide text-white/45">
+                  <th
+                    key={hi}
+                    className="
+                      px-2 py-1.5 text-xs font-medium tracking-wide
+                      text-white/45 uppercase
+                    "
+                  >
                     {renderInline(h, `th${i}-${hi}`)}
                   </th>
                 ))}
@@ -167,7 +189,13 @@ export const Markdown = ({ text }: { text: string }) => {
             </thead>
             <tbody>
               {rows.map((r, ri) => (
-                <tr key={ri} className="border-b border-white/5 last:border-0">
+                <tr
+                  key={ri}
+                  className="
+                    border-b border-white/5
+                    last:border-0
+                  "
+                >
                   {headers.map((_, ci) => (
                     <td key={ci} className="px-2 py-1.5 align-top text-white/75">
                       {renderInline(r[ci] ?? '', `td${i}-${ri}-${ci}`)}
@@ -184,7 +212,8 @@ export const Markdown = ({ text }: { text: string }) => {
     }
 
     // ── Heading ─────────────────────────────────────────────────────────────
-    const heading = /^(#{1,4})\s+(.*)$/.exec(trimmed);
+    const heading = /^(#{1,4})\s+(\S.*)$/.exec(trimmed);
+
     if (heading) {
       const level = heading[1]!.length;
       const content = renderInline(heading[2] ?? '', `h${i}`);
@@ -197,7 +226,8 @@ export const Markdown = ({ text }: { text: string }) => {
     }
 
     // ── Horizontal rule ─────────────────────────────────────────────────────
-    if (/^(-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
+    if (/^(?:-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
+
       blocks.push(<hr key={`r${i}`} className="border-white/10" />);
       i += 1;
       continue;
@@ -211,7 +241,12 @@ export const Markdown = ({ text }: { text: string }) => {
         i += 1;
       }
       blocks.push(
-        <blockquote key={`q${i}`} className="border-l-2 border-indigo-400/40 pl-3 text-sm italic text-white/60">
+        <blockquote
+          key={`q${i}`}
+          className="
+            border-l-2 border-indigo-400/40 pl-3 text-sm text-white/60 italic
+          "
+        >
           {renderInline(quote.join(' '), `q${i}`)}
         </blockquote>,
       );
@@ -236,7 +271,13 @@ export const Markdown = ({ text }: { text: string }) => {
       blocks.push(
         <List
           key={`l${i}`}
-          className={`ml-4 space-y-1 text-sm text-white/70 ${ordered ? 'list-decimal' : 'list-disc'} marker:text-white/30`}
+          className={`
+            ml-4 space-y-1 text-sm text-white/70
+            ${ordered
+              ? `list-decimal`
+              : `list-disc`}
+            marker:text-white/30
+          `}
         >
           {items.map((it, ii) => <li key={ii}>{renderInline(it, `li${i}-${ii}`)}</li>)}
         </List>,
@@ -250,7 +291,8 @@ export const Markdown = ({ text }: { text: string }) => {
     const para: string[] = [];
     while (i < lines.length) {
       const t = (lines[i] ?? '').trim();
-      if (!t || /^#{1,4}\s/.test(t) || /^(-{3,}|\*{3,}|_{3,})$/.test(t)
+      if (!t || /^#{1,4}\s/.test(t) || /^(?:-{3,}|\*{3,}|_{3,})$/.test(t)
+
         || bullet.test(t) || numbered.test(t) || t.startsWith('> ')
         || (t.includes('|') && isTableDivider(lines[i + 1] ?? ''))) {
         break;
@@ -259,7 +301,7 @@ export const Markdown = ({ text }: { text: string }) => {
       i += 1;
     }
     blocks.push(
-      <p key={`p${i}`} className="text-sm leading-relaxed text-white/70">
+      <p key={`p${i}`} className="text-sm/relaxed text-white/70">
         {renderInline(para.join(' '), `p${i}`)}
       </p>,
     );

@@ -25,9 +25,11 @@ import { dashboardPanels, dashboardViews, datasets } from '@/models/Schema';
 
 export const dynamic = 'force-dynamic';
 
-/** Rows scanned when a table panel filters/sorts. Bounded so a huge dataset
+/**
+ * Rows scanned when a table panel filters/sorts. Bounded so a huge dataset
  * can't make the dashboard poll expensive; if a workspace outgrows this, the
- * agent should split datasets (e.g. per week) rather than filter one giant one. */
+ * agent should split datasets (e.g. per week) rather than filter one giant one.
+ */
 const FILTER_SCAN_LIMIT = 1000;
 
 type StoredRow = { id: string; row: unknown; capturedAt: Date };

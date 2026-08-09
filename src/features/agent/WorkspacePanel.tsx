@@ -1,7 +1,7 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { useCallback, useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 
 type Member = { userId: string; email: string; firstName: string | null; role: string };
@@ -148,7 +148,10 @@ export const WorkspacePanel = (props: {
           <p className="mb-2 text-xs font-semibold text-muted-foreground">Members</p>
           <div className="space-y-1">
             {members.map(m => (
-              <div key={m.userId} className="flex items-center justify-between gap-2 text-sm">
+              <div
+                key={m.userId}
+                className="flex items-center justify-between gap-2 text-sm"
+              >
                 <span className="truncate">
                   {m.email}
                   <span className="ml-2 text-xs text-muted-foreground">{m.role}</span>
@@ -159,7 +162,11 @@ export const WorkspacePanel = (props: {
           </div>
 
           <form onSubmit={addMember} className="mt-3 space-y-2">
-            <div className="grid gap-2 sm:grid-cols-3">
+            <div className="
+              grid gap-2
+              sm:grid-cols-3
+            "
+            >
               <input className={inputClass} type="email" placeholder="client@email.com" value={email} onChange={e => setEmail(e.target.value)} required />
               <input className={inputClass} placeholder="First name" value={firstName} onChange={e => setFirstName(e.target.value)} />
               <select className={inputClass} value={role} onChange={e => setRole(e.target.value)}>
@@ -171,7 +178,7 @@ export const WorkspacePanel = (props: {
             </div>
             {error && <p className="text-xs text-red-600" role="alert">{error}</p>}
             {oneTimePassword && (
-              <p className="rounded bg-muted p-2 text-xs">
+              <p className="rounded-sm bg-muted p-2 text-xs">
                 Account created. One-time password (share securely, shown once):
                 {' '}
                 <code className="font-semibold">{oneTimePassword}</code>
@@ -185,7 +192,11 @@ export const WorkspacePanel = (props: {
       {props.isPlatformAdmin && (
         <form onSubmit={createWorkspace} className="space-y-2 p-4">
           <p className="text-xs font-semibold text-muted-foreground">New client workspace</p>
-          <div className="grid gap-2 sm:grid-cols-2">
+          <div className="
+            grid gap-2
+            sm:grid-cols-2
+          "
+          >
             <input className={inputClass} placeholder="Name (e.g. BargainBalloons)" value={wsName} onChange={e => setWsName(e.target.value)} required />
             <input className={inputClass} placeholder="slug (e.g. bargainballoons)" value={wsSlug} onChange={e => setWsSlug(e.target.value.toLowerCase())} required pattern="[a-z0-9-]+" />
           </div>

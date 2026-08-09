@@ -124,7 +124,13 @@ export const MissionsPanel = (props: { tenantSlug: string; canControl: boolean }
             Missions
             {active.length > 0 ? ` (${active.length} active)` : ''}
           </span>
-          <span className={`text-xs font-medium ${health.tone}`}>{health.label}</span>
+          <span className={`
+            text-xs font-medium
+            ${health.tone}
+          `}
+          >
+            {health.label}
+          </span>
         </div>
         <p className="text-xs text-muted-foreground">
           Durable background work the agent runs one step at a time.
@@ -133,7 +139,7 @@ export const MissionsPanel = (props: { tenantSlug: string; canControl: boolean }
 
       <div className="divide-y">
         {missions.length === 0 && (
-          <p className="px-4 py-4 text-sm text-muted-foreground">
+          <p className="p-4 text-sm text-muted-foreground">
             No missions yet. When you ask the agent for a large, multi-step job
             it starts a mission here.
           </p>
@@ -152,23 +158,47 @@ export const MissionsPanel = (props: { tenantSlug: string; canControl: boolean }
             <div key={m.id} className="space-y-2 px-4 py-3">
               <div className="flex items-center justify-between gap-2">
                 <span className="truncate text-sm font-medium">{m.title}</span>
-                <span className={`text-xs font-medium ${statusStyles[m.status] ?? ''}`}>{m.status}</span>
+                <span className={`
+                  text-xs font-medium
+                  ${statusStyles[m.status] ?? ''}
+                `}
+                >
+                  {m.status}
+                </span>
               </div>
 
-              <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+              <div className="
+                h-1.5 w-full overflow-hidden rounded-full bg-white/10
+              "
+              >
                 <div
                   className="h-full rounded-full bg-green-500/70 transition-all"
                   style={{ width: `${pct}%` }}
                 />
               </div>
-              <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
-                <span>{complete}/{total} steps</span>
-                <span>updated {agoLabel(m.updatedAt)}</span>
+              <div className="
+                flex items-center justify-between gap-2 text-xs
+                text-muted-foreground
+              "
+              >
+                <span>
+                  {complete}
+                  /
+                  {total}
+                  {' '}
+                  steps
+                </span>
+                <span>
+                  updated
+                  {agoLabel(m.updatedAt)}
+                </span>
               </div>
 
               {runningStep && (
                 <p className="truncate text-xs text-white/60">
-                  Running: {runningStep.title}
+                  Running:
+                  {' '}
+                  {runningStep.title}
                 </p>
               )}
 

@@ -134,10 +134,16 @@ export const AccountSettings = () => {
               <p className="text-sm">
                 2. Scan or open this link on your phone, or type the key manually:
               </p>
-              <a href={enrolling.otpauthUrl} className="block text-xs break-all text-primary underline">
+              <a
+                href={enrolling.otpauthUrl}
+                className="block text-xs break-all text-primary underline"
+              >
                 {enrolling.otpauthUrl}
               </a>
-              <p className="rounded bg-muted p-3 font-mono text-sm tracking-widest">
+              <p className="
+                rounded-sm bg-muted p-3 font-mono text-sm tracking-widest
+              "
+              >
                 {enrolling.secret}
               </p>
               <p className="text-sm">3. Enter the 6-digit code it shows:</p>
@@ -152,7 +158,10 @@ export const AccountSettings = () => {
           {backupCodes && (
             <div className="space-y-2">
               <p className="text-sm font-medium text-green-600">2FA is on. Save these backup codes now — they are shown once.</p>
-              <div className="grid grid-cols-2 gap-2 rounded bg-muted p-3 font-mono text-sm">
+              <div className="
+                grid grid-cols-2 gap-2 rounded-sm bg-muted p-3 font-mono text-sm
+              "
+              >
                 {backupCodes.map(c => <span key={c}>{c}</span>)}
               </div>
               <Button size="sm" variant="outline" onClick={() => setBackupCodes(null)}>I&apos;ve saved them</Button>
@@ -182,7 +191,11 @@ export const AccountSettings = () => {
       <div className="rounded-lg border bg-background">
         <div className="border-b px-4 py-3 text-sm font-semibold">Password</div>
         <form onSubmit={changePassword} className="space-y-3 p-4">
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className="
+            grid gap-3
+            sm:grid-cols-2
+          "
+          >
             <div>
               <label className="mb-1 block text-xs font-medium" htmlFor="cur-pw">Current password</label>
               <input id="cur-pw" type="password" className={input} value={currentPassword} onChange={e => setCurrentPassword(e.target.value)} required />

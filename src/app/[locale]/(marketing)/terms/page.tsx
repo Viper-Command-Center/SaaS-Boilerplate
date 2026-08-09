@@ -68,9 +68,17 @@ export default async function TermsPage(props: { params: Promise<{ locale: strin
         you designate through channels such as WhatsApp, email, or SMS. You may
         only provide contact details for people who have consented to be
         contacted. Message and data rates may apply. You can opt out at any time
-        by replying <strong>STOP</strong> to a WhatsApp or SMS message, using an
+        by replying
+        {' '}
+        <strong>STOP</strong>
+        {' '}
+        to a WhatsApp or SMS message, using an
         unsubscribe link in email, or updating your notification settings. See
-        our <a href="/privacy">Privacy Policy</a> for how message data is handled.
+        our
+        {' '}
+        <a href="/privacy">Privacy Policy</a>
+        {' '}
+        for how message data is handled.
       </p>
 
       <h2>6. Acceptable use</h2>
@@ -121,7 +129,10 @@ export default async function TermsPage(props: { params: Promise<{ locale: strin
         You may stop using the Service at any time. We may suspend or terminate
         access for violation of these Terms or to protect the Service or other
         users. On termination, we will delete or return your data as described in
-        the <a href="/privacy">Privacy Policy</a>.
+        the
+        {' '}
+        <a href="/privacy">Privacy Policy</a>
+        .
       </p>
 
       <h2>12. Changes</h2>
@@ -133,7 +144,10 @@ export default async function TermsPage(props: { params: Promise<{ locale: strin
 
       <h2>13. Contact</h2>
       <p>
-        Questions about these Terms: <a href="mailto:hello@artivio.ai">hello@artivio.ai</a>.
+        Questions about these Terms:
+        {' '}
+        <a href="mailto:hello@artivio.ai">hello@artivio.ai</a>
+        .
       </p>
     </LegalPage>
   );

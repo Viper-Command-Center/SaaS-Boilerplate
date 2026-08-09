@@ -43,8 +43,8 @@
  * rule; see `imageTrustNote()`.
  */
 
-import { getObject } from '@/libs/storage/r2';
 import { getFile } from '@/libs/storage/files';
+import { getObject } from '@/libs/storage/r2';
 
 /** Anthropic's supported image types. Anything else is rejected, not guessed. */
 const SUPPORTED = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
@@ -64,11 +64,11 @@ export const MAX_IMAGES_PER_MESSAGE = 4;
 export const MAX_IMAGES_IN_CONTEXT = 6;
 
 export type ImageBlock = {
-  type: 'image'
-  source: { type: 'base64'; media_type: string; data: string }
-}
+  type: 'image';
+  source: { type: 'base64'; media_type: string; data: string };
+};
 
-export type TextBlock = { type: 'text'; text: string }
+export type TextBlock = { type: 'text'; text: string };
 
 export function isImageMime(mime: string | null | undefined): boolean {
   return Boolean(mime && SUPPORTED.has(mime.toLowerCase()));

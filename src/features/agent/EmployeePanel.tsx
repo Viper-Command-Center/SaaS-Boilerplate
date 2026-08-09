@@ -105,11 +105,19 @@ export const EmployeePanel = (props: { tenantSlug: string }) => {
                 type="button"
                 disabled={saving !== null}
                 onClick={() => assign(p.id, null)}
-                className={`flex w-full items-center gap-2.5 rounded-xl border px-3 py-2 text-left transition disabled:opacity-40 ${
-                  active
-                    ? 'border-indigo-400/50 bg-indigo-400/10'
-                    : 'border-white/10 hover:border-white/25 hover:bg-white/5'
-                }`}
+                className={`
+                  flex w-full items-center gap-2.5 rounded-xl border px-3 py-2
+                  text-left transition
+                  disabled:opacity-40
+                  ${
+              active
+                ? 'border-indigo-400/50 bg-indigo-400/10'
+                : `
+                  border-white/10
+                  hover:border-white/25 hover:bg-white/5
+                `
+              }
+                `}
               >
                 <AgentAvatar name={p.name} avatarUrl={p.avatarUrl} accent={p.accent} size={28} />
                 <span className="min-w-0 flex-1">
@@ -118,7 +126,11 @@ export const EmployeePanel = (props: { tenantSlug: string }) => {
                     {p.tagline ?? p.role ?? ''}
                   </span>
                 </span>
-                {active && <span className="text-[10px] font-semibold text-indigo-300">ACTIVE</span>}
+                {active && (
+                  <span className="text-[10px] font-semibold text-indigo-300">
+                    ACTIVE
+                  </span>
+                )}
               </button>
             );
           })}
@@ -145,8 +157,8 @@ export const EmployeePanel = (props: { tenantSlug: string }) => {
                 maxLength={60}
                 placeholder="Rename (optional)"
                 className="
-                  flex-1 rounded-lg border border-white/10 bg-white/[0.04]
-                  px-2.5 py-1.5 text-xs text-white/90 outline-none
+                  flex-1 rounded-lg border border-white/10 bg-white/4 px-2.5
+                  py-1.5 text-xs text-white/90 outline-none
                   placeholder:text-white/25
                   focus:border-indigo-400/40
                 "

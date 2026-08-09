@@ -130,7 +130,8 @@ function flattenMcpContent(blocks: McpContentBlock[]): string {
     .join('\n');
 }
 
-const NAME_RE = /^mcp__([a-z0-9-]+)__(.+)$/i;
+const NAME_RE = /^mcp__([a-z0-9-]+)__.+$/i;
+
 
 function sanitize(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9-]/g, '-');
@@ -164,7 +165,7 @@ export function namespacedToolName(connectionName: string, toolName: string): st
   const conn = sanitize(connectionName);
   // Underscores are legal for Anthropic but are our namespace separator, so a
   // tool named `a__b` could forge a different connection. Map them to '-'.
-  const tool = toolName.replace(/[^a-zA-Z0-9-]/g, '-');
+  const tool = toolName.replace(/[^a-z0-9-]/gi, '-');
   if (!tool.replace(/-/g, '')) {
     return null; // nothing legal left to name it with
   }
@@ -254,8 +255,10 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
 
   const anthropicTools: AnthropicTool[] = [];
   const failedConnections: string[] = [];
-  /** provider slug → its guidance. A Map so two connections to the same
-   *  provider contribute the paragraph once, not twice. */
+  /**
+   * provider slug → its guidance. A Map so two connections to the same
+   *  provider contribute the paragraph once, not twice.
+   */
   const guidanceByProvider = new Map<string, string>();
   const executors = new Map<string, ExecutorEntry>();
   // Extra arrays (the assemblers' combined tool lists) that must also receive
@@ -351,10 +354,37 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
             continue;
           }
         } else {
-          credentialId = entry.credentialId ?? undefined;
+          /**
+           * 🔴 TIER 2 ON A NON-PER-CONNECTION BUILT-IN WAS UNREACHABLE.
+           *
+           * This branch used to read ONLY the catalog's platform credential —
+           * correct for tier 1, where the key is ours. But `/api/plugins` POST
+           * computes `needsOwnCredential = tier === 'tier2' || perConnection`,
+           * so a TIER 2 built-in prompts the workspace for a key, seals it in
+           * the vault, and stores it on `conn.headerCredentials` — and nothing
+           * ever read it back. The connection then reported "no credential
+           * configured" about a credential the platform had just accepted,
+           * encrypted and saved.
+           *
+           * That is the worst shape of error: the UI confirms a save, the vault
+           * genuinely holds the secret, and the agent is told it is missing. The
+           * owner re-enters it, gets the same message, and reasonably concludes
+           * the format is wrong.
+           *
+           * Prefer the platform key (tier 1), fall back to the workspace's own
+           * (tier 2) — the same precedence the HTTP branch already uses.
+           */
+          const own = Object.values((conn.headerCredentials ?? {}) as Record<string, string>)[0];
+          credentialId = entry.credentialId ?? own ?? undefined;
         }
         if (!credentialId && !provider.noCredential) {
-          failedConnections.push(`${conn.name} (no credential configured)`);
+          // Name WHERE the credential belongs. "No credential configured" sent
+          // the owner to the workspace Tools panel, which for a tier-1 built-in
+          // has no credential field at all — so the message pointed at a screen
+          // that could not fix it.
+          failedConnections.push(
+            `${conn.name} (no credential configured — for a Tier 1 plugin the key lives on the CATALOG entry: Admin → Plugin catalog → Edit "${entry.slug}" → paste the key. The workspace Tools panel has no key field for Tier 1, because the credential is the platform's, not this workspace's.)`,
+          );
           continue;
         }
 
@@ -455,7 +485,6 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
       }
       continue;
     }
-
 
     // ── stdio (Phase 4): a bundled, ALLOWLISTED MCP server run as a child
     // process on this container. Most of the MCP ecosystem is stdio-only

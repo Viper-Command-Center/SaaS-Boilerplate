@@ -327,7 +327,11 @@ export const PanelsGrid = (props: { tenantSlug: string; canEdit?: boolean }) => 
   return (
     <div className="space-y-4">
       {error && (
-        <p className="rounded-lg border border-amber-400/20 bg-amber-400/5 px-3 py-2 text-xs text-amber-200/80">
+        <p className="
+          rounded-lg border border-amber-400/20 bg-amber-400/5 px-3 py-2 text-xs
+          text-amber-200/80
+        "
+        >
           {error}
           {' — showing the last data that loaded. Retrying every 30s.'}
         </p>
@@ -367,13 +371,20 @@ export const PanelsGrid = (props: { tenantSlug: string; canEdit?: boolean }) => 
                   dropOnTab(v.id);
                   endDrag();
                 }}
-                className={`flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-medium transition ${
-                  dropTarget === `tab:${v.id}`
-                    ? 'border-indigo-400 bg-indigo-400/20 text-white'
-                    : active
-                      ? 'nav-active border-white/15 text-white'
-                      : 'border-white/10 text-white/50 hover:border-white/25 hover:text-white/80'
-                }`}
+                className={`
+                  flex items-center gap-1.5 rounded-xl border px-3 py-1.5
+                  text-xs font-medium transition
+                  ${
+              dropTarget === `tab:${v.id}`
+                ? 'border-indigo-400 bg-indigo-400/20 text-white'
+                : active
+                  ? 'nav-active border-white/15 text-white'
+                  : `
+                    border-white/10 text-white/50
+                    hover:border-white/25 hover:text-white/80
+                  `
+              }
+                `}
               >
                 {v.icon && <span aria-hidden>{v.icon}</span>}
                 {v.name}
@@ -407,15 +418,28 @@ export const PanelsGrid = (props: { tenantSlug: string; canEdit?: boolean }) => 
                   dropOnSection(sectionKey);
                   endDrag();
                 }}
-                className={`flex w-full items-center gap-2 rounded-lg border px-2 py-1.5 text-left transition ${
-                  dropTarget === `sec:${sectionKey}`
-                    ? 'border-indigo-400 bg-indigo-400/10'
-                    : 'border-transparent hover:bg-white/[0.03]'
-                }`}
+                className={`
+                  flex w-full items-center gap-2 rounded-lg border px-2 py-1.5
+                  text-left transition
+                  ${
+              dropTarget === `sec:${sectionKey}`
+                ? 'border-indigo-400 bg-indigo-400/10'
+                : `
+                  border-transparent
+                  hover:bg-white/3
+                `
+              }
+                `}
               >
                 <svg
                   viewBox="0 0 24 24"
-                  className={`size-3 fill-none stroke-white/40 stroke-2 transition-transform ${isCollapsed ? '-rotate-90' : ''}`}
+                  className={`
+                    size-3 fill-none stroke-white/40 stroke-2
+                    transition-transform
+                    ${isCollapsed
+                ? `-rotate-90`
+                : ''}
+                  `}
                   strokeLinecap="round"
                   strokeLinejoin="round"
                 >
@@ -466,9 +490,21 @@ export const PanelsGrid = (props: { tenantSlug: string; canEdit?: boolean }) => 
                       dropOnPanel(panel.id);
                       endDrag();
                     }}
-                    className={`glass glass-hover glass-topline group relative overflow-hidden p-4 ${SPAN[panel.width] ?? ''} ${
-                      dragId === panel.id ? 'opacity-40' : ''
-                    } ${dropTarget === panel.id ? 'ring-2 ring-indigo-400' : ''} ${canEdit ? 'cursor-grab active:cursor-grabbing' : ''}`}
+                    className={`
+                      glass glass-hover glass-topline group relative
+                      overflow-hidden p-4
+                      ${SPAN[panel.width] ?? ''}
+                      ${
+                  dragId === panel.id ? 'opacity-40' : ''
+                  }
+                      ${dropTarget === panel.id ? 'ring-2 ring-indigo-400' : ''}
+                      ${canEdit
+                    ? `
+                      cursor-grab
+                      active:cursor-grabbing
+                    `
+                    : ''}
+                    `}
                   >
                     <div className="
                       mb-3 flex items-center justify-between gap-2 text-[10px]
@@ -508,12 +544,19 @@ export const PanelsGrid = (props: { tenantSlug: string; canEdit?: boolean }) => 
                               title="Move earlier"
                               aria-label={`Move ${panel.title} earlier`}
                               className="
-                                rounded p-0.5 text-white/35 transition
+                                rounded-sm p-0.5 text-white/35 transition
                                 hover:bg-white/10 hover:text-white
                                 disabled:pointer-events-none disabled:opacity-20
                               "
                             >
-                              <svg viewBox="0 0 24 24" className="size-3 fill-none stroke-current stroke-[3]" strokeLinecap="round" strokeLinejoin="round">
+                              <svg
+                                viewBox="0 0 24 24"
+                                className="
+                                  size-3 fill-none stroke-current stroke-3
+                                "
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                              >
                                 <path d="M18 15l-6-6-6 6" />
                               </svg>
                             </button>
@@ -525,12 +568,19 @@ export const PanelsGrid = (props: { tenantSlug: string; canEdit?: boolean }) => 
                               title="Move later"
                               aria-label={`Move ${panel.title} later`}
                               className="
-                                mr-1 rounded p-0.5 text-white/35 transition
+                                mr-1 rounded-sm p-0.5 text-white/35 transition
                                 hover:bg-white/10 hover:text-white
                                 disabled:pointer-events-none disabled:opacity-20
                               "
                             >
-                              <svg viewBox="0 0 24 24" className="size-3 fill-none stroke-current stroke-[3]" strokeLinecap="round" strokeLinejoin="round">
+                              <svg
+                                viewBox="0 0 24 24"
+                                className="
+                                  size-3 fill-none stroke-current stroke-3
+                                "
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                              >
                                 <path d="M6 9l6 6 6-6" />
                               </svg>
                             </button>
@@ -546,20 +596,29 @@ export const PanelsGrid = (props: { tenantSlug: string; canEdit?: boolean }) => 
                           aria-label={folded.has(panel.id) ? `Show ${panel.title}` : `Hide ${panel.title}`}
                           aria-expanded={!folded.has(panel.id)}
                           className="
-                            mr-1 rounded p-0.5 text-white/35 transition
+                            mr-1 rounded-sm p-0.5 text-white/35 transition
                             hover:bg-white/10 hover:text-white
                           "
                         >
                           <svg
                             viewBox="0 0 24 24"
-                            className={`size-3 fill-none stroke-current stroke-[3] transition-transform ${folded.has(panel.id) ? '-rotate-90' : ''}`}
+                            className={`
+                              size-3 fill-none stroke-current stroke-3
+                              transition-transform
+                              ${folded.has(panel.id)
+                    ? `-rotate-90`
+                    : ''}
+                            `}
                             strokeLinecap="round"
                             strokeLinejoin="round"
                           >
                             <path d="M6 9l6 6 6-6" />
                           </svg>
                         </button>
-                        <span className="pulse-dot size-1.5 rounded-full bg-indigo-400" />
+                        <span className="
+                          pulse-dot size-1.5 rounded-full bg-indigo-400
+                        "
+                        />
                       </span>
                     </div>
                     {!folded.has(panel.id) && (
@@ -719,7 +778,13 @@ const PanelBody = ({ panel, tenantSlug, canEdit }: { panel: Panel; tenantSlug: s
       <div>
         <div className="mb-1 flex items-baseline gap-2">
           <span className="text-2xl font-bold text-white">{latest.toLocaleString()}</span>
-          <span className={`text-xs font-medium ${delta >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+          <span className={`
+            text-xs font-medium
+            ${delta >= 0
+        ? `text-emerald-400`
+        : `text-rose-400`}
+          `}
+          >
             {delta >= 0 ? '▲' : '▼'}
             {' '}
             {Math.abs(delta).toFixed(1)}
@@ -813,7 +878,7 @@ const PanelBody = ({ panel, tenantSlug, canEdit }: { panel: Panel; tenantSlug: s
           disabled={busy}
           onClick={() => addRow(datasetKey, columns)}
           className="
-            mt-2 rounded border border-white/12 px-2 py-1 text-[11px]
+            mt-2 rounded-sm border border-white/12 px-2 py-1 text-[11px]
             text-white/60 transition
             hover:border-white/30 hover:text-white/85
             disabled:opacity-40
@@ -832,7 +897,7 @@ const PanelBody = ({ panel, tenantSlug, canEdit }: { panel: Panel; tenantSlug: s
         <p className="text-sm text-white/40">
           No rows yet in
           {' '}
-          <code className="rounded bg-white/10 px-1 text-xs">{String(panel.config.datasetKey ?? 'this dataset')}</code>
+          <code className="rounded-sm bg-white/10 px-1 text-xs">{String(panel.config.datasetKey ?? 'this dataset')}</code>
           .
         </p>
         {/* An empty table is exactly where someone wants to add the first row,
@@ -881,7 +946,7 @@ const PanelBody = ({ panel, tenantSlug, canEdit }: { panel: Panel; tenantSlug: s
                         onChange={e => patchRow(r.id, c, e.target.value)}
                         aria-label={`Status for row ${i + 1}`}
                         className="
-                          rounded border border-white/10 bg-transparent px-1
+                          rounded-sm border border-white/10 bg-transparent px-1
                           py-0.5 text-xs text-white/75 transition
                           hover:border-white/25
                           focus:border-indigo-400 focus:outline-none
@@ -926,7 +991,7 @@ const PanelBody = ({ panel, tenantSlug, canEdit }: { panel: Panel; tenantSlug: s
                           }
                         }}
                         className="
-                          w-full min-w-24 rounded border border-transparent
+                          w-full min-w-24 rounded-sm border border-transparent
                           bg-transparent px-1 py-0.5 text-xs text-white/75
                           transition
                           hover:border-white/15
@@ -946,7 +1011,7 @@ const PanelBody = ({ panel, tenantSlug, canEdit }: { panel: Panel; tenantSlug: s
                     aria-label={`Remove row ${i + 1}`}
                     title="Remove row"
                     className="
-                      rounded px-1.5 py-0.5 text-xs text-white/25 transition
+                      rounded-sm px-1.5 py-0.5 text-xs text-white/25 transition
                       hover:bg-white/10 hover:text-red-300
                     "
                   >

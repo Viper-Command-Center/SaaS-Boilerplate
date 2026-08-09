@@ -122,7 +122,11 @@ export const UsersTab = (props: {
 
       {showNew && (
         <form onSubmit={create} className="glass space-y-3 p-4">
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className="
+            grid gap-3
+            sm:grid-cols-2
+          "
+          >
             <input className={input} type="email" placeholder="email@client.com" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} required />
             <input className={input} placeholder="First name" value={form.firstName} onChange={e => setForm({ ...form, firstName: e.target.value })} />
             <select className={input} value={form.tenantId} onChange={e => setForm({ ...form, tenantId: e.target.value })}>
@@ -143,7 +147,11 @@ export const UsersTab = (props: {
 
       <div className="glass relative overflow-x-auto">
         <table className="w-full text-sm">
-          <thead className="border-b border-white/8 text-left text-[10px] uppercase tracking-wider text-white/40">
+          <thead className="
+            border-b border-white/8 text-left text-[10px] tracking-wider
+            text-white/40 uppercase
+          "
+          >
             <tr>
               <th className="p-3">User</th>
               <th className="p-3">Workspaces</th>
@@ -157,8 +165,24 @@ export const UsersTab = (props: {
                 <td className="p-3">
                   <div className="font-medium">
                     {u.email}
-                    {u.isAdmin && <span className="ml-2 rounded bg-indigo-400/15 px-1.5 py-0.5 text-xs text-indigo-300">admin</span>}
-                    {u.deletedAt && <span className="ml-2 rounded bg-white/10 px-1.5 py-0.5 text-xs text-white/50">disabled</span>}
+                    {u.isAdmin && (
+                      <span className="
+                        ml-2 rounded-sm bg-indigo-400/15 px-1.5 py-0.5 text-xs
+                        text-indigo-300
+                      "
+                      >
+                        admin
+                      </span>
+                    )}
+                    {u.deletedAt && (
+                      <span className="
+                        ml-2 rounded-sm bg-white/10 px-1.5 py-0.5 text-xs
+                        text-white/50
+                      "
+                      >
+                        disabled
+                      </span>
+                    )}
                   </div>
                   {u.firstName && <div className="text-xs text-muted-foreground">{u.firstName}</div>}
                 </td>
@@ -166,13 +190,19 @@ export const UsersTab = (props: {
                 <td className="p-3">
                   <div className="space-y-1">
                     {u.memberships.map(m => (
-                      <div key={m.tenantId} className="flex items-center gap-2 text-xs">
+                      <div
+                        key={m.tenantId}
+                        className="flex items-center gap-2 text-xs"
+                      >
                         <span>
                           {m.tenantName}
                           {' · '}
                         </span>
                         <select
-                          className="rounded border border-input bg-background px-1 py-0.5 text-xs"
+                          className="
+                            rounded-sm border border-input bg-background px-1
+                            py-0.5 text-xs
+                          "
                           value={m.role}
                           onChange={e => patch(u.id, { addMembership: { tenantId: m.tenantId, role: e.target.value } }, 'Role updated.')}
                         >
@@ -180,7 +210,10 @@ export const UsersTab = (props: {
                         </select>
                         <button
                           type="button"
-                          className="text-muted-foreground hover:text-red-600"
+                          className="
+                            text-muted-foreground
+                            hover:text-red-600
+                          "
                           onClick={() => patch(u.id, { removeMembership: { tenantId: m.tenantId } }, 'Removed from workspace.')}
                         >
                           remove
@@ -189,7 +222,7 @@ export const UsersTab = (props: {
                     ))}
                     <select
                       className="
-                        rounded border border-input bg-background px-1 py-0.5
+                        rounded-sm border border-input bg-background px-1 py-0.5
                         text-xs text-muted-foreground
                       "
                       value=""

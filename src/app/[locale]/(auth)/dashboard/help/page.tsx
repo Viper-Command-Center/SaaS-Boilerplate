@@ -95,9 +95,11 @@ export default async function HelpPage(props: { params: Promise<{ locale: string
             <div className="border-b px-4 py-3 text-sm font-semibold">{section.heading}</div>
             <div className="divide-y">
               {section.items.map(item => (
-                <div key={item.q} className="px-4 py-4">
+                <div key={item.q} className="p-4">
                   <p className="text-sm font-medium">{item.q}</p>
-                  <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{item.a}</p>
+                  <p className="mt-1 text-sm/relaxed text-muted-foreground">
+                    {item.a}
+                  </p>
                 </div>
               ))}
             </div>

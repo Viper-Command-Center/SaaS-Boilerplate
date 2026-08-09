@@ -1,5 +1,5 @@
-import Link from 'next/link';
 import { setRequestLocale } from 'next-intl/server';
+import Link from 'next/link';
 import { BrandLogo, BrandMark } from '@/components/BrandLogo';
 
 /**
@@ -54,10 +54,10 @@ export default async function CenteredLayout(props: {
         </div>
 
         <div className="relative max-w-md">
-          <h2 className="text-3xl leading-tight font-bold tracking-tight">
+          <h2 className="text-3xl/tight font-bold tracking-tight">
             An AI employee for every business.
           </h2>
-          <p className="mt-4 text-sm leading-relaxed text-slate-300">
+          <p className="mt-4 text-sm/relaxed text-slate-300">
             Connect any tool. Give it a goal. Approve what matters. Artivio runs
             marketing and operations across your companies and clients — and
             reports back honestly.
@@ -69,13 +69,19 @@ export default async function CenteredLayout(props: {
               'Human approval on every action that matters',
               'A dashboard the agent builds around your goals',
             ].map(line => (
-              <div key={line} className="flex items-start gap-3 text-sm text-slate-200">
+              <div
+                key={line}
+                className="flex items-start gap-3 text-sm text-slate-200"
+              >
                 <span className="
                   mt-0.5 flex size-5 shrink-0 items-center justify-center
                   rounded-full bg-white/10
                 "
                 >
-                  <svg viewBox="0 0 12 12" className="size-3 fill-none stroke-white stroke-2">
+                  <svg
+                    viewBox="0 0 12 12"
+                    className="size-3 fill-none stroke-white stroke-2"
+                  >
                     <path d="M2.5 6.5 L5 9 L9.5 3.5" strokeLinecap="round" strokeLinejoin="round" />
                   </svg>
                 </span>
@@ -95,8 +101,15 @@ export default async function CenteredLayout(props: {
       </aside>
 
       {/* Form panel */}
-      <main className="flex flex-col items-center justify-center bg-background p-6">
-        <div className="mb-8 lg:hidden">
+      <main className="
+        flex flex-col items-center justify-center bg-background p-6
+      "
+      >
+        <div className="
+          mb-8
+          lg:hidden
+        "
+        >
           <Link href="/">
             <BrandMark size={40} />
           </Link>

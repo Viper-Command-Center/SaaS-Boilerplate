@@ -418,10 +418,19 @@ export const wordpressProvider: BuiltinProvider = {
       // route report it as ignored on every call, training the caller to skim
       // past the one list that says what did NOT get set.
       const FIELDS = [
-        'title', 'description', 'focusKeyword', 'canonical', 'breadcrumbTitle',
-        'ogTitle', 'ogDescription', 'ogImage',
-        'twitterTitle', 'twitterDescription', 'twitterImage',
-        'noindex', 'nofollow',
+        'title',
+        'description',
+        'focusKeyword',
+        'canonical',
+        'breadcrumbTitle',
+        'ogTitle',
+        'ogDescription',
+        'ogImage',
+        'twitterTitle',
+        'twitterDescription',
+        'twitterImage',
+        'noindex',
+        'nofollow',
       ] as const;
       const body: Record<string, unknown> = {};
       for (const field of FIELDS) {

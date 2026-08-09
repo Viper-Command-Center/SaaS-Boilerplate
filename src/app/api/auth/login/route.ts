@@ -57,7 +57,6 @@ export async function POST(request: Request) {
         : [];
       const normalized = code.toUpperCase().replace(/\s/g, '');
       for (const hash of hashes) {
-        // eslint-disable-next-line no-await-in-loop
         if (await bcrypt.compare(normalized, hash)) {
           ok = true;
           await db

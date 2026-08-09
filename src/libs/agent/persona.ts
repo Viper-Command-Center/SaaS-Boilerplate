@@ -2,7 +2,7 @@
  * AI Employees — resolving which persona works a given workspace.
  *
  * A persona is a name, a face, and a personality. It changes how the agent
- * *sounds*, never what it's allowed to *do*: approvals, spend caps, tenant
+ * sounds*, never what it's allowed to *do*: approvals, spend caps, tenant
  * isolation and the untrusted-content rules are identical for every employee.
  * That separation matters — personality is presentation, not permission.
  */

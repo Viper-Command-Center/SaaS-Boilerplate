@@ -46,7 +46,10 @@ export const InviteRequestForm = () => {
           bg-green-100
         "
         >
-          <svg viewBox="0 0 24 24" className="size-6 fill-none stroke-green-600 stroke-2">
+          <svg
+            viewBox="0 0 24 24"
+            className="size-6 fill-none stroke-green-600 stroke-2"
+          >
             <path d="M5 13l4 4L19 7" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
         </div>
@@ -75,7 +78,11 @@ export const InviteRequestForm = () => {
         </p>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-2">
+      <div className="
+        grid gap-3
+        sm:grid-cols-2
+      "
+      >
         <div>
           <label className="mb-1 block text-sm font-medium" htmlFor="ir-name">Your name *</label>
           <input id="ir-name" className={input} required value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} />
@@ -105,7 +112,10 @@ export const InviteRequestForm = () => {
         <label className="mb-1 block text-sm font-medium" htmlFor="ir-use">What would you want the agent to do first?</label>
         <textarea
           id="ir-use"
-          className={`${input} h-24 resize-none`}
+          className={`
+            ${input}
+            h-24 resize-none
+          `}
           placeholder="e.g. run our social posting, keep our SEO blog going, manage ads, update our website…"
           value={form.useCase}
           onChange={e => setForm({ ...form, useCase: e.target.value })}

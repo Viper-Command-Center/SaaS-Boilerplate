@@ -471,7 +471,7 @@ Surfaced by the post-29.1 capability re-check: Max could load the GitHub schemas
 
 **Cause — two identical lines in `registry.ts`** (the HTTP branch and the stdio branch):
 ```ts
-result.content.map(c => (c.type === 'text' ? c.text ?? '' : `[${c.type}]`)).join('\n')
+result.content.map(c => (c.type === 'text' ? c.text ?? '' : `[${c.type}]`)).join('\n');
 ```
 The MCP spec has several content shapes and **file reads do not use `text`**. GitHub returns `get_file_contents` as an **EmbeddedResource** — `{ type: 'resource', resource: { uri, mimeType, text } }`. Every non-text block was replaced with the literal marker `[<type>]`, so the file body was discarded and the agent received ten characters.
 

@@ -131,7 +131,6 @@ async function resumeConversation(
     system += `\n\n## How your connected tools actually behave\n${toolset.connectionGuidance}`;
   }
 
-
   const userText = outcome.ok
     ? `The human approved your queued call to ${approval.toolName} and it has now executed. Its result:
 

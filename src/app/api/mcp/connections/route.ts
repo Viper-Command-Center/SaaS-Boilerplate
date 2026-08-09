@@ -9,10 +9,10 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getCurrentUser } from '@/libs/auth/session';
 import { db } from '@/libs/DB';
+import { getStdioServer } from '@/libs/mcp/stdioCatalog';
+import { getBuiltinProvider } from '@/libs/plugins';
 import { getUserTenants } from '@/libs/tenants';
 import { sealSecret, vaultConfigured } from '@/libs/vault';
-import { getBuiltinProvider } from '@/libs/plugins';
-import { getStdioServer } from '@/libs/mcp/stdioCatalog';
 import { auditLog, credentials, mcpConnections, pluginCatalog } from '@/models/Schema';
 
 export const dynamic = 'force-dynamic';

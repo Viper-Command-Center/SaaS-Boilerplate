@@ -779,10 +779,19 @@ export const elementorProvider: BuiltinProvider = {
          * past the one list that tells it when something did NOT get set.
          */
         const FIELDS = [
-          'title', 'description', 'focusKeyword', 'canonical', 'breadcrumbTitle',
-          'ogTitle', 'ogDescription', 'ogImage',
-          'twitterTitle', 'twitterDescription', 'twitterImage',
-          'noindex', 'nofollow',
+          'title',
+          'description',
+          'focusKeyword',
+          'canonical',
+          'breadcrumbTitle',
+          'ogTitle',
+          'ogDescription',
+          'ogImage',
+          'twitterTitle',
+          'twitterDescription',
+          'twitterImage',
+          'noindex',
+          'nofollow',
         ] as const;
         const body: Record<string, unknown> = {};
         for (const field of FIELDS) {
