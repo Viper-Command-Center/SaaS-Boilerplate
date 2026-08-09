@@ -84,7 +84,8 @@ git diff --cached --quiet
 if errorlevel 1 (
   echo.
   echo [deploy] Changes to be committed:
-  git diff --cached --stat
+  git --no-pager diff --cached --stat
+
   echo.
   echo [deploy] Committing...
   git commit --no-verify -m "chore: deploy %date% %time%"
@@ -110,7 +111,8 @@ if /i "!LOCAL!"=="!REMOTE!" (
   echo [deploy] Local and origin/main are identical - everything is already deployed.
   echo [deploy] If you expected changes, they were probably committed by Cline
   echo [deploy] already, or your edits never saved to disk. Last 3 commits:
-  git log -3 --oneline
+  git --no-pager log -3 --oneline
+
   echo.
   goto :done
 )
@@ -129,7 +131,8 @@ if errorlevel 1 (
 
 echo.
 echo [deploy] SUCCESS - pushed. Railway is building; migrations run pre-deploy.
-git log -1 --oneline
+git --no-pager log -1 --oneline
+
 
 :done
 if defined NOPAUSE goto :eof
