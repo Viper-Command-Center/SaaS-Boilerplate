@@ -7,6 +7,7 @@
 import type { BuiltinProvider } from '@/libs/plugins/types';
 import { agentcoreBrowserProvider } from '@/libs/plugins/agentcoreBrowser';
 import { cloudflareAnalyticsProvider } from '@/libs/plugins/cloudflareAnalytics';
+import { dataforseoProvider } from '@/libs/plugins/dataforseo';
 import { elementorProvider } from '@/libs/plugins/elementor';
 import { googleAnalyticsProvider } from '@/libs/plugins/googleAnalytics';
 import { heygenProvider } from '@/libs/plugins/heygen';
@@ -21,6 +22,7 @@ export const BUILTIN_PROVIDERS: Record<string, BuiltinProvider> = {
   [cloudflareAnalyticsProvider.slug]: cloudflareAnalyticsProvider,
   [googleAnalyticsProvider.slug]: googleAnalyticsProvider,
   [elementorProvider.slug]: elementorProvider,
+  [dataforseoProvider.slug]: dataforseoProvider,
 };
 
 export function getBuiltinProvider(slug: string): BuiltinProvider | undefined {
@@ -130,6 +132,23 @@ export const CATALOG_PRESETS = [
       // Per-connection: the workspace supplies its own GA4 property ID (in the
       // connection's site/URL field) and its own service account JSON.
       authHint: 'The WHOLE service account JSON key file. Cloud Console → IAM → Service Accounts → Keys → Add key (JSON). Then grant that service account email Viewer on the GA4 property, and add it as a user in Search Console → Settings → Users and permissions. Do NOT use an OAuth client ID: a consent screen in "Testing" issues refresh tokens that expire after 7 days, which would silently blind the agent every week.',
+    },
+  },
+  {
+    key: 'dataforseo',
+    label: 'DataForSEO (keyword + SERP research)',
+    entry: {
+      slug: 'dataforseo',
+      name: 'DataForSEO',
+      description: 'Real search data for deciding what to write and how to rank — keyword volume, CPC and difficulty, keyword ideas and long-tail suggestions, live Google SERPs, what a domain already ranks for, and its organic competitors.',
+      category: 'data',
+      transport: 'builtin' as const,
+      provider: 'dataforseo',
+      // Set Tier 1 in the Add-plugin form: this is OUR DataForSEO account,
+      // metered per call and billed on at the markup. Tier is chosen there
+      // rather than here, as with every other preset — these entries are form
+      // pre-fills, not configuration.
+      authHint: 'Your DataForSEO API login and password as "email:password", from dataforseo.com → API Access → API CREDENTIALS. The pre-encoded Base64 blob on that same page also works. This is the API password, NOT your dashboard login password.',
     },
   },
   {
