@@ -42,7 +42,30 @@ export default async function DashboardIndexPage(props: {
   const agent = await resolveAgentForTenant(tenant.id);
 
   return (
-    <div className="space-y-6">
+    /**
+     * 🔴 `key={tenant.slug}` IS THE TENANT-ISOLATION BOUNDARY FOR CLIENT STATE.
+     * Do not remove it, and do not "simplify" it away.
+     *
+     * Every panel below is a client component that fetches `?tenant=<slug>` and
+     * holds the result in React state. The SERVER is scoped correctly — every
+     * one of those endpoints checks workspace membership and filters by
+     * tenantId, so no data crosses a tenant boundary. But without this key,
+     * switching workspace re-renders the SAME component instances with a new
+     * prop, so each one keeps showing the previous workspace's data until its
+     * own refetch resolves — and keeps showing it FOREVER if that refetch fails.
+     *
+     * That is how one agency owner saw True Therapy's mission plan sitting under
+     * a "Max · BudgetSmart AI" header. Nothing leaked. It did not matter: on a
+     * screen share with a client, a stale transcript under another client's name
+     * is indistinguishable from a breach, and no explanation afterwards undoes
+     * what they saw.
+     *
+     * Changing the key forces React to unmount and remount the whole subtree, so
+     * every panel starts from empty state. That fixes it once, for every panel
+     * here and every panel added later — rather than relying on each new
+     * component remembering to clear itself, which six of the seven did not.
+     */
+    <div key={tenant.slug} className="space-y-6">
       {/* Header */}
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>

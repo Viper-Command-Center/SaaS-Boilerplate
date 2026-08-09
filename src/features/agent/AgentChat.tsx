@@ -263,18 +263,72 @@ export const AgentChat = (props: {
     });
   };
 
+  /**
+   * Which workspace the messages currently on screen belong to. Read inside
+   * async callbacks, where `props.tenantSlug` would be the value captured when
+   * the request STARTED rather than the workspace the user is looking at now.
+   */
+  const tenantSlugRef = useRef(props.tenantSlug);
+  useEffect(() => {
+    tenantSlugRef.current = props.tenantSlug;
+  }, [props.tenantSlug]);
+
+  /**
+   * 🔴 CROSS-WORKSPACE TRANSCRIPT BLEED — the worst-LOOKING bug this app has had.
+   *
+   * Switching workspace re-runs this (tenantSlug is a dependency) and the SERVER
+   * is scoped correctly: every conversation query is (tenantId, userId), and
+   * membership is checked before any read. No data has ever crossed a tenant
+   * boundary.
+   *
+   * But `msgs` is client state, and the old version left it untouched until the
+   * new fetch resolved. `setLoaded(false)` only adds a "Loading…" line — it does
+   * not hide the transcript. So for the width of a network round trip the
+   * PREVIOUS client's conversation sat on screen under the NEW client's header:
+   * True Therapy's work labelled "Max · BudgetSmart AI".
+   *
+   * Nothing leaked, and that is not a defence. Shown to a client over a screen
+   * share it is indistinguishable from a leak, and no explanation afterwards
+   * undoes what they saw. For an agency running several clients in one app,
+   * confidentiality has to LOOK airtight, not merely be airtight.
+   *
+   * Three fixes, because there were three ways to see it:
+   *   1. Clear on switch, synchronously — never render one workspace's messages
+   *      under another's name, not even for 200ms.
+   *   2. Clear on failure — the old `.catch` set loaded=true and left the stale
+   *      transcript up INDEFINITELY. That path was the dangerous one: not a
+   *      flicker, a permanent mislabel until the next successful load.
+   *   3. Ignore out-of-order responses — switching A→B→A quickly could land B's
+   *      history in A. Same bug, arriving by a different route.
+   */
   const loadHistory = useCallback((showSpinner: boolean) => {
+    const forSlug = props.tenantSlug;
     if (showSpinner) {
       setLoaded(false);
+      // This is what guarantees the previous workspace's messages are gone the
+      // instant the workspace changes, rather than when the network says so.
+      setMsgs([]);
     }
-    fetch(`/api/agent/history?tenant=${encodeURIComponent(props.tenantSlug)}`)
+    fetch(`/api/agent/history?tenant=${encodeURIComponent(forSlug)}`)
       .then(r => (r.ok ? r.json() : { messages: [] }))
       .then((data) => {
+        // A response that arrived after the user moved on belongs to a
+        // workspace that is no longer on screen. Drop it.
+        if (forSlug !== tenantSlugRef.current) {
+          return;
+        }
         forceScrollRef.current = true;
         setMsgs((data.messages ?? []).map((m: Msg) => ({ role: m.role, content: m.content })));
         setLoaded(true);
       })
-      .catch(() => setLoaded(true));
+      .catch(() => {
+        if (forSlug !== tenantSlugRef.current) {
+          return;
+        }
+        // Show an empty transcript rather than someone else's.
+        setMsgs([]);
+        setLoaded(true);
+      });
   }, [props.tenantSlug]);
 
   useEffect(() => {
