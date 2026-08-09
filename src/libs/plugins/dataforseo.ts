@@ -140,6 +140,59 @@ function round(n: unknown, dp = 2): number | null {
   return Number.isFinite(v) ? Number(v.toFixed(dp)) : null;
 }
 
+/**
+ * DataForSEO Labs uses TWO different item shapes, and confusing them is how the
+ * first live run came back with every volume null.
+ *
+ *   keyword_ideas / keyword_suggestions / bulk_keyword_difficulty
+ *     → the keyword's own fields sit at the TOP level:
+ *       { keyword, keyword_info: {...}, keyword_properties: {...} }
+ *
+ *   ranked_keywords
+ *     → each item pairs a keyword with the SERP element that ranks for it, so
+ *       the keyword is nested: { keyword_data: {...}, ranked_serp_element: {...} }
+ *
+ * The original trimmer read the nested shape everywhere. The keyword STRING
+ * still came through — it has a top-level fallback — so the calls looked like
+ * they worked and returned rows of real keywords with null metrics beside them,
+ * which reads as "no search volume for these terms" rather than "wrong path".
+ * A shape mismatch that returns plausible-looking empty data is worse than one
+ * that throws.
+ *
+ * Resolving both shapes here means neither endpoint has to be right about which
+ * one it is.
+ */
+type KeywordFields = { keyword: string | null; info: any; props: any };
+
+function kw(item: any): KeywordFields {
+  const nested = item?.keyword_data;
+  const src = nested ?? item;
+  return {
+    keyword: src?.keyword ?? item?.keyword ?? null,
+    info: src?.keyword_info ?? item?.keyword_info ?? null,
+    props: src?.keyword_properties ?? item?.keyword_properties ?? null,
+  };
+}
+
+/**
+ * Difficulty needs its own reader because ZERO IS NOT A SCORE HERE.
+ *
+ * DataForSEO returns 0 when it has no difficulty data for that keyword in that
+ * market — commonly on smaller locales — and 0 rendered as a difficulty means
+ * "trivially rankable", which is the single most expensive thing to be wrong
+ * about in a content plan. The first live test hit exactly this: "best
+ * budgeting app canada", 1,600 searches a month with Reddit ranking second,
+ * reported as difficulty 0.
+ *
+ * So 0 becomes null and is reported as "no data", not as "easy". A real 0 is
+ * indistinguishable from a missing 0 in this API, and between guessing "easy"
+ * and admitting we do not know, only one of them can mislead a client.
+ */
+function difficultyOf(value: unknown): number | null {
+  const v = Number(value);
+  return Number.isFinite(v) && v > 0 ? v : null;
+}
+
 const LOCATION_ARG = {
   location: { type: 'string', description: 'Country or city name exactly as DataForSEO spells it, e.g. "United States", "Canada", "United Kingdom". Default "United States" — set it, because volumes differ enormously by market.' },
   language: { type: 'string', description: 'Language name, e.g. "English", "French". Default "English".' },
@@ -333,20 +386,32 @@ export const dataforseoProvider: BuiltinProvider = {
       const { result, cost } = await call(credential, path, payload);
 
       const items = result?.[0]?.items ?? [];
-      const rows = (Array.isArray(items) ? items : []).slice(0, limit).map((r: any) => ({
-        keyword: r?.keyword_data?.keyword ?? r?.keyword,
-        volume: r?.keyword_data?.keyword_info?.search_volume ?? null,
-        cpc: round(r?.keyword_data?.keyword_info?.cpc),
-        competition: r?.keyword_data?.keyword_info?.competition ?? null,
-        difficulty: r?.keyword_data?.keyword_properties?.keyword_difficulty ?? null,
-      }));
+      const rows = (Array.isArray(items) ? items : []).slice(0, limit).map((r: any) => {
+        const k = kw(r);
+        return {
+          keyword: k.keyword,
+          volume: k.info?.search_volume ?? null,
+          cpc: round(k.info?.cpc),
+          competition: k.info?.competition ?? null,
+          difficulty: difficultyOf(k.props?.keyword_difficulty),
+        };
+      });
+      // Sort by volume so the useful end of a 200-row list is at the top rather
+      // than wherever DataForSEO's relevance ranking happened to put it.
+      rows.sort((a, b) => (Number(b.volume) || 0) - (Number(a.volume) || 0));
+      const withVolume = rows.filter(r => typeof r.volume === 'number' && r.volume > 0).length;
+
       return {
         output: JSON.stringify({
           seed: isIdeas ? (payload as any).keywords : (payload as any).keyword,
           location: loc(args).location_name,
           returned: rows.length,
+          withSearchVolume: withVolume,
           totalAvailable: result?.[0]?.total_count ?? null,
           keywords: rows,
+          note: withVolume === 0
+            ? 'Every row came back without search volume. That is normal for a very small market or a niche seed, but if it persists across seeds treat it as suspect and say so rather than reporting the keywords as zero-volume.'
+            : 'difficulty is null where DataForSEO has no data for that keyword in this market — null means UNKNOWN, not easy.',
         }),
         units: cost,
       };
@@ -362,14 +427,24 @@ export const dataforseoProvider: BuiltinProvider = {
         ...loc(args),
       });
       const items = result?.[0]?.items ?? [];
+      const rows = (Array.isArray(items) ? items : []).map((r: any) => {
+        const k = kw(r);
+        return {
+          keyword: k.keyword ?? r?.keyword,
+          difficulty: difficultyOf(r?.keyword_difficulty ?? k.props?.keyword_difficulty),
+        };
+      });
+      const unknown = rows.filter(r => r.difficulty === null).map(r => r.keyword);
+
       return {
         output: JSON.stringify({
           location: loc(args).location_name,
-          keywords: (Array.isArray(items) ? items : []).map((r: any) => ({
-            keyword: r?.keyword,
-            difficulty: r?.keyword_difficulty ?? null,
-          })),
-          note: 'Difficulty is a 0-100 estimate of how hard page one would be, not a guarantee. Under ~30 is realistic for a small site; over ~60 needs real authority.',
+          keywords: rows,
+          unknownCount: unknown.length,
+          note: 'Difficulty is a 0-100 estimate of how hard page one would be, not a guarantee. Under ~30 is realistic for a small site; over ~60 needs real authority. A NULL means DataForSEO has no difficulty for that keyword in this market — it does NOT mean easy, and must never be reported as a low score. When difficulty is null, judge the keyword from serp_overview instead: who ranks, how strong they are, and whether anyone owns position 1.',
+          ...(unknown.length > 0
+            ? { unknownKeywords: unknown.slice(0, 20) }
+            : {}),
         }),
         units: cost,
       };
@@ -431,13 +506,16 @@ export const dataforseoProvider: BuiltinProvider = {
         ...loc(args),
       });
       const items = result?.[0]?.items ?? [];
-      const rows = (Array.isArray(items) ? items : []).slice(0, limit).map((r: any) => ({
-        keyword: r?.keyword_data?.keyword,
-        position: r?.ranked_serp_element?.serp_item?.rank_absolute ?? null,
-        url: r?.ranked_serp_element?.serp_item?.url ?? null,
-        volume: r?.keyword_data?.keyword_info?.search_volume ?? null,
-        difficulty: r?.keyword_data?.keyword_properties?.keyword_difficulty ?? null,
-      }));
+      const rows = (Array.isArray(items) ? items : []).slice(0, limit).map((r: any) => {
+        const k = kw(r);
+        return {
+          keyword: k.keyword,
+          position: r?.ranked_serp_element?.serp_item?.rank_absolute ?? null,
+          url: r?.ranked_serp_element?.serp_item?.url ?? null,
+          volume: k.info?.search_volume ?? null,
+          difficulty: difficultyOf(k.props?.keyword_difficulty),
+        };
+      });
       const nearMisses = rows.filter(r => typeof r.position === 'number' && r.position >= 5 && r.position <= 20).length;
       return {
         output: JSON.stringify({
