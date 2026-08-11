@@ -1,8 +1,12 @@
 /**
  * GET    /api/tenants/[slug]/members — list members (owner/admin)
  * POST   /api/tenants/[slug]/members — add a member by email. If the user
- *        doesn't exist yet, an account is created with a generated password
- *        that is returned ONCE for the admin to share securely.
+ *        doesn't exist yet, an account is created with a generated password.
+ *        The password is EMAILED to them and also returned ONCE, so the admin
+ *        can hand it over when mail is not configured or delivery fails.
+ *        The account is flagged `mustChangePassword`, exactly as the platform
+ *        admin console does — these two paths create the same kind of account
+ *        and must not have different security properties.
  * DELETE /api/tenants/[slug]/members?userId=… — remove a member
  */
 
@@ -12,6 +16,7 @@ import { z } from 'zod';
 import { generatePassword, hashPassword } from '@/libs/auth/password';
 import { getCurrentUser } from '@/libs/auth/session';
 import { db } from '@/libs/DB';
+import { sendInviteEmail } from '@/libs/email';
 import { getUserTenants } from '@/libs/tenants';
 import { auditLog, memberships, users } from '@/models/Schema';
 
@@ -93,6 +98,9 @@ export async function POST(request: Request, ctx: { params: Promise<{ slug: stri
         emailNormalized,
         passwordHash: await hashPassword(generatedPassword),
         firstName: body.firstName?.trim() || null,
+        // The generated password is a hand-over credential, not theirs. The
+        // dashboard layout blocks everything until it has been replaced.
+        mustChangePassword: true,
       })
       .returning();
   }
@@ -110,17 +118,32 @@ export async function POST(request: Request, ctx: { params: Promise<{ slug: stri
   }
 
   await db.insert(memberships).values({ userId: member.id, tenantId: tenant.id, role: body.role });
+
+  // Tell them their account exists. Never let a failed send fail the request —
+  // the membership is already saved, and the password is returned below so the
+  // admin can always fall back to handing it over directly.
+  let emailed = false;
+  if (generatedPassword) {
+    emailed = await sendInviteEmail({
+      to: member.email,
+      firstName: member.firstName,
+      tempPassword: generatedPassword,
+      workspaceName: tenant.name,
+    }).catch(() => false);
+  }
+
   await db.insert(auditLog).values({
     tenantId: tenant.id,
     actor: user.id,
     action: 'member.add',
     target: emailNormalized,
-    detail: { role: body.role },
+    detail: { role: body.role, invited: Boolean(generatedPassword), emailed },
   }).catch(() => {});
 
   return NextResponse.json({
     ok: true,
     member: { userId: member.id, email: member.email, role: body.role },
+    emailed,
     // Returned exactly once so the admin can hand it to the client. The hash
     // is what's stored; this value is never retrievable again.
     ...(generatedPassword ? { generatedPassword } : {}),

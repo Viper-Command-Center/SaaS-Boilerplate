@@ -22,6 +22,15 @@ export default async function DashboardLayout(props: {
   if (!user) {
     redirect('/sign-in');
   }
+  /**
+   * 🔴 An admin-generated password is a plaintext string in someone's inbox.
+   * This gate is on the SERVER and covers the whole dashboard, so it cannot be
+   * skipped by navigating straight to a URL — the sign-in form used to receive
+   * `mustChangePassword` from the login response and simply discard it.
+   */
+  if (user.mustChangePassword) {
+    redirect('/change-password');
+  }
 
   const tenants = await ensureDefaultTenant(user.id, user.isAdmin);
 

@@ -13,7 +13,7 @@ import { and, desc, eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { generatePassword, hashPassword } from '@/libs/auth/password';
-import { getCurrentUser } from '@/libs/auth/session';
+import { getCurrentUser, revokeUserSessions } from '@/libs/auth/session';
 import { db } from '@/libs/DB';
 import { emailConfigured, sendInviteEmail } from '@/libs/email';
 import { auditLog, memberships, tenants, users } from '@/models/Schema';
@@ -191,6 +191,13 @@ export async function PATCH(request: Request) {
         ...(body.deleted !== undefined ? { deletedAt: body.deleted ? new Date() : null } : {}),
       })
       .where(eq(users.id, body.userId));
+
+    // Disabling an account must take effect now, not whenever their cookie
+    // expires. (`getCurrentUser` also rejects soft-deleted users, so this is
+    // belt-and-braces — but it leaves no live session rows behind either.)
+    if (body.deleted === true) {
+      await revokeUserSessions(body.userId);
+    }
   }
 
   let tempPassword: string | undefined;
@@ -200,6 +207,9 @@ export async function PATCH(request: Request) {
       .update(users)
       .set({ passwordHash: await hashPassword(tempPassword), mustChangePassword: true })
       .where(eq(users.id, body.userId));
+    // An admin resetting someone's password is usually locking an account
+    // down. Kill their live sessions or the reset changes nothing today.
+    await revokeUserSessions(body.userId);
   }
 
   if (body.addMembership) {

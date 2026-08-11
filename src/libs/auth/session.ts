@@ -15,7 +15,7 @@
  */
 
 import { randomBytes } from 'node:crypto';
-import { and, eq, gt, isNull } from 'drizzle-orm';
+import { and, eq, gt, isNull, ne } from 'drizzle-orm';
 import { jwtVerify, SignJWT } from 'jose';
 import { cookies } from 'next/headers';
 
@@ -132,6 +132,45 @@ export async function getCurrentUser() {
     .limit(1);
 
   return rows[0]?.user ?? null;
+}
+
+/** The current request's session id (`sessions.tokenId`), or null. */
+export async function getCurrentSessionId(): Promise<string | null> {
+  const jar = await cookies();
+  const token = jar.get(COOKIE_NAME)?.value;
+  if (!token) {
+    return null;
+  }
+  return (await verifySessionJwt(token))?.sid ?? null;
+}
+
+/**
+ * Revokes every live session belonging to a user, optionally sparing one.
+ *
+ * 🔴 Call this on EVERY credential change. A password change that leaves old
+ * sessions alive does not lock anyone out — which is the entire reason someone
+ * changes a password they think is compromised. `getCurrentUser` re-reads the
+ * `sessions` row on every request, so revoking here takes effect immediately
+ * rather than whenever a cookie happens to expire.
+ *
+ * `keepTokenId` is for the "I changed my own password while signed in" case:
+ * sign out every other device, but do not sign the user out of the tab they
+ * are looking at.
+ */
+export async function revokeUserSessions(
+  userId: string,
+  keepTokenId?: string | null,
+): Promise<void> {
+  await db
+    .update(sessions)
+    .set({ revokedAt: new Date() })
+    .where(
+      and(
+        eq(sessions.userId, userId),
+        isNull(sessions.revokedAt),
+        ...(keepTokenId ? [ne(sessions.tokenId, keepTokenId)] : []),
+      ),
+    );
 }
 
 export const SESSION_COOKIE_NAME = COOKIE_NAME;

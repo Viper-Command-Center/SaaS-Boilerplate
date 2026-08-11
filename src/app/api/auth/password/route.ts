@@ -11,7 +11,7 @@ import { and, eq, gt, isNull } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { hashPassword, validatePassword, verifyPassword } from '@/libs/auth/password';
-import { getCurrentUser } from '@/libs/auth/session';
+import { getCurrentSessionId, getCurrentUser, revokeUserSessions } from '@/libs/auth/session';
 import { db } from '@/libs/DB';
 import { sendPasswordResetEmail } from '@/libs/email';
 import { passwordResetTokens, users } from '@/models/Schema';
@@ -47,6 +47,11 @@ export async function PUT(request: Request) {
     .update(users)
     .set({ passwordHash: await hashPassword(newPassword), mustChangePassword: false })
     .where(eq(users.id, user.id));
+
+  // Sign out every OTHER device. Someone changing their password because they
+  // think it leaked expects exactly this; leaving old sessions live means the
+  // change accomplished nothing.
+  await revokeUserSessions(user.id, await getCurrentSessionId());
 
   return NextResponse.json({ ok: true });
 }
@@ -115,6 +120,10 @@ export async function PATCH(request: Request) {
     .update(passwordResetTokens)
     .set({ usedAt: new Date() })
     .where(eq(passwordResetTokens.id, row.id));
+
+  // A reset is completed while signed OUT, so there is no session to spare —
+  // anyone already holding one used the old password.
+  await revokeUserSessions(row.userId);
 
   return NextResponse.json({ ok: true });
 }

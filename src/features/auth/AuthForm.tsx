@@ -64,7 +64,9 @@ export const AuthForm = (props: { mode: Mode }) => {
         return;
       }
 
-      router.push('/dashboard');
+      // A temporary password must be replaced before anything else. The
+      // dashboard layout enforces this too; routing here just avoids a bounce.
+      router.push(data?.mustChangePassword ? '/change-password' : '/dashboard');
       router.refresh();
     } catch {
       setError('Network error. Please try again.');

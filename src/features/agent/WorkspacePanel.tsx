@@ -22,6 +22,7 @@ export const WorkspacePanel = (props: {
   const [firstName, setFirstName] = useState('');
   const [role, setRole] = useState('viewer');
   const [oneTimePassword, setOneTimePassword] = useState<string | null>(null);
+  const [emailed, setEmailed] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -47,6 +48,7 @@ export const WorkspacePanel = (props: {
     e.preventDefault();
     setError(null);
     setOneTimePassword(null);
+    setEmailed(false);
     setBusy(true);
     try {
       const res = await fetch(`/api/tenants/${encodeURIComponent(props.tenantSlug)}/members`, {
@@ -60,6 +62,7 @@ export const WorkspacePanel = (props: {
       } else {
         if (data?.generatedPassword) {
           setOneTimePassword(data.generatedPassword);
+          setEmailed(Boolean(data.emailed));
         }
         setEmail('');
         setFirstName('');
@@ -179,9 +182,16 @@ export const WorkspacePanel = (props: {
             {error && <p className="text-xs text-red-600" role="alert">{error}</p>}
             {oneTimePassword && (
               <p className="rounded-sm bg-muted p-2 text-xs">
-                Account created. One-time password (share securely, shown once):
+                {emailed
+                  ? 'Account created and the sign-in details were emailed to them. '
+                  : 'Account created, but the invite email could not be sent — share this yourself. '}
+                One-time password (shown once):
                 {' '}
                 <code className="font-semibold">{oneTimePassword}</code>
+                <br />
+                <span className="text-muted-foreground">
+                  They will be asked to choose their own password on first sign-in.
+                </span>
               </p>
             )}
             <Button type="submit" size="sm" disabled={busy}>{busy ? 'Adding…' : 'Add member'}</Button>
