@@ -17,6 +17,8 @@ import { requestStop } from '@/libs/agent/activeTurns';
 import { getCurrentUser } from '@/libs/auth/session';
 import { db } from '@/libs/DB';
 import { getUserTenants } from '@/libs/tenants';
+
+const SENDER_ROLES = ['owner', 'admin', 'editor'];
 import { conversations } from '@/models/Schema';
 
 export const dynamic = 'force-dynamic';
@@ -42,6 +44,11 @@ export async function POST(request: Request) {
   const tenant = (await getUserTenants(user.id)).find(t => t.slug === body.tenantSlug);
   if (!tenant) {
     return NextResponse.json({ error: 'No access to this workspace.' }, { status: 403 });
+  }
+  // Same bar as sending: a viewer who cannot start a run has no business
+  // halting someone else's.
+  if (!user.isAdmin && !SENDER_ROLES.includes(tenant.role)) {
+    return NextResponse.json({ error: 'This needs editor access.' }, { status: 403 });
   }
 
   // The user's one rolling conversation for this tenant (same query as chat).

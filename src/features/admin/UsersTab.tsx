@@ -15,7 +15,7 @@ export type AdminUser = {
 
 export type Workspace = { id: string; name: string; slug: string };
 
-const ROLES = ['viewer', 'editor', 'admin', 'owner'];
+const ROLES = ['editor', 'viewer', 'admin', 'owner'];
 
 export const UsersTab = (props: {
   users: AdminUser[];
@@ -26,7 +26,7 @@ export const UsersTab = (props: {
   const [showNew, setShowNew] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [form, setForm] = useState({ email: '', firstName: '', tenantId: '', role: 'viewer', isAdmin: false });
+  const [form, setForm] = useState({ email: '', firstName: '', tenantId: '', role: 'editor', isAdmin: false });
 
   const input = 'w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring';
 
@@ -53,7 +53,7 @@ export const UsersTab = (props: {
     setNotice(data.emailed
       ? `Invite emailed to ${form.email}.`
       : `User created. Temporary password (share securely): ${data.tempPassword}`);
-    setForm({ email: '', firstName: '', tenantId: '', role: 'viewer', isAdmin: false });
+    setForm({ email: '', firstName: '', tenantId: '', role: 'editor', isAdmin: false });
     setShowNew(false);
     props.reload();
   };
@@ -226,7 +226,7 @@ export const UsersTab = (props: {
                         text-xs text-muted-foreground
                       "
                       value=""
-                      onChange={e => e.target.value && patch(u.id, { addMembership: { tenantId: e.target.value, role: 'viewer' } }, 'Added to workspace.')}
+                      onChange={e => e.target.value && patch(u.id, { addMembership: { tenantId: e.target.value, role: 'editor' } }, 'Added to workspace.')}
                     >
                       <option value="">+ add to workspace…</option>
                       {props.workspaces

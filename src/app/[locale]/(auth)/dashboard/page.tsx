@@ -108,6 +108,7 @@ export default async function DashboardIndexPage(props: {
             agentName={agent.name}
             agentAvatarUrl={agent.avatarUrl}
             agentAccent={agent.accent}
+            canSend={canApprove}
           />
         </div>
         <div className="space-y-6">

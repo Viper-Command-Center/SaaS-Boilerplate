@@ -38,6 +38,9 @@ import { getCurrentUser } from '@/libs/auth/session';
 import { db } from '@/libs/DB';
 import { buildTenantToolset } from '@/libs/mcp/registry';
 import { getUserTenants } from '@/libs/tenants';
+
+/** Roles allowed to send the agent instructions. `viewer` is read-only. */
+const SENDER_ROLES = ['owner', 'admin', 'editor'];
 import { conversations, messages, tenants } from '@/models/Schema';
 
 export const dynamic = 'force-dynamic';
@@ -72,6 +75,25 @@ export async function POST(request: Request) {
   const tenant = (await getUserTenants(user.id)).find(t => t.slug === body.tenantSlug);
   if (!tenant) {
     return NextResponse.json({ error: 'No access to this workspace.' }, { status: 403 });
+  }
+  /**
+   * 🔴 THE AGENT IS A WRITE ACTION. Membership alone is not enough.
+   *
+   * Sending a message here can publish a page, edit a live site, or spend
+   * money — the tool loop runs with the workspace's full toolset. Before this
+   * gate, `viewer` only hid buttons in the dashboard: the role dropped every
+   * edit control and then handed the same person an agent that could do all
+   * of it anyway. A role named "viewer" that can publish is worse than no role
+   * at all, because it is handed out on the assumption that it is safe.
+   *
+   * Reading the transcript stays open to viewers (GET /api/agent/history) —
+   * watching what the agent did is the whole point of the role.
+   */
+  if (!user.isAdmin && !SENDER_ROLES.includes(tenant.role)) {
+    return NextResponse.json(
+      { error: `Talking to the agent needs editor access — your role in this workspace is "${tenant.role}".` },
+      { status: 403 },
+    );
   }
 
   // Velocity guard (Phase 27): a runaway loop hammering this route is a money

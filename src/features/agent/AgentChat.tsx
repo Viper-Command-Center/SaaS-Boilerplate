@@ -140,7 +140,18 @@ export const AgentChat = (props: {
   agentName?: string;
   agentAvatarUrl?: string | null;
   agentAccent?: string;
+  /**
+   * Whether this user may send the agent instructions. `viewer` may read the
+   * transcript but not drive the agent — sending is a write action that can
+   * publish pages and spend money.
+   *
+   * This is presentation only. /api/agent/chat enforces the same rule server
+   * side; hiding the box is so a viewer is told why, rather than typing a
+   * paragraph and collecting a 403.
+   */
+  canSend?: boolean;
 }) => {
+  const canSend = props.canSend !== false;
   const agentName = props.agentName || 'Agent';
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [input, setInput] = useState('');
@@ -809,7 +820,18 @@ export const AgentChat = (props: {
         )}
       </div>
 
-      {/* Composer */}
+      {/* Composer — replaced by a notice for read-only members. */}
+      {!canSend && (
+        <div className="border-t border-white/8 px-4 py-3 text-xs text-white/45">
+          You have read-only access to this workspace. You can follow what
+          {' '}
+          {agentName === 'Agent' ? 'the agent' : agentName}
+          {' '}
+          is doing here, but not send instructions. Ask a workspace admin for
+          editor access if you need to.
+        </div>
+      )}
+      {canSend && (
       <form
         onSubmit={send}
         className="border-t border-white/8 p-3"
@@ -939,6 +961,7 @@ export const AgentChat = (props: {
               )}
         </div>
       </form>
+      )}
     </div>
   );
 };

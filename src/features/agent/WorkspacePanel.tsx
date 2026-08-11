@@ -20,7 +20,12 @@ export const WorkspacePanel = (props: {
   const [members, setMembers] = useState<Member[]>([]);
   const [email, setEmail] = useState('');
   const [firstName, setFirstName] = useState('');
-  const [role, setRole] = useState('viewer');
+  // `editor` is the default because it is what a client who owns the site
+  // actually needs: chat, approvals, panels, files — and still no credentials,
+  // members or plugins. `viewer` is genuinely read-only now (it cannot talk to
+  // the agent), so defaulting to it just means every invite needs a second
+  // trip to change the role.
+  const [role, setRole] = useState('editor');
   const [oneTimePassword, setOneTimePassword] = useState<string | null>(null);
   const [emailed, setEmailed] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -173,8 +178,8 @@ export const WorkspacePanel = (props: {
               <input className={inputClass} type="email" placeholder="client@email.com" value={email} onChange={e => setEmail(e.target.value)} required />
               <input className={inputClass} placeholder="First name" value={firstName} onChange={e => setFirstName(e.target.value)} />
               <select className={inputClass} value={role} onChange={e => setRole(e.target.value)}>
-                <option value="viewer">viewer — dashboards only</option>
-                <option value="editor">editor — chat + approvals</option>
+                <option value="editor">editor — chat, approvals, panels</option>
+                <option value="viewer">viewer — read-only, cannot chat</option>
                 <option value="admin">admin — manage tools/members</option>
                 <option value="owner">owner — full control</option>
               </select>
