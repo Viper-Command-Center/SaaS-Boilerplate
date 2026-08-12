@@ -116,7 +116,8 @@ describe('error translation', () => {
     stubFetch('', { status: 401 });
 
     await expect(postmarkProvider.call('delivery_stats', {}, TOKEN, FROM))
-      .rejects.toThrow(/SERVER API Token/);
+      .rejects
+      .toThrow(/SERVER API Token/);
   });
 
   /**
@@ -128,21 +129,24 @@ describe('error translation', () => {
     stubFetch({ ErrorCode: 406, Message: 'You tried to send to a recipient that has been marked as inactive.' }, { status: 422 });
 
     await expect(postmarkProvider.call('send_email', { To: 'x@y.com', Subject: 's', TextBody: 'b' }, TOKEN, FROM))
-      .rejects.toThrow(/search_bounces/);
+      .rejects
+      .toThrow(/search_bounces/);
   });
 
   it('explains an unconfirmed Sender Signature (400)', async () => {
     stubFetch({ ErrorCode: 400, Message: 'Sender Signature not found.' }, { status: 422 });
 
     await expect(postmarkProvider.call('send_email', { To: 'x@y.com', Subject: 's', TextBody: 'b' }, TOKEN, FROM))
-      .rejects.toThrow(/Sender Signature/);
+      .rejects
+      .toThrow(/Sender Signature/);
   });
 
   it('keeps Postmark\'s own message for codes it has no hint for', async () => {
     stubFetch({ ErrorCode: 505, Message: 'Something specific and unusual.' }, { status: 422 });
 
     await expect(postmarkProvider.call('delivery_stats', {}, TOKEN, FROM))
-      .rejects.toThrow(/Something specific and unusual/);
+      .rejects
+      .toThrow(/Something specific and unusual/);
   });
 
   it('refuses to run at all without a token', async () => {
@@ -311,7 +315,8 @@ describe('postmark_call escape hatch', () => {
 
   it('rejects a method outside the allowed set', async () => {
     await expect(postmarkProvider.call('postmark_call', { path: '/x', method: 'TRACE' }, TOKEN, FROM))
-      .rejects.toThrow(/Unsupported method/);
+      .rejects
+      .toThrow(/Unsupported method/);
   });
 });
 

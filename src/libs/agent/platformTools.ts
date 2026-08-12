@@ -703,7 +703,7 @@ export function buildPlatformTools(tenantId: string): {
       if (args.startAt !== undefined && args.startAt !== null && String(args.startAt).trim() !== '') {
         const parsed = new Date(String(args.startAt));
         if (Number.isNaN(parsed.getTime())) {
-          throw new Error(`Could not read startAt "${String(args.startAt)}". Use ISO 8601, e.g. 2026-08-14T13:00:00Z.`);
+          throw new TypeError(`Could not read startAt "${String(args.startAt)}". Use ISO 8601, e.g. 2026-08-14T13:00:00Z.`);
         }
         if (parsed.getTime() > Date.now()) {
           nextRunAt = parsed;

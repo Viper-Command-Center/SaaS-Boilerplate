@@ -132,7 +132,6 @@ function flattenMcpContent(blocks: McpContentBlock[]): string {
 
 const NAME_RE = /^mcp__([a-z0-9-]+)__.+$/i;
 
-
 function sanitize(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9-]/g, '-');
 }

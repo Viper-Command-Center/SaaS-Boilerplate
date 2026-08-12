@@ -148,7 +148,7 @@ export async function POST(request: Request) {
       ok: false,
       error: message,
       wallClockSeconds: Math.round((Date.now() - started) / 1000),
-      hint: /printToPDF|not.*(found|supported|allowed)|Protocol error/i.test(message)
+      hint: /printToPDF|not.*(?:found|supported|allowed)|Protocol error/i.test(message)
         ? 'AgentCore appears to disallow Page.printToPDF on its managed browser. That kills this approach — the fallbacks are a pure-JS renderer or Chromium installed into the Railway image.'
         : 'Not necessarily a printToPDF problem — check whether the session started at all (AWS credentials, browser id, region).',
     }, { status: 502 });

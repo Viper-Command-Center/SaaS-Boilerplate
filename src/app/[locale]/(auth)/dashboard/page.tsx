@@ -1,6 +1,7 @@
 import { setRequestLocale } from 'next-intl/server';
 import { AgentChat } from '@/features/agent/AgentChat';
 import { ApprovalsPanel } from '@/features/agent/ApprovalsPanel';
+import { ChatJumpButton } from '@/features/agent/ChatJumpButton';
 import { EmployeePanel } from '@/features/agent/EmployeePanel';
 import { MissionsPanel } from '@/features/agent/MissionsPanel';
 
@@ -92,41 +93,83 @@ export default async function DashboardIndexPage(props: {
         </span>
       </div>
 
-      {/* Panels the agent built — draggable for editors and up */}
-      <PanelsGrid tenantSlug={tenant.slug} canEdit={canApprove} />
+      {/*
+        Dashboard content and chat share one grid so that CHAT CAN STAY ON
+        SCREEN while the panels scroll past it.
 
-      {/* Agent + side rail */}
+        Chat used to sit BELOW PanelsGrid, and the grid grows without bound as
+        the agent adds panels and views — so the better a workspace's dashboard
+        got, the further its chat box was pushed off the bottom of the page. The
+        thing you talk to should not become progressively harder to reach the
+        more you use the product.
+
+        🔴 `lg:items-start` IS LOAD-BEARING, not cosmetic. Grid items stretch to
+        the row height by default, which makes a sticky child exactly as tall as
+        its container and therefore gives it nothing to scroll within — sticky
+        then silently does nothing at all. `items-start` lets the short column
+        stay short so the tall one can scroll past it.
+
+        `min-w-0` on the wide column is the other classic grid trap: without it
+        a wide panel (a table, a long URL) refuses to shrink and blows the whole
+        layout out sideways instead of scrolling inside its own card.
+      */}
       <div className="
-        grid gap-6
+        grid items-start gap-6
         lg:grid-cols-3
       "
       >
-        <div className="lg:col-span-2">
-          <AgentChat
-            tenantSlug={tenant.slug}
-            tenantName={tenant.name}
-            agentName={agent.name}
-            agentAvatarUrl={agent.avatarUrl}
-            agentAccent={agent.accent}
-            canSend={canApprove}
-          />
+        <div className="
+          min-w-0 space-y-6
+          lg:col-span-2
+        "
+        >
+          {/* Panels the agent built — draggable for editors and up */}
+          <PanelsGrid tenantSlug={tenant.slug} canEdit={canApprove} />
+
+          {canManage && (
+            <WorkspacePanel
+              tenantSlug={tenant.slug}
+              canManageMembers={canManage}
+              isPlatformAdmin={isPlatformAdmin}
+            />
+          )}
         </div>
-        <div className="space-y-6">
+
+        <div className="min-w-0 space-y-6">
+          {/*
+            Only the CHAT is sticky, not the whole rail. A sticky wrapper around
+            chat + rail would be taller than the viewport, and a sticky element
+            taller than the viewport has its bottom permanently cut off — the
+            Tools panel would become unreachable. Chat is 62vh, so it fits with
+            room to spare, and the rail scrolls beneath it as normal.
+          */}
+          <div id="agent-chat" className="lg:sticky lg:top-6">
+            <AgentChat
+              tenantSlug={tenant.slug}
+              tenantName={tenant.name}
+              agentName={agent.name}
+              agentAvatarUrl={agent.avatarUrl}
+              agentAccent={agent.accent}
+              canSend={canApprove}
+            />
+          </div>
+
           {canManage && <EmployeePanel tenantSlug={tenant.slug} />}
           <MissionsPanel tenantSlug={tenant.slug} canControl={canApprove} />
           {canApprove && <ApprovalsPanel tenantSlug={tenant.slug} />}
           {canManage && <ToolsPanel tenantSlug={tenant.slug} />}
         </div>
-
       </div>
 
-      {canManage && (
-        <WorkspacePanel
-          tenantSlug={tenant.slug}
-          canManageMembers={canManage}
-          isPlatformAdmin={isPlatformAdmin}
-        />
-      )}
+      {/*
+        Mobile only. Sticky does nothing in a single column, so below `lg` the
+        chat is still rendered after the dashboard — which is exactly where the
+        original complaint came from. Renders nothing while chat is on screen.
+
+        Inside the keyed subtree deliberately: it unmounts on workspace switch
+        like everything else here.
+      */}
+      <ChatJumpButton targetId="agent-chat" agentName={agent.name} />
     </div>
   );
 };

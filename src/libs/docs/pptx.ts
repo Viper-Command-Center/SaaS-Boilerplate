@@ -141,13 +141,24 @@ export async function renderDeck(spec: DeckSpec): Promise<DeckResult> {
   const cover = pptx.addSlide();
   cover.background = { color: theme.background };
   cover.addText(spec.title, {
-    x: MARGIN, y: 2.5, w: contentWidth, h: 1.6,
-    fontSize: 48, bold: true, color: theme.text, fontFace: theme.fontFace,
+    x: MARGIN,
+    y: 2.5,
+    w: contentWidth,
+    h: 1.6,
+    fontSize: 48,
+    bold: true,
+    color: theme.text,
+    fontFace: theme.fontFace,
   });
   if (spec.subtitle) {
     cover.addText(spec.subtitle, {
-      x: MARGIN, y: 4.1, w: contentWidth, h: 0.9,
-      fontSize: 22, color: theme.muted, fontFace: theme.fontFace,
+      x: MARGIN,
+      y: 4.1,
+      w: contentWidth,
+      h: 0.9,
+      fontSize: 22,
+      color: theme.muted,
+      fontFace: theme.fontFace,
     });
   }
   cover.addShape('rect', { x: MARGIN, y: 2.15, w: 1.6, h: 0.09, fill: { color: theme.accent } });
@@ -164,13 +175,26 @@ export async function renderDeck(spec: DeckSpec): Promise<DeckResult> {
     // A section divider centres its title and shows nothing else.
     if (layout === 'section') {
       slide.addText(String(s.title ?? ''), {
-        x: MARGIN, y: 3.0, w: contentWidth, h: 1.5,
-        fontSize: 40, bold: true, color: theme.text, fontFace: theme.fontFace, align: 'center',
+        x: MARGIN,
+        y: 3.0,
+        w: contentWidth,
+        h: 1.5,
+        fontSize: 40,
+        bold: true,
+        color: theme.text,
+        fontFace: theme.fontFace,
+        align: 'center',
       });
       if (s.subtitle) {
         slide.addText(String(s.subtitle), {
-          x: MARGIN, y: 4.4, w: contentWidth, h: 0.8,
-          fontSize: 20, color: theme.muted, fontFace: theme.fontFace, align: 'center',
+          x: MARGIN,
+          y: 4.4,
+          w: contentWidth,
+          h: 0.8,
+          fontSize: 20,
+          color: theme.muted,
+          fontFace: theme.fontFace,
+          align: 'center',
         });
       }
       continue;
@@ -178,13 +202,24 @@ export async function renderDeck(spec: DeckSpec): Promise<DeckResult> {
 
     if (layout === 'quote') {
       slide.addText(`“${String(s.title ?? '')}”`, {
-        x: MARGIN, y: 2.4, w: contentWidth, h: 2.2,
-        fontSize: 34, italic: true, color: theme.text, fontFace: theme.fontFace,
+        x: MARGIN,
+        y: 2.4,
+        w: contentWidth,
+        h: 2.2,
+        fontSize: 34,
+        italic: true,
+        color: theme.text,
+        fontFace: theme.fontFace,
       });
       if (s.subtitle) {
         slide.addText(`— ${String(s.subtitle)}`, {
-          x: MARGIN, y: 4.7, w: contentWidth, h: 0.6,
-          fontSize: 18, color: theme.muted, fontFace: theme.fontFace,
+          x: MARGIN,
+          y: 4.7,
+          w: contentWidth,
+          h: 0.6,
+          fontSize: 18,
+          color: theme.muted,
+          fontFace: theme.fontFace,
         });
       }
       continue;
@@ -193,8 +228,14 @@ export async function renderDeck(spec: DeckSpec): Promise<DeckResult> {
     // Every remaining layout carries a heading in the same place.
     if (s.title) {
       slide.addText(String(s.title), {
-        x: MARGIN, y: 0.7, w: contentWidth, h: 0.9,
-        fontSize: 32, bold: true, color: theme.text, fontFace: theme.fontFace,
+        x: MARGIN,
+        y: 0.7,
+        w: contentWidth,
+        h: 0.9,
+        fontSize: 32,
+        bold: true,
+        color: theme.text,
+        fontFace: theme.fontFace,
       });
       slide.addShape('rect', { x: MARGIN, y: 1.62, w: 1.1, h: 0.06, fill: { color: theme.accent } });
     }
@@ -210,8 +251,15 @@ export async function renderDeck(spec: DeckSpec): Promise<DeckResult> {
       slide.addText(
         items.map(text => ({ text, options: { bullet: true, breakLine: true } })),
         {
-          x: MARGIN, y: bodyY, w: contentWidth, h: bodyH,
-          fontSize, color: theme.text, fontFace: theme.fontFace, lineSpacingMultiple: 1.35, valign: 'top',
+          x: MARGIN,
+          y: bodyY,
+          w: contentWidth,
+          h: bodyH,
+          fontSize,
+          color: theme.text,
+          fontFace: theme.fontFace,
+          lineSpacingMultiple: 1.35,
+          valign: 'top',
         },
       );
       continue;
@@ -230,7 +278,9 @@ export async function renderDeck(spec: DeckSpec): Promise<DeckResult> {
         rows.push(r.map(c => ({ text: String(c ?? ''), options: { color: theme.text } })));
       }
       slide.addTable(rows, {
-        x: MARGIN, y: bodyY, w: contentWidth,
+        x: MARGIN,
+        y: bodyY,
+        w: contentWidth,
         fontSize: rows.length > 9 ? 12 : 14,
         fontFace: theme.fontFace,
         border: { type: 'solid', color: '334155', pt: 1 },
@@ -244,21 +294,35 @@ export async function renderDeck(spec: DeckSpec): Promise<DeckResult> {
       if (data) {
         slide.addImage({
           data,
-          x: MARGIN, y: bodyY, w: contentWidth, h: bodyH - (s.caption ? 0.5 : 0),
+          x: MARGIN,
+          y: bodyY,
+          w: contentWidth,
+          h: bodyH - (s.caption ? 0.5 : 0),
           sizing: { type: 'contain', w: contentWidth, h: bodyH - (s.caption ? 0.5 : 0) },
         });
       } else {
         // Say so on the slide. A silently missing image is discovered by the
         // client, in the meeting.
         slide.addText(`[image could not be loaded: ${String(s.imageUrl).slice(0, 80)}]`, {
-          x: MARGIN, y: bodyY, w: contentWidth, h: 0.6,
-          fontSize: 14, color: theme.muted, fontFace: theme.fontFace, italic: true,
+          x: MARGIN,
+          y: bodyY,
+          w: contentWidth,
+          h: 0.6,
+          fontSize: 14,
+          color: theme.muted,
+          fontFace: theme.fontFace,
+          italic: true,
         });
       }
       if (s.caption) {
         slide.addText(String(s.caption), {
-          x: MARGIN, y: H - 1.1, w: contentWidth, h: 0.5,
-          fontSize: 14, color: theme.muted, fontFace: theme.fontFace,
+          x: MARGIN,
+          y: H - 1.1,
+          w: contentWidth,
+          h: 0.5,
+          fontSize: 14,
+          color: theme.muted,
+          fontFace: theme.fontFace,
         });
       }
       continue;
@@ -268,8 +332,14 @@ export async function renderDeck(spec: DeckSpec): Promise<DeckResult> {
     // rather than emitting an empty slide with no explanation.
     if (s.subtitle) {
       slide.addText(String(s.subtitle), {
-        x: MARGIN, y: bodyY, w: contentWidth, h: bodyH,
-        fontSize: 20, color: theme.muted, fontFace: theme.fontFace, valign: 'top',
+        x: MARGIN,
+        y: bodyY,
+        w: contentWidth,
+        h: bodyH,
+        fontSize: 20,
+        color: theme.muted,
+        fontFace: theme.fontFace,
+        valign: 'top',
       });
     }
   }
