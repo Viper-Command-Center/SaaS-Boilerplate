@@ -103,6 +103,47 @@ type McpContentBlock = { type: string; text?: string; [k: string]: unknown };
  * context window and the model cannot read it anyway. We describe it instead.
  */
 /**
+ * Turn a third-party tool error into one the agent can act on.
+ *
+ * 🔴 A vendor's validation error names the parameter but not whose fault it is,
+ * and an agent reading "missing required parameter: owner" reasonably concludes
+ * the PLATFORM is misconfigured — because from inside a tool call it cannot see
+ * whether the argument was dropped upstream or never supplied.
+ *
+ * That is exactly what happened: an AI employee omitted `owner` on a GitHub
+ * call, read the rejection as an Artivio config bug, and asked the human to file
+ * a ticket for a default-owner setting that does not exist and could not exist.
+ * Nothing here ever injects or defaults tool arguments — `args` go to the server
+ * verbatim — so a missing required parameter is always the caller's to fix.
+ *
+ * Saying which required parameters were absent, and that this is not a platform
+ * problem, converts a dead end into a retry.
+ */
+function explainToolError(
+  raw: string,
+  inputSchema: Record<string, unknown> | undefined,
+  args: Record<string, unknown>,
+): string {
+  const base = raw.slice(0, 4000) || 'Tool reported an error.';
+  const required = Array.isArray(inputSchema?.required)
+    ? (inputSchema.required as unknown[]).map(String)
+    : [];
+  if (!required.length) {
+    return base;
+  }
+
+  const missing = required.filter((k) => {
+    const v = args?.[k];
+    return v === undefined || v === null || v === '';
+  });
+  if (!missing.length) {
+    return base;
+  }
+
+  return `${base}\n\n[Your call omitted required parameter(s): ${missing.join(', ')}. This tool requires: ${required.join(', ')}. Supply them and call it again — arguments are passed to the server exactly as you provide them, so this is a malformed call, NOT a platform misconfiguration. Do not report it as one.]`;
+}
+
+/**
  * How much tool output goes straight into the model's context.
  *
  * Not a guess about what is "enough" — it is a context-budget decision. A few
@@ -604,9 +645,9 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
                 const result = await client.callTool(tool.name, args);
                 const raw = flattenMcpContent(result.content);
                 if (result.isError) {
-                  // Errors are short and must stay verbatim — never spill one to a
-                  // file the agent then has to go and open.
-                  throw new Error(raw.slice(0, 4000) || 'Tool reported an error.');
+                  // Errors stay verbatim and short — never spill one to a file the
+                  // agent then has to go and open — but do say whose fault it is.
+                  throw new Error(explainToolError(raw, tool.inputSchema, args));
                 }
                 const text = await capToolOutput({
                   text: raw,
@@ -693,9 +734,9 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
               const result = await client.callTool(tool.name, args);
               const raw = flattenMcpContent(result.content);
               if (result.isError) {
-                // Errors are short and must stay verbatim — never spill one to a
-                // file the agent then has to go and open.
-                throw new Error(raw.slice(0, 4000) || 'Tool reported an error.');
+                // Errors stay verbatim and short — never spill one to a file the
+                // agent then has to go and open — but do say whose fault it is.
+                throw new Error(explainToolError(raw, tool.inputSchema, args));
               }
               const text = await capToolOutput({
                 text: raw,
