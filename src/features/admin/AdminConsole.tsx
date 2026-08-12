@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { CatalogTab } from '@/features/admin/CatalogTab';
 import { IssuesTab } from '@/features/admin/IssuesTab';
+import { PersonasTab } from '@/features/admin/PersonasTab';
 import { UsersTab } from '@/features/admin/UsersTab';
 
 type Workspace = {
@@ -28,7 +29,7 @@ type Workspace = {
 const money = (n: number) => `$${n.toFixed(2)}`;
 
 export const AdminConsole = () => {
-  const [tab, setTab] = useState<'workspaces' | 'users' | 'catalog' | 'issues'>('workspaces');
+  const [tab, setTab] = useState<'workspaces' | 'users' | 'catalog' | 'employees' | 'issues'>('workspaces');
   const [openIssues, setOpenIssues] = useState(0);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [totals, setTotals] = useState({ cost: 0, billed: 0, margin: 0, users: 0, workspaces: 0 });
@@ -104,6 +105,7 @@ export const AdminConsole = () => {
         <button type="button" className={tabClass('workspaces')} onClick={() => setTab('workspaces')}>Workspaces</button>
         <button type="button" className={tabClass('users')} onClick={() => setTab('users')}>Users</button>
         <button type="button" className={tabClass('catalog')} onClick={() => setTab('catalog')}>Plugin catalog</button>
+        <button type="button" className={tabClass('employees')} onClick={() => setTab('employees')}>AI employees</button>
         <button type="button" className={tabClass('issues')} onClick={() => setTab('issues')}>
           Issues
           {openIssues > 0 && (
@@ -214,6 +216,8 @@ export const AdminConsole = () => {
       )}
 
       {tab === 'catalog' && <CatalogTab catalog={catalog} builtins={builtins} presets={presets} reload={reload} />}
+
+      {tab === 'employees' && <PersonasTab />}
 
       {tab === 'issues' && <IssuesTab />}
     </div>
