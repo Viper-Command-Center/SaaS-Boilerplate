@@ -64,3 +64,9 @@ build-archive.log
 /test-results/
 /playwright-report/
 /playwright/.cache/
+
+# Scratch folder for files an agent working over the mounted filesystem cannot
+# delete (device_bash has no unlink permission) — chiefly stale .git/*.lock
+# files, which would otherwise block the next git command on Windows. Safe to
+# delete this folder at any time.
+_to_delete/
