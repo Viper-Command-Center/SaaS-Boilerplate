@@ -16,7 +16,7 @@
  * Cost is per session-second, so every session is stopped in a `finally`.
  */
 
-import type { Buffer } from 'node:buffer';
+import { Buffer } from 'node:buffer';
 import WebSocket from 'ws';
 import { awsCreds, awsRegion, signRequest } from '@/libs/aws/sigv4';
 
@@ -480,6 +480,125 @@ export async function inspectLayout(a: {
  * text. Stateless: the session is started and stopped inside this call, so we
  * never leak a paid-for browser.
  */
+export type PdfResult = {
+  pdf: Buffer;
+  bytes: number;
+  /** Seconds the browser session was alive — this is what we bill. */
+  sessionSeconds: number;
+};
+
+/**
+ * Render HTML (or a live URL) to a PDF, in the same AWS Chrome everything else
+ * here uses.
+ *
+ * WHY THIS AND NOT A PDF LIBRARY. The alternatives are worse for this codebase.
+ * Puppeteer or Playwright at runtime means shipping a ~300MB Chromium into the
+ * Railway image, which the Nixpacks build does not currently install and which
+ * would slow every deploy for a feature used occasionally. A pure-JS library
+ * (pdfkit, pdf-lib) draws boxes and text but does not do CSS layout, so the
+ * agent would have to compute positions by hand — hopeless for a slide deck.
+ * We already pay for a real headless Chrome that speaks CDP, and `Page.printToPDF`
+ * is one more command on the socket we already have open. No new dependency,
+ * no image bloat, full CSS.
+ *
+ * Cost: a render is a few browser-seconds, so fractions of a cent at the usual
+ * $0.11/hour — but it is metered like every other session, not free.
+ */
+export async function renderPdf(a: {
+  /** Inline HTML. Ignored when `url` is set. */
+  html?: string;
+  /** Render a live page instead of inline HTML. */
+  url?: string;
+  landscape?: boolean;
+  /** Inches. Default US Letter; a 16:9 slide is 13.333 x 7.5. */
+  paperWidthIn?: number;
+  paperHeightIn?: number;
+  marginIn?: number;
+  waitMs?: number;
+  /**
+   * Let the document's own `@page { size: … }` win over paperWidth/Height.
+   * On by default: a deck that declares its own page size is the common case,
+   * and silently overriding it produces slides cropped to Letter.
+   */
+  preferCssPageSize?: boolean;
+  /**
+   * 'screen' (default) or 'print'. Chrome switches to print media for
+   * printToPDF unless told otherwise, which strips the screen styling that
+   * agent-authored HTML is invariably written in — dark slide backgrounds
+   * vanish and the deck comes out white.
+   */
+  media?: 'screen' | 'print';
+}): Promise<PdfResult> {
+  if (!a.html && !a.url) {
+    throw new Error('renderPdf needs html or url.');
+  }
+
+  const started = Date.now();
+  const session = await startSession(300);
+  let cdp: Cdp | undefined;
+
+  try {
+    cdp = await Cdp.connect(session.wsEndpoint);
+    const pageSession = await attachPage(cdp);
+
+    if (a.url) {
+      await cdp.send('Page.navigate', { url: a.url }, pageSession);
+    } else {
+      // setDocumentContent needs the frame it is replacing; there is no
+      // "current frame" shorthand in CDP.
+      const { frameTree } = await cdp.send('Page.getFrameTree', {}, pageSession) as {
+        frameTree: { frame: { id: string } };
+      };
+      await cdp.send(
+        'Page.setDocumentContent',
+        { frameId: frameTree.frame.id, html: a.html },
+        pageSession,
+      );
+    }
+
+    await cdp.send('Emulation.setEmulatedMedia', { media: a.media ?? 'screen' }, pageSession);
+
+    // Same crude wait as renderPage. It matters more here: setDocumentContent
+    // resolves as soon as the HTML is parsed, NOT when its webfonts and images
+    // have loaded, so printing immediately yields a PDF in fallback fonts with
+    // blank image boxes — and it looks like a styling bug, not a timing one.
+    await new Promise(r => setTimeout(r, Math.min(Math.max(a.waitMs ?? 2000, 250), 15_000)));
+
+    const { data } = await cdp.send('Page.printToPDF', {
+      landscape: Boolean(a.landscape),
+      printBackground: true,
+      preferCSSPageSize: a.preferCssPageSize !== false,
+      paperWidth: a.paperWidthIn ?? 8.5,
+      paperHeight: a.paperHeightIn ?? 11,
+      marginTop: a.marginIn ?? 0.4,
+      marginBottom: a.marginIn ?? 0.4,
+      marginLeft: a.marginIn ?? 0.4,
+      marginRight: a.marginIn ?? 0.4,
+    }, pageSession) as { data: string };
+
+    if (!data) {
+      throw new Error('Chrome returned an empty PDF.');
+    }
+
+    const pdf = Buffer.from(data, 'base64');
+    // A valid PDF starts with %PDF-. Checking here turns a silent zero-byte or
+    // truncated download into an error at the point it happened.
+    if (pdf.length < 1000 || pdf.subarray(0, 5).toString() !== '%PDF-') {
+      throw new Error(`Chrome returned ${pdf.length} bytes that are not a PDF.`);
+    }
+
+    return {
+      pdf,
+      bytes: pdf.length,
+      sessionSeconds: Math.max(1, Math.round((Date.now() - started) / 1000)),
+    };
+  } finally {
+    cdp?.close();
+    // Always stop — an orphaned session bills until its timeout expires.
+    await stopSession(session.sessionId);
+  }
+}
+
 export async function renderPage(a: {
   url: string;
   waitMs?: number;
