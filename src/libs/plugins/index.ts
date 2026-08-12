@@ -12,6 +12,7 @@ import { elementorProvider } from '@/libs/plugins/elementor';
 import { googleAnalyticsProvider } from '@/libs/plugins/googleAnalytics';
 import { heygenProvider } from '@/libs/plugins/heygen';
 import { kieProvider } from '@/libs/plugins/kie';
+import { smartermailProvider } from '@/libs/plugins/smartermail';
 import { whmcsProvider } from '@/libs/plugins/whmcs';
 import { wordpressProvider } from '@/libs/plugins/wordpress';
 
@@ -25,6 +26,7 @@ export const BUILTIN_PROVIDERS: Record<string, BuiltinProvider> = {
   [elementorProvider.slug]: elementorProvider,
   [dataforseoProvider.slug]: dataforseoProvider,
   [whmcsProvider.slug]: whmcsProvider,
+  [smartermailProvider.slug]: smartermailProvider,
 };
 
 export function getBuiltinProvider(slug: string): BuiltinProvider | undefined {
@@ -264,6 +266,38 @@ export const CATALOG_PRESETS = [
       // Built-in rather than http: WHMCS has no MCP server, and its API is a
       // form-encoded POST to includes/api.php that answers 200 OK to failures.
       authHint: 'WHMCS API credentials as "identifier:secret" — WHMCS → Configuration → System Settings → API Credentials (the admin role attached needs the "API Access" permission). ⚠️ WHMCS restricts the API by IP address by default, and Artivio calls from a cloud host whose outbound address changes, so an allowlist will not hold. Add $api_access_key = \'some-long-random-passphrase\'; to the installation\'s configuration.php and paste the credential as "identifier:secret:accesskey". The connection URL is the WHMCS installation ROOT (the folder containing includes/api.php), e.g. https://billing.example.com.',
+    },
+  },
+  {
+    key: 'cloudflare',
+    label: 'Cloudflare (DNS + the whole API)',
+    entry: {
+      slug: 'cloudflare',
+      name: 'Cloudflare',
+      description: 'Manage DNS records, zones and the rest of Cloudflare — point a domain at a new host, fix a broken record, add the SPF/DKIM/DMARC entries that decide whether a domain\'s mail is trusted.',
+      category: 'dev',
+      // Cloudflare's own hosted MCP server. It prefers OAuth, which Artivio's
+      // MCP client cannot do, but the docs explicitly support a Cloudflare API
+      // token as a static bearer for automation — so no adapter is needed. It
+      // covers ~2,500 endpoints through a search-and-execute pattern rather
+      // than one tool per endpoint, so it stays cheap in context.
+      transport: 'http' as const,
+      url: 'https://mcp.cloudflare.com/mcp',
+      authHeader: 'Authorization',
+      authHint: 'Bearer <API token> from dash.cloudflare.com → My Profile → API Tokens → Create Token. Scope it to Zone:Read + DNS:Edit across the zones you want reachable and nothing else — this server also fronts Workers, R2, firewall and Zero Trust, and the token is the only thing deciding how far a mistake reaches. Keep the "Bearer " prefix. This is separate from the Cloudflare Web Analytics plugin, which reads traffic data and needs its own Account Analytics:Read token.',
+    },
+  },
+  {
+    key: 'smartermail',
+    label: 'SmarterMail (mail server)',
+    entry: {
+      slug: 'smartermail',
+      name: 'SmarterMail',
+      description: 'Run and troubleshoot the mail server — domains and DKIM/SPF, mailboxes, aliases and forwards, the delivery spool, bounce reasons, spam scores and blocked IPs.',
+      category: 'ops',
+      transport: 'builtin' as const,
+      provider: 'smartermail',
+      authHint: 'A SmarterMail login as "username:password". ⚠️ SmarterMail issues no API keys — this is a real account, so create a dedicated SYSTEM ADMINISTRATOR account for Artivio (e.g. artivio@yourdomain.com) rather than reusing your own: it can be revoked on its own, and its actions are distinguishable in SmarterMail\'s logs. A domain admin account cannot reach domains, the spool or blocked IPs, which rules out most delivery troubleshooting. The connection URL is the mail server base address, e.g. https://mail.example.com.',
     },
   },
   {
