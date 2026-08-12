@@ -362,6 +362,15 @@ export const scheduledTasks = pgTable(
     prompt: text('prompt').notNull(),
     intervalMinutes: integer('interval_minutes').notNull().default(1440), // daily
     nextRunAt: timestamp('next_run_at', { withTimezone: true }).notNull().defaultNow(),
+    /**
+     * True = fire ONCE at nextRunAt, then disable instead of repeating.
+     *
+     * Added for scheduled email (Postmark has no send-at of its own, so a
+     * "send this Friday 9am" becomes a task). Without it every one-off send
+     * would re-fire on the interval forever — for a mailing list that is not a
+     * nuisance, it is a deliverability incident.
+     */
+    runOnce: boolean('run_once').notNull().default(false),
     enabled: boolean('enabled').notNull().default(true),
     lastRunAt: timestamp('last_run_at', { withTimezone: true }),
     lastResult: text('last_result'),

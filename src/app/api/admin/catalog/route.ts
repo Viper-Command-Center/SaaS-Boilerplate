@@ -43,7 +43,17 @@ const CreateSchema = z.object({
   provider: z.string().max(60).optional(), // builtin/stdio: the adapter or allowlist key
   url: z.string().url().max(2000).optional(), // http only
   authHeader: z.string().max(80).optional(),
-  authHint: z.string().max(200).optional(),
+  /**
+   * 2000, not 200. authHint is the setup instructions a client reads while
+   * pasting a credential, and the ones that matter are long: which of several
+   * tokens to use, where in a vendor dashboard it hides, and the trap that
+   * silently breaks the connection ("use a restricted key, not a secret key";
+   * "the site must ALSO have the agent plugin installed"). The old cap was
+   * below SIX of the shipped CATALOG_PRESETS, so one-click add — the whole
+   * point of a preset — failed validation on the presets that most needed the
+   * explanation. The column is `text`; nothing but this number was limiting it.
+   */
+  authHint: z.string().max(2000).optional(),
   credentialValue: z.string().max(4000).optional(), // tier1 only
   priceRules: z.record(z.string(), PriceRuleSchema).optional(),
 });
@@ -225,7 +235,7 @@ const UpdateSchema = z.object({
   provider: z.string().max(60).nullable().optional(),
   url: z.string().max(2000).nullable().optional(),
   authHeader: z.string().max(80).nullable().optional(),
-  authHint: z.string().max(200).nullable().optional(),
+  authHint: z.string().max(2000).nullable().optional(),
   enabled: z.boolean().optional(),
   priceRules: z.record(z.string(), PriceRuleSchema).optional(),
   /** Rotate (or set for the first time) the platform credential. */

@@ -117,7 +117,7 @@ export async function POST(request: Request) {
     .orderBy(asc(scheduledTasks.nextRunAt))
     .limit(MAX_TASKS_PER_TICK);
 
-  const results: Array<{ id: string; name: string; ok: boolean; continued?: boolean }> = [];
+  const results: Array<{ id: string; name: string; ok: boolean; continued?: boolean; retired?: boolean }> = [];
 
   for (const task of due) {
     // Tasks may not eat the missions' time slice. An unclaimed task is still
@@ -205,11 +205,17 @@ Check the current workspace state with your read tools (list_views, list_panels,
       output = `Run failed: ${err instanceof Error ? err.message : 'unknown error'}`;
     }
 
+    // A run-once task retires itself after it actually completes. Deliberately
+    // NOT on failure and NOT mid-continuation: the claim above already pushed
+    // nextRunAt forward, so a failed one-off gets exactly one more attempt at
+    // the next interval instead of vanishing silently, and a continued run is
+    // still unfinished work.
+    const retire = ok && !continued && task.runOnce;
     await db
       .update(scheduledTasks)
-      .set({ lastResult: output.slice(0, 4000) })
+      .set({ lastResult: output.slice(0, 4000), ...(retire ? { enabled: false } : {}) })
       .where(eq(scheduledTasks.id, task.id));
-    results.push({ id: task.id, name: task.name, ok, ...(continued ? { continued } : {}) });
+    results.push({ id: task.id, name: task.name, ok, ...(continued ? { continued } : {}), ...(retire ? { retired: true } : {}) });
   }
 
   // ── Mission steps (Phase 27; multi-step ticks since Phase 28.2) ──────────

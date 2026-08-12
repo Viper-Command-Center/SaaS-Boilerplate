@@ -205,13 +205,15 @@ export function buildPlatformTools(tenantId: string): {
     },
     {
       name: 'create_scheduled_task',
-      description: 'Create a standing mission that runs automatically on an interval (min 15 minutes). Write the prompt as complete instructions to your future self — each run starts fresh with this prompt plus all workspace tools. Use for recurring work: "publish an SEO blog post every Monday", "collect analytics nightly", "work toward the customer goal every 4 hours and report progress to the goal_progress dataset".',
+      description: 'Create a task that runs automatically — either repeating on an interval (min 15 minutes) or ONCE at a future time. Write the prompt as complete instructions to your future self — each run starts fresh with this prompt plus all workspace tools. Recurring: "publish an SEO blog post every Monday", "collect analytics nightly". One-off: set startAt and once=true — this is how anything gets SENT later, including email, since no email provider here can schedule its own delivery.',
       input_schema: {
         type: 'object',
         properties: {
           name: { type: 'string' },
           prompt: { type: 'string', description: 'Full self-contained instructions for each run' },
-          intervalMinutes: { type: 'number', description: 'Minutes between runs (min 15, default 1440 = daily)' },
+          intervalMinutes: { type: 'number', description: 'Minutes between runs (min 15, default 1440 = daily). Ignored for the schedule itself when once=true, but still used as the retry gap if the single run fails.' },
+          startAt: { type: 'string', description: 'ISO 8601 time of the FIRST run, e.g. "2026-08-14T13:00:00Z". Omit to start at the next cron tick. Times are UTC unless the string carries an offset — convert from the workspace timezone before passing it.' },
+          once: { type: 'boolean', description: 'True = run once at startAt then disable. ALWAYS set this for one-off actions such as sending a specific email — without it the task repeats on the interval forever and the message is re-sent every cycle.' },
         },
         required: ['name', 'prompt'],
       },
@@ -635,18 +637,40 @@ export function buildPlatformTools(tenantId: string): {
       const name = String(args.name ?? '').slice(0, 200);
       const prompt = String(args.prompt ?? '');
       const intervalMinutes = Math.min(Math.max(Number(args.intervalMinutes) || 1440, 15), 60 * 24 * 30);
+      const runOnce = Boolean(args.once);
       if (!name || !prompt) {
         throw new Error('Provide name and prompt.');
       }
+
+      // startAt is optional; absent (or in the past) means "next tick", which is
+      // the old behaviour. An UNPARSEABLE startAt is rejected rather than
+      // silently treated as now — a one-off send whose time was misread would
+      // otherwise go out immediately instead of on Friday, and there is no
+      // recalling it.
+      let nextRunAt = new Date();
+      if (args.startAt !== undefined && args.startAt !== null && String(args.startAt).trim() !== '') {
+        const parsed = new Date(String(args.startAt));
+        if (Number.isNaN(parsed.getTime())) {
+          throw new Error(`Could not read startAt "${String(args.startAt)}". Use ISO 8601, e.g. 2026-08-14T13:00:00Z.`);
+        }
+        if (parsed.getTime() > Date.now()) {
+          nextRunAt = parsed;
+        }
+      }
+
       const existing = await db.select({ id: scheduledTasks.id }).from(scheduledTasks).where(eq(scheduledTasks.tenantId, tenantId));
       if (existing.length >= 20) {
         throw new Error('Limit of 20 scheduled tasks per workspace.');
       }
       const [row] = await db
         .insert(scheduledTasks)
-        .values({ tenantId, name, prompt, intervalMinutes })
+        .values({ tenantId, name, prompt, intervalMinutes, nextRunAt, runOnce })
         .returning({ id: scheduledTasks.id });
-      return `Scheduled task "${name}" created (id ${row?.id}), runs every ${intervalMinutes} minutes starting at the next cron tick. Its runs go through the same approvals gateway as chat.`;
+
+      const when = nextRunAt.getTime() > Date.now() + 60_000 ? nextRunAt.toISOString() : 'the next cron tick';
+      return runOnce
+        ? `One-off task "${name}" created (id ${row?.id}), runs once at ${when} and then disables itself. Its run goes through the same approvals gateway as chat — if nobody approves, it will not have sent.`
+        : `Scheduled task "${name}" created (id ${row?.id}), runs every ${intervalMinutes} minutes starting at ${when}. Its runs go through the same approvals gateway as chat.`;
     },
   });
 

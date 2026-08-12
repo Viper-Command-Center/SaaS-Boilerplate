@@ -127,6 +127,13 @@
       "when": 1785780000000,
       "tag": "0017_agent-memory",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1786600000000,
+      "tag": "0018_scheduled-task-once",
+      "breakpoints": true
     }
   ]
 }

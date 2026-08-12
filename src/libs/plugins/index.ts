@@ -12,6 +12,7 @@ import { elementorProvider } from '@/libs/plugins/elementor';
 import { googleAnalyticsProvider } from '@/libs/plugins/googleAnalytics';
 import { heygenProvider } from '@/libs/plugins/heygen';
 import { kieProvider } from '@/libs/plugins/kie';
+import { postmarkProvider } from '@/libs/plugins/postmark';
 import { smartermailProvider } from '@/libs/plugins/smartermail';
 import { whmcsProvider } from '@/libs/plugins/whmcs';
 import { wordpressProvider } from '@/libs/plugins/wordpress';
@@ -27,6 +28,7 @@ export const BUILTIN_PROVIDERS: Record<string, BuiltinProvider> = {
   [dataforseoProvider.slug]: dataforseoProvider,
   [whmcsProvider.slug]: whmcsProvider,
   [smartermailProvider.slug]: smartermailProvider,
+  [postmarkProvider.slug]: postmarkProvider,
 };
 
 export function getBuiltinProvider(slug: string): BuiltinProvider | undefined {
@@ -251,6 +253,25 @@ export const CATALOG_PRESETS = [
       url: 'https://mcp.stripe.com',
       authHeader: 'Authorization',
       authHint: 'Bearer <restricted key> — create it at Stripe Dashboard → Developers → API keys → Create restricted key, and grant ONLY the read permissions you need (Customers, Charges, PaymentIntents, Invoices, Subscriptions, Balance, Payouts). Keep the "Bearer " prefix. ⚠️ Use a restricted key (rk_…), never a secret key (sk_…): a secret key can move money, and the MCP server exposes a generic write tool that would then be able to use it. You must also switch MCP access on at Dashboard → Settings → MCP, separately for sandbox and live. The key decides which mode you are in — a live key reports on real money.',
+    },
+  },
+  {
+    key: 'postmark',
+    label: 'Postmark (send + schedule email)',
+    entry: {
+      slug: 'postmark',
+      name: 'Postmark',
+      description: 'Send transactional and broadcast email from the client\'s own Postmark account, and see what happened to it — delivery status, bounces, suppressions and templates.',
+      category: 'marketing',
+      // Built-in, NOT the vendor's MCP. Postmark's official server
+      // (@activecampaign/postmark-mcp) is stdio-only with no hosted URL, so it
+      // would cost an npm dep + a child process per call for 24 tools where we
+      // want ten — and the unscoped `postmark-mcp` npm package was the first
+      // malicious MCP server found in the wild (it BCC'd every send to the
+      // author). See the header of src/libs/plugins/postmark.ts.
+      transport: 'builtin' as const,
+      provider: 'postmark',
+      authHint: 'The Postmark SERVER API Token for the client\'s server (Postmark → Servers → pick the server → API Tokens tab). NOT the Account token and NOT the SMTP password. You will also be asked for a default From address, which must already be a CONFIRMED Sender Signature on that account — an unconfirmed From is the single most common Postmark failure (error 400/401). ⚠️ Postmark has NO scheduled-send API: every send goes immediately. Scheduling is done by Artivio\'s scheduled tasks (startAt + once), not by Postmark. Bulk/marketing mail also needs a BROADCAST message stream — the default outbound stream is transactional-only and rejects it.',
     },
   },
   {
