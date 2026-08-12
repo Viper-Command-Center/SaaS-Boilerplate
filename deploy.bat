@@ -66,6 +66,25 @@ if errorlevel 1 (
   call :die
 )
 
+REM ---------------------------------------------------------------------------
+REM Clear a STALE index.lock before staging. A killed/zombie git (common when a
+REM scheduled run is terminated mid-commit, or when the interactive `pause` is
+REM closed) leaves .git\index.lock behind, and every later run then dies with
+REM "Unable to create '...index.lock': File exists". Only delete it when NO git
+REM process is actually running, so we never stomp a live git command.
+REM ---------------------------------------------------------------------------
+if exist ".git\index.lock" (
+  tasklist /FI "IMAGENAME eq git.exe" 2^>nul | find /I "git.exe" ^>nul
+  if errorlevel 1 (
+    echo [deploy] Found a STALE .git\index.lock ^(no git process running^) - removing it.
+    del /f /q ".git\index.lock" ^>nul 2^>^&1
+  ) else (
+    echo [deploy] ERROR: .git\index.lock exists AND a git process is running.
+    echo [deploy] Another git command is in progress. Let it finish, then re-run.
+    call :die
+  )
+)
+
 echo [deploy] Staging changes...
 git add -A
 if errorlevel 1 (
