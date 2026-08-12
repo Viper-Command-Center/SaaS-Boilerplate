@@ -34,7 +34,10 @@
  * person who set the account up, instead of re-guessed on every send.
  */
 
+import { Buffer } from 'node:buffer';
 import type { BuiltinProvider, BuiltinTool } from '@/libs/plugins/types';
+import { getFile } from '@/libs/storage/files';
+import { getObject } from '@/libs/storage/r2';
 
 const API = 'https://api.postmarkapp.com';
 const MAX_OUTPUT = 120_000;
@@ -43,6 +46,12 @@ const MAX_OUTPUT = 120_000;
 const MAX_BATCH = 500;
 const MAX_SUPPRESSIONS = 50;
 const MAX_BOUNCE_COUNT = 500;
+/**
+ * Postmark's documented ceiling is ~10MB per message AFTER base64 (which inflates
+ * by ~33%), so cap the raw total below that. Exceeding it is a 422 late in the
+ * send, by which point the deck has already been rendered and filed.
+ */
+const MAX_ATTACH_BYTES = 7 * 1024 * 1024;
 
 /**
  * Error codes worth translating. Postmark's `Message` is accurate but assumes
@@ -213,17 +222,71 @@ export function buildMessage(args: Record<string, unknown>, defaultFrom: string)
 }
 
 /** Summarise a send response without echoing the whole body back. */
-function sendSummary(res: any, msg: Record<string, unknown>): string {
+function sendSummary(res: any, msg: Record<string, unknown>, attached: string[] = []): string {
   return out({
     sent: true,
     to: msg.To,
     from: msg.From,
     subject: msg.Subject,
     stream: msg.MessageStream,
+    ...(attached.length ? { attached } : {}),
     messageId: res?.MessageID ?? null,
     submittedAt: res?.SubmittedAt ?? null,
     note: 'Delivered to Postmark for immediate sending. Postmark has no scheduled-send API — this message is already on its way and cannot be recalled.',
   });
+}
+
+/**
+ * Turn workspace file ids into Postmark attachment objects.
+ *
+ * BY REFERENCE, NEVER BY VALUE. The obvious design — an `Attachments` argument
+ * the model fills with base64 — cannot work: a 500KB PDF is ~700K characters of
+ * base64, so the deck would have to pass through the context window twice (once
+ * to write it, once to send it). File ids keep the bytes entirely server-side.
+ *
+ * Scoped to the calling tenant via getFile(tenantId, id), so one workspace
+ * cannot attach another's documents by guessing an id.
+ */
+async function loadAttachments(
+  fileIds: unknown,
+  tenantId: string | undefined,
+): Promise<Array<{ Name: string; Content: string; ContentType: string }>> {
+  const ids = (Array.isArray(fileIds) ? fileIds : [fileIds])
+    .map(v => String(v ?? '').trim())
+    .filter(Boolean);
+  if (!ids.length) {
+    return [];
+  }
+  if (!tenantId) {
+    throw new Error('Cannot attach files: this Postmark connection has no workspace context.');
+  }
+  if (ids.length > 10) {
+    throw new Error(`${ids.length} attachments is too many for one email — send at most 10.`);
+  }
+
+  const out: Array<{ Name: string; Content: string; ContentType: string }> = [];
+  let total = 0;
+
+  for (const id of ids) {
+    const row = await getFile(tenantId, id);
+    if (!row) {
+      throw new Error(`No file ${id} in this workspace's library. Use list_files to find the right id.`);
+    }
+    const object = await getObject(row.r2Key);
+    total += object.body.length;
+    if (total > MAX_ATTACH_BYTES) {
+      throw new Error(
+        `Attachments total more than ${Math.round(MAX_ATTACH_BYTES / 1024 / 1024)}MB, which Postmark will reject. Send a link to the file instead of attaching it.`,
+      );
+    }
+    out.push({
+      Name: row.name,
+      Content: Buffer.from(object.body).toString('base64'),
+      ContentType: row.mime || object.contentType || 'application/octet-stream',
+    });
+  }
+
+  return out;
 }
 
 const tools: BuiltinTool[] = [
@@ -246,6 +309,11 @@ const tools: BuiltinTool[] = [
         MessageStream: { type: 'string', description: 'Default "outbound". Bulk/marketing MUST use a broadcast stream or Postmark rejects it.' },
         TrackOpens: { type: 'boolean' },
         Metadata: { type: 'object', description: 'Arbitrary key/value pairs, searchable later' },
+        attachFileIds: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Workspace file library ids to attach (from list_files, create_presentation or save_file_from_url). Attach BY ID — never paste file contents into this call. Max 10 files, ~7MB total.',
+        },
       },
       required: ['To', 'Subject'],
     },
@@ -267,6 +335,11 @@ const tools: BuiltinTool[] = [
         ReplyTo: { type: 'string' },
         Tag: { type: 'string' },
         MessageStream: { type: 'string' },
+        attachFileIds: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Workspace file library ids to attach. Max 10 files, ~7MB total.',
+        },
       },
       required: ['To', 'TemplateModel'],
     },
@@ -450,7 +523,7 @@ export const postmarkProvider: BuiltinProvider = {
 
   tools,
 
-  call: async (tool, args, credential, target): Promise<string> => {
+  call: async (tool, args, credential, target, ctx): Promise<string> => {
     const token = (credential ?? '').trim();
     if (!token) {
       throw new Error('No Postmark server token configured for this connection.');
@@ -459,8 +532,12 @@ export const postmarkProvider: BuiltinProvider = {
 
     if (tool === 'send_email') {
       const msg = buildMessage(args, defaultFrom);
+      const attachments = await loadAttachments(args.attachFileIds, ctx?.tenantId);
+      if (attachments.length) {
+        msg.Attachments = attachments;
+      }
       const res = await pm('/email', token, { method: 'POST', body: msg });
-      return sendSummary(res, msg);
+      return sendSummary(res, msg, attachments.map(a => a.Name));
     }
 
     if (tool === 'send_with_template') {
@@ -491,8 +568,13 @@ export const postmarkProvider: BuiltinProvider = {
         }
       }
 
+      const attachments = await loadAttachments(args.attachFileIds, ctx?.tenantId);
+      if (attachments.length) {
+        body.Attachments = attachments;
+      }
+
       const res = await pm('/email/withTemplate', token, { method: 'POST', body });
-      return sendSummary(res, body);
+      return sendSummary(res, body, attachments.map(a => a.Name));
     }
 
     if (tool === 'send_batch') {

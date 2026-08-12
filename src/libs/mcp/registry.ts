@@ -426,7 +426,7 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
               // switches to say "I trust this vendor".
               policy: policyMap[tool.name] ?? policyMap['*'] ?? 'approval',
               call: async (args) => {
-                const raw = await provider.call(tool.name, args, apiKey, target);
+                const raw = await provider.call(tool.name, args, apiKey, target, { tenantId });
                 const result = typeof raw === 'string' ? { output: raw } : raw;
 
                 // An async job that outran our poll window WILL still be billed

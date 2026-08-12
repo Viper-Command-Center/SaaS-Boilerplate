@@ -124,5 +124,14 @@ export type BuiltinProvider = {
     args: Record<string, unknown>,
     credential: string,
     target?: string,
+    /**
+     * Which workspace this call belongs to. Added so a provider can reach the
+     * workspace's OWN file library — Postmark attaches a generated deck by file
+     * id rather than having the model carry base64 through its context, where a
+     * 500KB PDF becomes ~700K characters and blows the window.
+     *
+     * Optional: providers that never touch tenant storage simply omit it.
+     */
+    ctx?: { tenantId: string },
   ) => Promise<string | BuiltinResult>;
 };

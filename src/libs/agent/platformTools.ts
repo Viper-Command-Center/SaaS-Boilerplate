@@ -9,6 +9,7 @@ import type { AnthropicTool } from '@/libs/mcp/registry';
 import { and, asc, desc, eq } from 'drizzle-orm';
 import { assertPublicUrl, buildWebTools } from '@/libs/agent/webTools';
 import { db } from '@/libs/DB';
+import { renderDeck } from '@/libs/docs/pptx';
 import { getFile, listFiles, saveFile, saveRemoteFile } from '@/libs/storage/files';
 import { captureIssue } from '@/libs/support/issues';
 import { dashboardPanels, dashboardViews, datasets, scheduledTasks, tenants } from '@/models/Schema';
@@ -283,6 +284,57 @@ export function buildPlatformTools(tenantId: string): {
           content: { type: 'string' },
         },
         required: ['name', 'content'],
+      },
+    },
+    {
+      name: 'create_presentation',
+      description: 'Build a real, EDITABLE PowerPoint (.pptx) and save it to the workspace library. Use this whenever someone asks for a deck, slides, or a presentation — the client can open and edit it in PowerPoint, Keynote or Google Slides. Supply content only: pick a layout per slide and the geometry is handled, so never try to position anything yourself. Returns the file id, which you can pass to an email tool\'s attachFileIds to send it.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          filename: { type: 'string', description: 'e.g. "q3-review.pptx" (".pptx" is appended if missing)' },
+          title: { type: 'string', description: 'Deck title — becomes the cover slide' },
+          subtitle: { type: 'string', description: 'Cover subtitle, e.g. the client name and date' },
+          theme: {
+            type: 'object',
+            description: 'Optional colours as hex. Defaults to the dark Artivio palette.',
+            properties: {
+              background: { type: 'string' },
+              text: { type: 'string' },
+              muted: { type: 'string' },
+              accent: { type: 'string' },
+              fontFace: { type: 'string' },
+            },
+          },
+          slides: {
+            type: 'array',
+            description: 'The slides after the cover. Max 100.',
+            items: {
+              type: 'object',
+              properties: {
+                layout: {
+                  type: 'string',
+                  description: 'bullets | table | image | quote | section | blank. Omit and it is inferred from which content you supply.',
+                },
+                title: { type: 'string', description: 'Slide heading. For a quote layout, this is the quote itself.' },
+                subtitle: { type: 'string', description: 'Supporting line. For a quote layout, the attribution.' },
+                bullets: { type: 'array', items: { type: 'string' }, description: 'Max 10 — text shrinks as the list grows, so fewer reads better' },
+                table: {
+                  type: 'object',
+                  description: 'Max 14 rows per slide; split larger tables across slides.',
+                  properties: {
+                    headers: { type: 'array', items: { type: 'string' } },
+                    rows: { type: 'array', items: { type: 'array', items: { type: 'string' } } },
+                  },
+                },
+                imageUrl: { type: 'string', description: 'Public image URL — it is downloaded and embedded, so the deck still works offline' },
+                caption: { type: 'string' },
+                notes: { type: 'string', description: 'Presenter notes — not shown on the slide' },
+              },
+            },
+          },
+        },
+        required: ['title', 'slides'],
       },
     },
     {
@@ -787,6 +839,33 @@ export function buildPlatformTools(tenantId: string): {
         source: 'agent',
       });
       return `Saved "${row?.name}" to the workspace library (id ${row?.id}).`;
+    },
+  });
+
+  executors.set('create_presentation', {
+    policy: 'auto', // renders locally and writes only into this workspace's library
+    call: async (args) => {
+      const raw = String(args.filename ?? args.title ?? 'presentation').slice(0, 120);
+      const base = raw.replace(/\.pptx$/i, '');
+      const result = await renderDeck({
+        title: String(args.title ?? ''),
+        subtitle: args.subtitle ? String(args.subtitle) : undefined,
+        theme: (args.theme ?? undefined) as never,
+        slides: (Array.isArray(args.slides) ? args.slides : []) as never,
+      });
+
+      const row = await saveFile({
+        tenantId,
+        name: `${base}.pptx`,
+        bytes: result.pptx,
+        mime: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        // 'knowledge', NOT 'asset': an asset gets a permanently public R2 URL,
+        // and a client deck routinely contains their revenue figures.
+        kind: 'knowledge',
+        source: 'agent',
+      });
+
+      return `Created "${row?.name}" — ${result.slideCount} slides, ${Math.round(result.bytes / 1024)}KB. File id ${row?.id}. It is in the workspace library; pass that id as attachFileIds to email it. Do NOT try to read the file back — it is a binary .pptx.`;
     },
   });
 
