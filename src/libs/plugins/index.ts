@@ -12,6 +12,7 @@ import { elementorProvider } from '@/libs/plugins/elementor';
 import { googleAnalyticsProvider } from '@/libs/plugins/googleAnalytics';
 import { heygenProvider } from '@/libs/plugins/heygen';
 import { kieProvider } from '@/libs/plugins/kie';
+import { whmcsProvider } from '@/libs/plugins/whmcs';
 import { wordpressProvider } from '@/libs/plugins/wordpress';
 
 export const BUILTIN_PROVIDERS: Record<string, BuiltinProvider> = {
@@ -23,6 +24,7 @@ export const BUILTIN_PROVIDERS: Record<string, BuiltinProvider> = {
   [googleAnalyticsProvider.slug]: googleAnalyticsProvider,
   [elementorProvider.slug]: elementorProvider,
   [dataforseoProvider.slug]: dataforseoProvider,
+  [whmcsProvider.slug]: whmcsProvider,
 };
 
 export function getBuiltinProvider(slug: string): BuiltinProvider | undefined {
@@ -228,6 +230,40 @@ export const CATALOG_PRESETS = [
       provider: 'diviops',
       authHeader: 'credential',
       authHint: 'username:application password for the client\'s WordPress site (WP Admin → Users → Profile → Application Passwords). The site must also have the diviops-agent WordPress plugin installed. You\'ll be asked for the site URL when enabling.',
+    },
+  },
+  {
+    key: 'stripe',
+    label: 'Stripe (payments — read-only to start)',
+    entry: {
+      slug: 'stripe',
+      name: 'Stripe',
+      description: 'Payments, subscriptions, invoices and payouts — revenue reporting, failed-payment and churn analysis, customer billing history.',
+      category: 'data',
+      // Stripe publishes a hosted MCP server, so there is NOTHING to write:
+      // this is a plain HTTP connection like Zernio or Duda. Stripe prefers
+      // OAuth, which Artivio's MCP client cannot do (it sends static headers
+      // only) — but the docs explicitly support a restricted API key as a
+      // Bearer token for exactly this "autonomous agent" case.
+      transport: 'http' as const,
+      url: 'https://mcp.stripe.com',
+      authHeader: 'Authorization',
+      authHint: 'Bearer <restricted key> — create it at Stripe Dashboard → Developers → API keys → Create restricted key, and grant ONLY the read permissions you need (Customers, Charges, PaymentIntents, Invoices, Subscriptions, Balance, Payouts). Keep the "Bearer " prefix. ⚠️ Use a restricted key (rk_…), never a secret key (sk_…): a secret key can move money, and the MCP server exposes a generic write tool that would then be able to use it. You must also switch MCP access on at Dashboard → Settings → MCP, separately for sandbox and live. The key decides which mode you are in — a live key reports on real money.',
+    },
+  },
+  {
+    key: 'whmcs',
+    label: 'WHMCS (hosting billing)',
+    entry: {
+      slug: 'whmcs',
+      name: 'WHMCS',
+      description: 'The hosting business itself — clients, invoices and payments, orders, services, domains and support tickets.',
+      category: 'ops',
+      transport: 'builtin' as const,
+      provider: 'whmcs',
+      // Built-in rather than http: WHMCS has no MCP server, and its API is a
+      // form-encoded POST to includes/api.php that answers 200 OK to failures.
+      authHint: 'WHMCS API credentials as "identifier:secret" — WHMCS → Configuration → System Settings → API Credentials (the admin role attached needs the "API Access" permission). ⚠️ WHMCS restricts the API by IP address by default, and Artivio calls from a cloud host whose outbound address changes, so an allowlist will not hold. Add $api_access_key = \'some-long-random-passphrase\'; to the installation\'s configuration.php and paste the credential as "identifier:secret:accesskey". The connection URL is the WHMCS installation ROOT (the folder containing includes/api.php), e.g. https://billing.example.com.',
     },
   },
   {
