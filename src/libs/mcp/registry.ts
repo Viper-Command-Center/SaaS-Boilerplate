@@ -12,7 +12,8 @@ import { McpHttpClient } from '@/libs/mcp/client';
 import { getStdioServer } from '@/libs/mcp/stdioCatalog';
 import { acquireStdioClient } from '@/libs/mcp/stdioClient';
 import { getBuiltinProvider } from '@/libs/plugins';
-import { archiveGeneratedAssets } from '@/libs/storage/files';
+import { archiveGeneratedAssets, saveFile } from '@/libs/storage/files';
+import { storageConfigured } from '@/libs/storage/r2';
 import { captureIssue } from '@/libs/support/issues';
 import { openSecret } from '@/libs/vault';
 import { credentials, mcpConnections, pluginCatalog } from '@/models/Schema';
@@ -101,6 +102,70 @@ type McpContentBlock = { type: string; text?: string; [k: string]: unknown };
  * Binary blobs are deliberately NOT inlined — a base64 payload would burn the
  * context window and the model cannot read it anyway. We describe it instead.
  */
+/**
+ * How much tool output goes straight into the model's context.
+ *
+ * Not a guess about what is "enough" — it is a context-budget decision. A few
+ * large results would otherwise crowd out the conversation itself.
+ */
+const INLINE_TOOL_OUTPUT_LIMIT = 20_000;
+
+/**
+ * Cap a tool result WITHOUT lying about it.
+ *
+ * 🔴 This used to be a bare slice and nothing else, which is the worst possible
+ * behaviour: the agent received the first 20K characters of an 88K-char file
+ * with no indication anything was missing, so it reasoned confidently about a
+ * file it had read a quarter of. The reported case was an AI employee asked to
+ * change "200+" to "300+" on a client's homepage. The string it needed sat past
+ * the cut. It re-fetched, got an identical prefix, concluded the tool was
+ * broken, tried three other routes, and finally asked the human to search the
+ * file by hand — all while the platform quietly withheld two thirds of it.
+ *
+ * Silent truncation is worse than a hard error: an error is actionable, whereas
+ * this is indistinguishable from the file simply ending there.
+ *
+ * So: say it was truncated, say how big the thing actually is, and — when
+ * storage is configured — write the WHOLE result into the workspace library and
+ * hand back the file id, so the agent can search or page through the rest with
+ * read_file instead of guessing.
+ */
+async function capToolOutput(a: {
+  text: string;
+  tenantId: string;
+  toolName: string;
+  connectionName: string;
+}): Promise<string> {
+  if (a.text.length <= INLINE_TOOL_OUTPUT_LIMIT) {
+    return a.text;
+  }
+
+  const head = a.text.slice(0, INLINE_TOOL_OUTPUT_LIMIT);
+  const shown = INLINE_TOOL_OUTPUT_LIMIT.toLocaleString();
+  const total = a.text.length.toLocaleString();
+
+  if (!storageConfigured()) {
+    return `${head}\n\n[TRUNCATED — first ${shown} characters of ${total}. The rest was NOT read. Do not draw conclusions about content you have not seen; narrow the request (a path, a range, a search term) and call again.]`;
+  }
+
+  try {
+    const row = await saveFile({
+      tenantId: a.tenantId,
+      name: `tool-output-${a.connectionName}-${a.toolName}.txt`.replace(/[^\w.-]+/g, '-'),
+      bytes: Buffer.from(a.text, 'utf8'),
+      mime: 'text/plain',
+      kind: 'note',
+      source: 'tool-output',
+      meta: { tool: a.toolName, connection: a.connectionName, chars: a.text.length },
+    });
+
+    return `${head}\n\n[TRUNCATED — first ${shown} characters of ${total}. THE FULL RESULT IS SAVED as file id ${row?.id}. Use read_file with that id and \`search\` to find a string anywhere in it, or \`offset\`/\`limit\` to page through. Do NOT assume the visible portion is the whole thing.]`;
+  } catch {
+    // Spilling is a convenience; failing to spill must not fail the tool call.
+    return `${head}\n\n[TRUNCATED — first ${shown} of ${total} characters, and the full result could not be saved. Narrow the request and call again.]`;
+  }
+}
+
 function flattenMcpContent(blocks: McpContentBlock[]): string {
   return blocks
     .map((block) => {
@@ -537,10 +602,18 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
               policy: policyMap[tool.name] ?? policyMap['*'] ?? 'approval',
               call: async (args) => {
                 const result = await client.callTool(tool.name, args);
-                const text = flattenMcpContent(result.content).slice(0, 20_000);
+                const raw = flattenMcpContent(result.content);
                 if (result.isError) {
-                  throw new Error(text || 'Tool reported an error.');
+                  // Errors are short and must stay verbatim — never spill one to a
+                  // file the agent then has to go and open.
+                  throw new Error(raw.slice(0, 4000) || 'Tool reported an error.');
                 }
+                const text = await capToolOutput({
+                  text: raw,
+                  tenantId,
+                  toolName: tool.name,
+                  connectionName: conn.name,
+                });
                 return text || '(no output)';
               },
             },
@@ -618,10 +691,18 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
             policy: policyMap[tool.name] ?? policyMap['*'] ?? 'approval',
             call: async (args) => {
               const result = await client.callTool(tool.name, args);
-              const text = flattenMcpContent(result.content).slice(0, 20_000);
+              const raw = flattenMcpContent(result.content);
               if (result.isError) {
-                throw new Error(text || 'Tool reported an error.');
+                // Errors are short and must stay verbatim — never spill one to a
+                // file the agent then has to go and open.
+                throw new Error(raw.slice(0, 4000) || 'Tool reported an error.');
               }
+              const text = await capToolOutput({
+                text: raw,
+                tenantId,
+                toolName: tool.name,
+                connectionName: conn.name,
+              });
               // Meter AFTER success (a thrown error above is never billed).
               const rule = httpRules[tool.name];
               if (rule) {

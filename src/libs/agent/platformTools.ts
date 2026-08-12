@@ -267,10 +267,15 @@ export function buildPlatformTools(tenantId: string): {
     },
     {
       name: 'read_file',
-      description: 'Read the text of a file in the library by id (from list_files). Use this for uploaded briefs and requirement docs instead of asking the user to paste them. Binary files (images, video) have no text — use their URL instead.',
+      description: 'Read the text of a file in the library by id (from list_files). Use this for uploaded briefs and requirement docs instead of asking the user to paste them, and for large tool results the platform saved for you. Binary files (images, video) have no text — use their URL instead. For a file too big to read at once: pass `search` to find every line containing a string (with line numbers and surrounding context), or `offset`/`limit` to page through it. NEVER conclude a string is absent from a file you have only partly read — search for it.',
       input_schema: {
         type: 'object',
-        properties: { fileId: { type: 'string' } },
+        properties: {
+          fileId: { type: 'string' },
+          search: { type: 'string', description: 'Case-insensitive. Returns every matching line with its line number and a little context, instead of the file body. The right way to locate something in a large file.' },
+          offset: { type: 'number', description: 'Character offset to start reading from (default 0). Use with limit to page through a big file.' },
+          limit: { type: 'number', description: 'Characters to return (default 60000, max 60000).' },
+        },
         required: ['fileId'],
       },
     },
@@ -821,7 +826,71 @@ export function buildPlatformTools(tenantId: string): {
       // Untrusted content: the loop already wraps tool output, and the system
       // prompt forbids following instructions found inside it. A client brief
       // is a REQUEST, not a command chain — plan from it, don't blindly execute.
-      return row.textContent.slice(0, 60_000);
+      const body = row.textContent;
+
+      /**
+       * `search` exists because the alternative is guessing.
+       *
+       * Reading a large file front-to-back through a fixed window means an
+       * agent looking for one string either pages through the whole thing or
+       * concludes too early that it is not there. Returning matching lines with
+       * their numbers answers "where is it" in a single call, and — unlike a
+       * prefix — an empty result here is real evidence of absence.
+       */
+      if (args.search !== undefined && String(args.search).trim() !== '') {
+        const needle = String(args.search).toLowerCase();
+        const lines = body.split('\n');
+        const hits: string[] = [];
+        for (let i = 0; i < lines.length; i++) {
+          if (!lines[i]?.toLowerCase().includes(needle)) {
+            continue;
+          }
+          // One line either side: enough to see the JSX prop or config key a
+          // match belongs to, without turning a search into a file dump.
+          const from = Math.max(0, i - 1);
+          const to = Math.min(lines.length - 1, i + 1);
+          for (let j = from; j <= to; j++) {
+            hits.push(`${j + 1}${j === i ? ':' : '-'} ${lines[j]}`);
+          }
+          hits.push('--');
+          if (hits.length > 400) {
+            hits.push('(more matches not shown — use a more specific search term)');
+            break;
+          }
+        }
+        return JSON.stringify({
+          name: row.name,
+          totalLines: lines.length,
+          totalChars: body.length,
+          search: String(args.search),
+          matches: hits.length ? hits.join('\n') : null,
+          note: hits.length
+            ? 'Line numbers prefix each match; ":" marks the matching line, "-" its context.'
+            : `No line contains "${String(args.search)}". This searched the WHOLE file, so that is a real answer, not a truncation.`,
+        });
+      }
+
+      const offset = Math.max(0, Number(args.offset) || 0);
+      const limit = Math.min(Math.max(Number(args.limit) || 60_000, 1), 60_000);
+      const slice = body.slice(offset, offset + limit);
+      const end = offset + slice.length;
+
+      // Say so when there is more. The whole point of this change is that an
+      // agent must never mistake a window for the whole document.
+      if (end < body.length || offset > 0) {
+        return JSON.stringify({
+          name: row.name,
+          totalChars: body.length,
+          range: `${offset}-${end}`,
+          remaining: body.length - end,
+          content: slice,
+          note: end < body.length
+            ? `There are ${body.length - end} more characters. Call again with offset=${end}, or use search to jump straight to what you need.`
+            : 'End of file.',
+        });
+      }
+
+      return slice;
     },
   });
 
