@@ -7,6 +7,7 @@
 import type { BuiltinProvider } from '@/libs/plugins/types';
 import { agentcoreBrowserProvider } from '@/libs/plugins/agentcoreBrowser';
 import { cloudflareAnalyticsProvider } from '@/libs/plugins/cloudflareAnalytics';
+import { cloudflareDnsProvider } from '@/libs/plugins/cloudflareDns';
 import { dataforseoProvider } from '@/libs/plugins/dataforseo';
 import { elementorProvider } from '@/libs/plugins/elementor';
 import { googleAnalyticsProvider } from '@/libs/plugins/googleAnalytics';
@@ -23,6 +24,7 @@ export const BUILTIN_PROVIDERS: Record<string, BuiltinProvider> = {
   [agentcoreBrowserProvider.slug]: agentcoreBrowserProvider,
   [heygenProvider.slug]: heygenProvider,
   [cloudflareAnalyticsProvider.slug]: cloudflareAnalyticsProvider,
+  [cloudflareDnsProvider.slug]: cloudflareDnsProvider,
   [googleAnalyticsProvider.slug]: googleAnalyticsProvider,
   [elementorProvider.slug]: elementorProvider,
   [dataforseoProvider.slug]: dataforseoProvider,
@@ -253,6 +255,23 @@ export const CATALOG_PRESETS = [
       url: 'https://mcp.stripe.com',
       authHeader: 'Authorization',
       authHint: 'Bearer <restricted key> — create it at Stripe Dashboard → Developers → API keys → Create restricted key, and grant ONLY the read permissions you need (Customers, Charges, PaymentIntents, Invoices, Subscriptions, Balance, Payouts). Keep the "Bearer " prefix. ⚠️ Use a restricted key (rk_…), never a secret key (sk_…): a secret key can move money, and the MCP server exposes a generic write tool that would then be able to use it. You must also switch MCP access on at Dashboard → Settings → MCP, separately for sandbox and live. The key decides which mode you are in — a live key reports on real money.',
+    },
+  },
+  {
+    key: 'cloudflare-dns',
+    label: 'Cloudflare DNS (all domains on the account)',
+    entry: {
+      slug: 'cloudflare-dns',
+      name: 'Cloudflare DNS',
+      description: 'Read and manage DNS across every domain on a Cloudflare account — records, mail routing, SPF/DKIM/DMARC and site pointers.',
+      category: 'dev',
+      // Built-in, NOT Cloudflare's hosted MCP. That server authenticates with
+      // OAuth, which Artivio's MCP client cannot do (it sends static headers
+      // only) — an "insufficient_scope" error naming scopes like user:read
+      // comes from there, and no API token will ever satisfy it.
+      transport: 'builtin' as const,
+      provider: 'cloudflare-dns',
+      authHint: 'A Cloudflare API token with Zone → DNS → Edit AND Zone → Zone → Read (dash.cloudflare.com → My Profile → API Tokens → Create Token → Custom token). Under Zone Resources choose the zones it may touch — "All zones" gives it every client domain on the account. Paste the raw token; a "Bearer " prefix is stripped automatically. Leave the target/URL field blank: the token decides which zones are visible. ⚠️ NS and SOA records are refused by this plugin outright, and deletions require an explicit confirmation, because a wrong DNS record takes a client\'s website AND their email down at once.',
     },
   },
   {
