@@ -113,13 +113,23 @@ const DESTRUCTIVE_PATTERNS = [
 ];
 
 /**
- * Blocked outright, no override.
+ * Blocked outright in `smartermail_call`, no override.
  *
- * Impersonation mints a token that acts AS a mailbox owner — it reads their
- * mail. There is a real administrative use for it in SmarterMail's own UI, but
- * an agent holding one would put a church member's private correspondence into
- * a transcript, and no troubleshooting task here needs that. Mailbox contents
- * are diagnosed through delivery logs and spool metadata, not by reading mail.
+ * Impersonation mints a token that acts AS another account. The curated tools
+ * DO use it, narrowly and internally: `domain_users` and `list_aliases`
+ * impersonate a domain ADMINISTRATOR, because SmarterMail offers no other way
+ * to read a domain's mailbox list (see domainToken). That is administrative
+ * metadata — names, quotas, forwarding targets — and never message contents.
+ *
+ * What stays blocked is the agent minting impersonation tokens FREELY through
+ * the escape hatch. With one it could authenticate as any mailbox owner and
+ * read their mail, which would then live in a chat transcript — a church
+ * member's private correspondence, in a log, forever. No troubleshooting task
+ * needs that: delivery is diagnosed from logs and spool metadata.
+ *
+ * So the boundary is not "impersonation is dangerous" but "reading someone's
+ * mail is". Collapsing those two into a single regex is exactly what left
+ * domain_users and list_aliases broken on every server.
  */
 const FORBIDDEN_PATTERNS = [/impersonate/i];
 
@@ -214,12 +224,131 @@ async function tokenFor(server: string, credential: string): Promise<string> {
   return token;
 }
 
+/**
+ * Impersonated domain-admin tokens, keyed by "<server>|domain|<domain>".
+ *
+ * Same reasoning as tokenCache: a cache, not state.
+ */
+const domainTokenCache = new Map<string, { token: string; expiresAt: number }>();
+
+/**
+ * Get a token that is scoped to ONE domain, by impersonating that domain's
+ * administrator.
+ *
+ * 🔴 WHY THIS EXISTS AT ALL. Every `settings/domain/*` endpoint acts on the
+ * domain of the authenticated token. A SmarterMail system administrator belongs
+ * to no domain, so those calls fail with "Failed list users for the domain. The
+ * domain not found" — regardless of what domain you put in the path. There is
+ * no sysadmin-scoped equivalent; SmarterTools' own answer to this is to
+ * impersonate a domain admin and use that token. It is also what the admin UI
+ * does when you click "Manage" on a domain.
+ *
+ * That cost us two tools. `domain_users` and `list_aliases` were both written
+ * as though the domain could be passed in the path, so both failed on every
+ * server, and the failures read as "this build doesn't expose that endpoint".
+ *
+ * 🔴 SCOPE. This impersonates a domain ADMINISTRATOR to read administrative
+ * metadata — mailbox names, quotas, forwarding targets. It never touches
+ * message contents, and no tool here uses this token against a mail endpoint.
+ * Reading a person's mail remains blocked; see guardPath and the note on
+ * FORBIDDEN_PATTERNS. The distinction matters: "which mailboxes exist on this
+ * domain" and "what is in this person's inbox" are not the same question, and
+ * collapsing them into one regex is what broke the admin tools.
+ */
+async function domainToken(server: string, credential: string, domain: string | undefined): Promise<string> {
+  const clean = String(domain ?? '').trim().toLowerCase();
+  if (!clean) {
+    throw new Error('SmarterMail: which domain? Pass the domain name, e.g. examplechurch.org.');
+  }
+
+  const key = `${server}|domain|${clean}`;
+  const cached = domainTokenCache.get(key);
+  if (cached && cached.expiresAt > Date.now() + EXPIRY_MARGIN_MS) {
+    return cached.token;
+  }
+
+  const admins = await api(server, credential, `settings/sysadmin/domain-admins/${encodeURIComponent(clean)}`);
+  // Shape varies across builds, so accept the usual containers rather than
+  // insisting on one and failing on a server that spells it differently.
+  const list = (admins.domainAdmins ?? admins.users ?? admins.data ?? []) as any[];
+  const first = Array.isArray(list) ? list[0] : undefined;
+  const adminEmail = String(
+    (typeof first === 'string' ? first : first?.userName ?? first?.email ?? first?.emailAddress) ?? '',
+  ).trim();
+
+  if (!adminEmail) {
+    throw new Error(
+      `SmarterMail: ${clean} has no domain administrator that this account can see, so its mailbox list `
+      + 'cannot be read. Domain-scoped data requires a domain admin to act as; add one in SmarterMail, '
+      + 'or use list_domains for server-wide counts.',
+    );
+  }
+
+  const res = await api(server, credential, 'settings/domain/impersonate-user', {
+    method: 'POST',
+    body: { email: adminEmail },
+  });
+  const token = String(res.impersonateAccessToken ?? res.accessToken ?? '').trim();
+  if (!token) {
+    throw new Error(
+      `SmarterMail: impersonating the administrator of ${clean} returned no token. This build may name `
+      + 'the field differently — check <server>/Documentation/api for impersonate-user.',
+    );
+  }
+
+  // Impersonated tokens are short-lived and the response rarely says how long;
+  // 15 minutes is deliberately under the usual lifetime, since a stale one
+  // fails mid-task and looks exactly like a permissions problem.
+  domainTokenCache.set(key, { token, expiresAt: Date.now() + 15 * 60_000 });
+  return token;
+}
+
+/**
+ * Try each candidate path until one works, then report which.
+ *
+ * Only for endpoints whose name genuinely differs across builds. It reports
+ * everything it tried on failure — a bare 404 from a guessed path is what sent
+ * an AI employee looking for a missing feature that was never missing.
+ */
+async function firstWorkingPath(
+  server: string,
+  credential: string,
+  token: string,
+  candidates: string[],
+): Promise<Record<string, any>> {
+  const errors: string[] = [];
+  for (const path of candidates) {
+    try {
+      return await api(server, credential, path, { token });
+    } catch (e) {
+      errors.push(`${path} → ${e instanceof Error ? e.message.slice(0, 160) : 'failed'}`);
+    }
+  }
+  throw new Error(
+    `SmarterMail: none of the known paths for this worked on this build.\n${errors.join('\n')}\n`
+    + 'The authoritative list for THIS server is at <server>/Documentation/api — look the path up there '
+    + 'and call it with smartermail_call.',
+  );
+}
+
 /** One authenticated API call. */
 async function api(
   server: string | undefined,
   credential: string,
   path: string,
-  init?: { method?: string; body?: unknown },
+  init?: {
+    method?: string;
+    body?: unknown;
+    /**
+     * Use THIS bearer token instead of the system-admin one.
+     *
+     * Domain-scoped endpoints (settings/domain/*) act on the domain the TOKEN
+     * belongs to, and a system administrator belongs to none — which is why
+     * they answer "The domain not found" no matter what the path says. The
+     * caller passes an impersonated domain-admin token here instead.
+     */
+    token?: string;
+  },
 ): Promise<Record<string, any>> {
   if (!server) {
     throw new Error('SmarterMail: this connection has no server URL set. Add it in the Tools panel.');
@@ -239,7 +368,7 @@ async function api(
 
   let resp: Response;
   try {
-    resp = await send(await tokenFor(base, credential));
+    resp = await send(init?.token ?? await tokenFor(base, credential));
 
     /**
      * A cached token can lapse between the expiry check and the request — or
@@ -248,7 +377,7 @@ async function api(
      * rejected, the problem is permissions, and retrying a permissions failure
      * in a loop is how an account gets locked out.
      */
-    if (resp.status === 401) {
+    if (resp.status === 401 && !init?.token) {
       const { username } = parseCredential(credential);
       tokenCache.delete(`${base}|${username}`);
       resp = await send(await tokenFor(base, credential));
@@ -326,7 +455,9 @@ export const smartermailProvider: BuiltinProvider = {
 - Endpoint paths differ between SmarterMail major versions, and this server documents its own at <server>/Documentation/api. If a tool 404s, that is the place to look up the current path and then use smartermail_call — it is not a sign the feature is missing.
 - Diagnose delivery in this order: check the spool first (is it stuck here?), then the delivery log for that recipient (did we try, and what did the far end say?), then blocked IPs and spam scores (are we or they being refused?). Jumping straight to spam settings is the usual wrong turn — most "not arriving" reports are a full mailbox or a bounce nobody read.
 - A bounce reason from the receiving server is the most valuable line in any of this. Quote it verbatim to the human rather than paraphrasing; "550 5.7.1 SPF check failed" tells them what to fix, "the message was rejected" does not.
-- Mailbox contents are off limits. Nothing here reads a user's mail, and impersonation is blocked outright — troubleshoot from logs and spool metadata.
+- Mailbox contents are off limits. Nothing here reads a user's mail, and smartermail_call cannot mint an impersonation token — troubleshoot from logs and spool metadata.
+- domain_users and list_aliases work on a DOMAIN, and SmarterMail scopes those to the token rather than the path: they impersonate that domain's administrator internally to read its mailbox list. That is metadata only. If one reports no domain administrator, the domain genuinely has none — add one in SmarterMail rather than looking for another endpoint.
+- get_user is system-scoped and needs no domain context. "User does not exist" from it means exactly that; "Domain does not exist" means the address you passed did not parse into a domain on this server — re-read the address before concluding the mailbox is hosted elsewhere.
 - Changing a password disconnects that person's mail client until they update it. Say so when proposing one, and never reset a password that was not asked about.
 - This server hosts many churches. Always state which domain you acted on; a fix applied to the wrong domain looks identical to a fix that worked.`,
 
@@ -498,8 +629,11 @@ export const smartermailProvider: BuiltinProvider = {
       case 'get_domain':
         return cap(await get(`settings/sysadmin/domain/${encodeURIComponent(String(args.domain))}`));
 
-      case 'domain_users':
-        return cap(await get(`settings/sysadmin/domain-users/${encodeURIComponent(String(args.domain))}`));
+      case 'domain_users': {
+        // Domain-scoped: needs a domain-admin token, not the sysadmin one.
+        const dt = await domainToken(server!, credential, args.domain as string | undefined);
+        return cap(await api(server, credential, 'settings/domain/list-users', { token: dt }));
+      }
 
       // ── Mailboxes ──
       case 'get_user':
@@ -521,8 +655,17 @@ export const smartermailProvider: BuiltinProvider = {
           password: args.password,
         }));
 
-      case 'list_aliases':
-        return cap(await get(`settings/domain/alias/${encodeURIComponent(String(args.domain))}`));
+      case 'list_aliases': {
+        const dt = await domainToken(server!, credential, args.domain as string | undefined);
+        // The alias endpoint is the one whose name genuinely moves between
+        // builds; the domain no longer goes in the path either way, because the
+        // token now carries it.
+        return cap(await firstWorkingPath(server!, credential, dt, [
+          'settings/domain/aliases',
+          'settings/domain/alias-list',
+          'settings/domain/list-aliases',
+        ]));
+      }
 
       // ── Delivery ──
       case 'get_spool':
@@ -579,4 +722,5 @@ export const smartermailProvider: BuiltinProvider = {
 /** Test seam: the token cache is process-global and would leak between tests. */
 export function __clearTokenCache(): void {
   tokenCache.clear();
+  domainTokenCache.clear();
 }

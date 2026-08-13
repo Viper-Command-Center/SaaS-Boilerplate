@@ -285,3 +285,171 @@ describe('failures that arrive as HTTP 200', () => {
       .toThrow(/Documentation\/api/);
   });
 });
+
+/**
+ * Domain-scoped tools.
+ *
+ * These are the regression tests for a bug that shipped and stayed invisible:
+ * `domain_users` and `list_aliases` passed the domain in the PATH, but
+ * SmarterMail scopes `settings/domain/*` to the token, and a system
+ * administrator belongs to no domain. So both failed on every server, and the
+ * failure ("The domain not found" / a 404) read as though the build simply did
+ * not expose the endpoint. It was reported as a missing feature.
+ *
+ * What matters here is not the happy path but that we impersonate a domain
+ * ADMIN and stop — never a mailbox owner, and never against a mail endpoint.
+ */
+describe('domain-scoped tools', () => {
+  const CRED = 'artivio@example.com:hunter2';
+  const SERVER = 'https://mail.example.com';
+
+  /** Auth → domain-admins → impersonate → the domain-scoped call. */
+  function stubDomainFlow(opts?: {
+    admins?: unknown;
+    onDomainCall?: (url: string, token: string) => Response;
+  }) {
+    const calls: Array<{ url: string; token: string; body?: any }> = [];
+    const spy = vi.fn(async (url: string, init?: any) => {
+      const u = String(url);
+      const token = String(init?.headers?.Authorization ?? '').replace('Bearer ', '');
+      calls.push({ url: u, token, body: init?.body ? JSON.parse(init.body) : undefined });
+
+      if (u.includes('authenticate-user')) {
+        return new Response(JSON.stringify({
+          accessToken: 'sysadmin-token',
+          accessTokenExpiration: new Date(Date.now() + 3600_000).toISOString(),
+        }), { status: 200 });
+      }
+      if (u.includes('domain-admins')) {
+        return new Response(JSON.stringify(
+          opts?.admins ?? { domainAdmins: [{ userName: 'admin@budgetsmart.io' }] },
+        ), { status: 200 });
+      }
+      if (u.includes('impersonate-user')) {
+        return new Response(JSON.stringify({ impersonateAccessToken: 'domain-token' }), { status: 200 });
+      }
+      if (opts?.onDomainCall) {
+        return opts.onDomainCall(u, token);
+      }
+      return new Response(JSON.stringify({ users: [{ userName: 'a@budgetsmart.io' }] }), { status: 200 });
+    });
+    vi.stubGlobal('fetch', spy);
+    return calls;
+  }
+
+  it('impersonates the domain admin and calls the domain-scoped endpoint with THAT token', async () => {
+    const { smartermailProvider } = await import('@/libs/plugins/smartermail');
+    const calls = stubDomainFlow();
+
+    await smartermailProvider.call('domain_users', { domain: 'budgetsmart.io' }, CRED, SERVER);
+
+    const listCall = calls.find(c => c.url.includes('list-users'));
+
+    // The whole bug in one assertion: the domain must NOT be in the path, and
+    // the call must carry the impersonated token rather than the sysadmin one.
+    expect(listCall).toBeDefined();
+    expect(listCall!.url).not.toContain('budgetsmart.io');
+    expect(listCall!.token).toBe('domain-token');
+  });
+
+  it('impersonates the domain ADMIN, never the mailbox being asked about', async () => {
+    const { smartermailProvider } = await import('@/libs/plugins/smartermail');
+    const calls = stubDomainFlow();
+
+    await smartermailProvider.call('domain_users', { domain: 'budgetsmart.io' }, CRED, SERVER);
+
+    const imp = calls.find(c => c.url.includes('impersonate-user'));
+
+    expect(imp!.body).toEqual({ email: 'admin@budgetsmart.io' });
+  });
+
+  // Metadata only. If a mail endpoint ever appears on this token, the privacy
+  // boundary this design rests on has quietly moved.
+  it('never touches a mail or folder endpoint', async () => {
+    const { smartermailProvider } = await import('@/libs/plugins/smartermail');
+    const calls = stubDomainFlow();
+
+    await smartermailProvider.call('domain_users', { domain: 'budgetsmart.io' }, CRED, SERVER);
+
+    expect(calls.some(c => /\/mail\/|\/folders\//.test(c.url))).toBe(false);
+  });
+
+  it('reuses the impersonated token across calls instead of re-impersonating', async () => {
+    const { smartermailProvider } = await import('@/libs/plugins/smartermail');
+    const calls = stubDomainFlow();
+
+    await smartermailProvider.call('domain_users', { domain: 'budgetsmart.io' }, CRED, SERVER);
+    await smartermailProvider.call('domain_users', { domain: 'budgetsmart.io' }, CRED, SERVER);
+
+    expect(calls.filter(c => c.url.includes('impersonate-user'))).toHaveLength(1);
+  });
+
+  it('keeps domains apart — a second domain gets its own token', async () => {
+    const { smartermailProvider } = await import('@/libs/plugins/smartermail');
+    const calls = stubDomainFlow();
+
+    await smartermailProvider.call('domain_users', { domain: 'budgetsmart.io' }, CRED, SERVER);
+    await smartermailProvider.call('domain_users', { domain: 'otherchurch.org' }, CRED, SERVER);
+
+    expect(calls.filter(c => c.url.includes('impersonate-user'))).toHaveLength(2);
+  });
+
+  /**
+   * A domain with no administrator is a real configuration, and the answer is
+   * "add one", not "this endpoint is missing" — which is how the original
+   * failure was read.
+   */
+  it('says a domain has no administrator rather than reporting a missing endpoint', async () => {
+    const { smartermailProvider } = await import('@/libs/plugins/smartermail');
+    stubDomainFlow({ admins: { domainAdmins: [] } });
+
+    await expect(smartermailProvider.call('domain_users', { domain: 'budgetsmart.io' }, CRED, SERVER))
+      .rejects
+      .toThrow(/no domain administrator/);
+  });
+
+  it('accepts whichever container this build uses for the admin list', async () => {
+    const { smartermailProvider } = await import('@/libs/plugins/smartermail');
+    const calls = stubDomainFlow({ admins: { users: ['admin@budgetsmart.io'] } });
+
+    await smartermailProvider.call('domain_users', { domain: 'budgetsmart.io' }, CRED, SERVER);
+
+    expect(calls.find(c => c.url.includes('impersonate-user'))!.body)
+      .toEqual({ email: 'admin@budgetsmart.io' });
+  });
+
+  it('falls through alias path variants and reports all of them when none work', async () => {
+    const { smartermailProvider } = await import('@/libs/plugins/smartermail');
+    stubDomainFlow({
+      onDomainCall: () => new Response('not found', { status: 404 }),
+    });
+
+    // The point is the error names what was tried and where to look, instead of
+    // leaving "404" to be read as "this feature does not exist".
+    await expect(smartermailProvider.call('list_aliases', { domain: 'budgetsmart.io' }, CRED, SERVER))
+      .rejects
+      .toThrow(/settings\/domain\/aliases[\s\S]*Documentation\/api/);
+  });
+
+  it('stops at the first alias path that works', async () => {
+    const { smartermailProvider } = await import('@/libs/plugins/smartermail');
+    const calls = stubDomainFlow({
+      onDomainCall: (url: string) => (url.includes('settings/domain/aliases')
+        ? new Response(JSON.stringify({ aliases: [] }), { status: 200 })
+        : new Response('not found', { status: 404 })),
+    });
+
+    await smartermailProvider.call('list_aliases', { domain: 'budgetsmart.io' }, CRED, SERVER);
+
+    expect(calls.filter(c => c.url.includes('alias')).length).toBe(1);
+  });
+
+  it('requires a domain', async () => {
+    const { smartermailProvider } = await import('@/libs/plugins/smartermail');
+    stubDomainFlow();
+
+    await expect(smartermailProvider.call('domain_users', {}, CRED, SERVER))
+      .rejects
+      .toThrow(/which domain/i);
+  });
+});
