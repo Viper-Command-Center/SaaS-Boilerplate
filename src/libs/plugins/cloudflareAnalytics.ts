@@ -71,7 +71,15 @@ async function rumQuery(
   });
   const body = await resp.json().catch(() => ({})) as Record<string, any>;
   if (!resp.ok) {
-    throw new Error(`Cloudflare API ${resp.status}: ${JSON.stringify(body).slice(0, 300)}`);
+    // 401/403 has two common causes and Cloudflare's own message names neither.
+    const hint = resp.status === 401 || resp.status === 403
+      ? ' — either the API token lacks "Account Analytics : Read" (dash.cloudflare.com → My Profile → '
+      + 'API Tokens → edit the token → Permissions), or this connection is pointed at Cloudflare\'s '
+      + 'hosted MCP server instead of this built-in provider. That server authenticates with OAuth, '
+      + 'which Artivio cannot do — an error mentioning "insufficient_scope" or scopes like "user:read" '
+      + 'comes from THERE, not from this adapter, and no API token will satisfy it.'
+      : '';
+    throw new Error(`Cloudflare API ${resp.status}: ${JSON.stringify(body).slice(0, 300)}${hint}`);
   }
   if (Array.isArray(body.errors) && body.errors.length > 0) {
     // Surface GraphQL errors verbatim — they name the exact field at fault.
@@ -92,7 +100,7 @@ export const cloudflareAnalyticsProvider: BuiltinProvider = {
   description:
     'Real visitor data for the marketing site — near-realtime page views, visits, top pages, referrers, countries and devices, straight from Cloudflare Web Analytics.',
   credentialLabel:
-    'A Cloudflare API token with "Account Analytics : Read" (dash.cloudflare.com → My Profile → API Tokens). Raw token — no "Bearer" prefix.',
+    'A Cloudflare API token with "Account Analytics : Read" (dash.cloudflare.com → My Profile → API Tokens). Paste the raw token; a "Bearer " prefix is stripped automatically, so either form works.',
   perConnection: true,
 
   tools: [
@@ -135,7 +143,21 @@ export const cloudflareAnalyticsProvider: BuiltinProvider = {
   ],
 
   call: async (tool, args, credential, target): Promise<string> => {
-    const token = (credential ?? '').trim();
+    /**
+     * Strip a leading "Bearer ", rather than sending "Bearer Bearer <token>".
+     *
+     * 🔴 Artivio's connection types disagree about this and both are right in
+     * their own context. An HTTP MCP connection stores the WHOLE header value,
+     * so Zernio's credential must keep the "Bearer " prefix — its own setup note
+     * says so, because omitting it is that vendor's most common 401. A built-in
+     * provider stores the RAW secret and builds the header itself, so the same
+     * prefix here produces "Bearer Bearer …".
+     *
+     * Anyone configuring both hits this, and the resulting Cloudflare error says
+     * nothing about a duplicated prefix. Accepting either form costs one line
+     * and removes an entire category of support round-trip.
+     */
+    const token = (credential ?? '').trim().replace(/^Bearer\s+/i, '').trim();
     if (!token) {
       throw new Error('No Cloudflare API token configured for this plugin.');
     }
