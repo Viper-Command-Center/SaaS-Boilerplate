@@ -622,4 +622,37 @@ describe('shared mailbox access', () => {
       TARGET,
     )).rejects.toThrow(/cannot be enabled/);
   });
+
+  /**
+   * The bug this guards: a build that names the list differently makes the
+   * adapter map over [] and report a clean zero. On the first live run that
+   * produced "0 messages" for a mailbox holding 5.43 MB, and the conclusion
+   * drawn was that mail was not routing.
+   */
+  it('does not claim an empty mailbox when it simply could not parse the response', async () => {
+    const { smartermailProvider } = await import('@/libs/plugins/smartermail');
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      const u = String(url);
+      if (u.includes('authenticate-user')) {
+        return new Response(JSON.stringify({ accessToken: 'tok', accessTokenExpiration: new Date(Date.now() + 3600_000).toISOString() }), { status: 200 });
+      }
+      if (u.includes('impersonate-user')) {
+        return new Response(JSON.stringify({ impersonateAccessToken: 'mailbox-token' }), { status: 200 });
+      }
+      // A build that names the list something this adapter has never seen.
+      return new Response(JSON.stringify({ mailboxContents: [{ uid: '1' }], totalCount: 1 }), { status: 200 });
+    }));
+
+    const out = JSON.parse(await smartermailProvider.call(
+      'read_messages',
+      { mailbox: 'support@budgetsmart.io' },
+      'artivio@example.com:hunter2',
+      'https://mail.example.com | support@budgetsmart.io',
+    ) as string);
+
+    expect(out.count).toBe(0);
+    expect(out.note).toMatch(/NOT proof the mailbox is empty/);
+    // The keys ARE the diagnosis.
+    expect(out.responseKeys).toContain('mailboxContents');
+  });
 });

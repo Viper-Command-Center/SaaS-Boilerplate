@@ -868,7 +868,36 @@ export const smartermailProvider: BuiltinProvider = {
           },
         });
 
-        const list = (body.messages ?? body.data ?? []) as any[];
+        const list = (body.messages ?? body.data ?? body.results ?? body.items ?? body.messageList ?? []) as any[];
+
+        /**
+         * 🔴 AN EMPTY LIST IS NOT PROOF OF AN EMPTY MAILBOX.
+         *
+         * The key holding the messages differs between SmarterMail builds. If
+         * none of the candidates above match, this maps over [] and reports a
+         * confident "0 messages" — which reads exactly like a clean inbox. The
+         * first time it ran against a real server it returned 0 for a mailbox
+         * holding 5.43 MB of mail, and the conclusion drawn was "mail is not
+         * routing to support@" — a wrong answer that would have sent someone
+         * into DNS and MX records.
+         *
+         * So when nothing parses, say what the server ACTUALLY returned. The
+         * keys are the whole diagnosis: if `messages` is absent and something
+         * else is present, the fix is one line.
+         */
+        if (!list.length) {
+          return cap({
+            mailbox,
+            folder,
+            count: 0,
+            responseKeys: Object.keys(body ?? {}),
+            note: 'NO MESSAGES WERE PARSED — this is NOT proof the mailbox is empty. It may mean this '
+              + 'SmarterMail build returns the list under a key this adapter does not know; the keys it '
+              + 'actually returned are in responseKeys. Cross-check with domain_users: a mailbox using '
+              + 'megabytes is not empty. To see the raw shape, call smartermail_call on mail/messages. '
+              + 'Do not report a routing or delivery problem on the strength of this result alone.',
+          });
+        }
         // Summarise rather than returning raw payloads: message bodies are large
         // and this is a triage view. read_message fetches one in full.
         return cap({
