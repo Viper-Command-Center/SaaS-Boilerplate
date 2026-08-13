@@ -8,7 +8,7 @@
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { __clearTokenCache, buildUrl, guardPath, parseCredential } from '@/libs/plugins/smartermail';
+import { __clearTokenCache, buildUrl, guardPath, parseCredential, parseTarget } from '@/libs/plugins/smartermail';
 
 afterEach(() => {
   __clearTokenCache();
@@ -451,5 +451,175 @@ describe('domain-scoped tools', () => {
     await expect(smartermailProvider.call('domain_users', {}, CRED, SERVER))
       .rejects
       .toThrow(/which domain/i);
+  });
+});
+
+/**
+ * Shared-mailbox reading.
+ *
+ * The allowlist IS the privacy control, so these tests are less about the happy
+ * path than about proving the control cannot be bypassed: default-closed, exact
+ * matching, and no leakage between mailboxes.
+ */
+describe('shared mailbox access', () => {
+  const CRED = 'artivio@example.com:hunter2';
+  const SERVER = 'https://mail.example.com';
+  const TARGET = 'https://mail.example.com | support@budgetsmart.io, info@budgetsmart.io';
+
+  function stubMailFlow() {
+    const calls: Array<{ url: string; token: string; body?: any }> = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: any) => {
+      const u = String(url);
+      calls.push({
+        url: u,
+        token: String(init?.headers?.Authorization ?? '').replace('Bearer ', ''),
+        body: init?.body ? JSON.parse(init.body) : undefined,
+      });
+      if (u.includes('authenticate-user')) {
+        return new Response(JSON.stringify({
+          accessToken: 'sysadmin-token',
+          accessTokenExpiration: new Date(Date.now() + 3600_000).toISOString(),
+        }), { status: 200 });
+      }
+      if (u.includes('impersonate-user')) {
+        return new Response(JSON.stringify({ impersonateAccessToken: 'mailbox-token' }), { status: 200 });
+      }
+      return new Response(JSON.stringify({
+        messages: [{ uid: '42', from: 'a@b.com', subject: 'Help', date: '2026-08-12', isRead: false }],
+      }), { status: 200 });
+    }));
+    return calls;
+  }
+
+  describe('parseTarget', () => {
+    it('reads the server alone when no allowlist is given', () => {
+      expect(parseTarget('https://mail.example.com')).toEqual({
+        server: 'https://mail.example.com',
+        readable: [],
+      });
+    });
+
+    it('splits the server from the readable mailboxes', () => {
+      expect(parseTarget(TARGET)).toEqual({
+        server: 'https://mail.example.com',
+        readable: ['support@budgetsmart.io', 'info@budgetsmart.io'],
+      });
+    });
+
+    it('lowercases and trims, so casing in the config is not a silent denial', () => {
+      expect(parseTarget('https://m.io |  Support@Example.COM ').readable)
+        .toEqual(['support@example.com']);
+    });
+  });
+
+  /**
+   * Default-closed. A connection configured before mail reading existed has no
+   * allowlist, and must not silently gain the ability to read mail when the
+   * feature ships.
+   */
+  it('refuses every mailbox when no allowlist is configured', async () => {
+    const { smartermailProvider } = await import('@/libs/plugins/smartermail');
+    stubMailFlow();
+
+    await expect(smartermailProvider.call('read_messages', { mailbox: 'support@budgetsmart.io' }, CRED, SERVER))
+      .rejects
+      .toThrow(/not permitted to read any mailbox/);
+  });
+
+  it('refuses a mailbox that is not on the list, and names the list', async () => {
+    const { smartermailProvider } = await import('@/libs/plugins/smartermail');
+    const calls = stubMailFlow();
+
+    await expect(smartermailProvider.call('read_messages', { mailbox: 'ryan@budgetsmart.io' }, CRED, TARGET))
+      .rejects
+      .toThrow(/not on this connection's readable list/);
+
+    // And crucially: it must refuse BEFORE impersonating anyone.
+    expect(calls.some(c => c.url.includes('impersonate-user'))).toBe(false);
+  });
+
+  // Substring matching would make "upport@x.com" or "support@x.com.evil" pass.
+  it('matches the address exactly, not as a substring', async () => {
+    const { smartermailProvider } = await import('@/libs/plugins/smartermail');
+    stubMailFlow();
+
+    await expect(smartermailProvider.call('read_messages', { mailbox: 'support@budgetsmart.io.attacker.com' }, CRED, TARGET))
+      .rejects
+      .toThrow(/not on this connection's readable list/);
+  });
+
+  it('reads an allowlisted mailbox as that mailbox', async () => {
+    const { smartermailProvider } = await import('@/libs/plugins/smartermail');
+    const calls = stubMailFlow();
+
+    const out = JSON.parse(await smartermailProvider.call(
+      'read_messages',
+      { mailbox: 'support@budgetsmart.io' },
+      CRED,
+      TARGET,
+    ) as string);
+
+    expect(calls.find(c => c.url.includes('impersonate-user'))!.body)
+      .toEqual({ email: 'support@budgetsmart.io' });
+    expect(calls.find(c => c.url.includes('mail/messages'))!.token).toBe('mailbox-token');
+    expect(out.messages[0].subject).toBe('Help');
+  });
+
+  // The agent will read mail from strangers. It must be told, every time.
+  it('labels message content as untrusted', async () => {
+    const { smartermailProvider } = await import('@/libs/plugins/smartermail');
+    stubMailFlow();
+
+    const out = JSON.parse(await smartermailProvider.call(
+      'read_messages',
+      { mailbox: 'support@budgetsmart.io' },
+      CRED,
+      TARGET,
+    ) as string);
+
+    expect(out.note).toMatch(/UNTRUSTED/);
+  });
+
+  it('does not glue the allowlist onto the request URL', async () => {
+    const { smartermailProvider } = await import('@/libs/plugins/smartermail');
+    const calls = stubMailFlow();
+
+    await smartermailProvider.call('read_messages', { mailbox: 'support@budgetsmart.io' }, CRED, TARGET);
+
+    expect(calls.every(c => !c.url.includes('|'))).toBe(true);
+    expect(calls.every(c => c.url.startsWith('https://mail.example.com/'))).toBe(true);
+  });
+
+  it('caps the page size at 100 however large a limit is asked for', async () => {
+    const { smartermailProvider } = await import('@/libs/plugins/smartermail');
+    const calls = stubMailFlow();
+
+    await smartermailProvider.call('read_messages', { mailbox: 'support@budgetsmart.io', limit: 5000 }, CRED, TARGET);
+
+    expect(calls.find(c => c.url.includes('mail/messages'))!.body.take).toBe(100);
+  });
+
+  it('gates list_folders and read_message on the same allowlist', async () => {
+    const { smartermailProvider } = await import('@/libs/plugins/smartermail');
+    stubMailFlow();
+
+    await expect(smartermailProvider.call('list_folders', { mailbox: 'wendy@budgetsmart.io' }, CRED, TARGET))
+      .rejects
+      .toThrow(/not on this connection's readable list/);
+    await expect(smartermailProvider.call('read_message', { mailbox: 'wendy@budgetsmart.io', uid: '1' }, CRED, TARGET))
+      .rejects
+      .toThrow(/not on this connection's readable list/);
+  });
+
+  it('still refuses to mint a token through the escape hatch', async () => {
+    const { smartermailProvider } = await import('@/libs/plugins/smartermail');
+    stubMailFlow();
+
+    await expect(smartermailProvider.call(
+      'smartermail_call',
+      { path: 'settings/domain/impersonate-user', method: 'POST', body: { email: 'ryan@budgetsmart.io' } },
+      CRED,
+      TARGET,
+    )).rejects.toThrow(/cannot be enabled/);
   });
 });
