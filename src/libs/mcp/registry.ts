@@ -380,13 +380,49 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
    * A connection at/above the threshold is deferred (when deferral is on);
    * everything else is added to the live arrays immediately.
    */
+  /**
+   * 🔴 A DENIED tool is not advertised to the model at all.
+   *
+   * `deny` used to be enforced only at call time: the schema still went to the
+   * model, the model still chose it, and the loop answered "not permitted in
+   * this workspace". That is enforcement, but it is enforcement AFTER the
+   * expensive part, and there is a class of tool where the expensive part is
+   * fatal.
+   *
+   * GitHub's hosted `create_or_update_file` is the case that proved it. Its
+   * only write shape takes the ENTIRE file as an argument, so calling it on an
+   * 84,680-character page means emitting ~22,000 output tokens against a 16,384
+   * limit. The reply is amputated mid-argument and the turn dies before any
+   * policy check can run — denying the tool did nothing, because the damage is
+   * done by the model WRITING the call, not by us executing it. The only
+   * intervention that lands is not putting it in front of the model.
+   *
+   * It is also just correct on cost: a tool the workspace has forbidden has no
+   * business occupying context on every single turn.
+   *
+   * The executor is still registered, so a resolve() for a denied name (a
+   * deferred group, a replayed approval) still answers with the policy refusal
+   * rather than "Unknown tool".
+   */
+  function advertise(p: PreparedTool): boolean {
+    return p.executor.policy !== 'deny';
+  }
+
   function commitConnectionTools(connectionName: string, prepared: PreparedTool[]): void {
-    if (deferralEnabled && prepared.length >= DEFER_THRESHOLD) {
-      deferredGroups.push({ connectionName, sanitized: sanitize(connectionName), prepared });
+    const visible = prepared.filter(advertise);
+    if (deferralEnabled && visible.length >= DEFER_THRESHOLD) {
+      deferredGroups.push({ connectionName, sanitized: sanitize(connectionName), prepared: visible });
+      for (const p of prepared) {
+        if (!advertise(p)) {
+          executors.set(p.def.name, p.executor);
+        }
+      }
       return;
     }
     for (const p of prepared) {
-      anthropicTools.push(p.def);
+      if (advertise(p)) {
+        anthropicTools.push(p.def);
+      }
       executors.set(p.def.name, p.executor);
     }
   }
