@@ -10,6 +10,7 @@ import { cloudflareAnalyticsProvider } from '@/libs/plugins/cloudflareAnalytics'
 import { cloudflareDnsProvider } from '@/libs/plugins/cloudflareDns';
 import { dataforseoProvider } from '@/libs/plugins/dataforseo';
 import { elementorProvider } from '@/libs/plugins/elementor';
+import { githubProvider } from '@/libs/plugins/github';
 import { googleAnalyticsProvider } from '@/libs/plugins/googleAnalytics';
 import { heygenProvider } from '@/libs/plugins/heygen';
 import { kieProvider } from '@/libs/plugins/kie';
@@ -33,6 +34,7 @@ export const BUILTIN_PROVIDERS: Record<string, BuiltinProvider> = {
   [smartermailProvider.slug]: smartermailProvider,
   [postmarkProvider.slug]: postmarkProvider,
   [postgresProvider.slug]: postgresProvider,
+  [githubProvider.slug]: githubProvider,
 };
 
 export function getBuiltinProvider(slug: string): BuiltinProvider | undefined {
@@ -371,7 +373,20 @@ export const CATALOG_PRESETS = [
       transport: 'http' as const,
       url: 'https://api.githubcopilot.com/mcp/x/repos',
       authHeader: 'Authorization',
-      authHint: 'Bearer <fine-grained PAT> with Contents read/write on the site repos.',
+      authHint: 'Bearer <fine-grained PAT> with Contents read/write on the site repos. \u26a0\ufe0f Its only write verb takes the WHOLE file, so an agent cannot edit a page of any real size through it \u2014 the call exceeds the output-token limit. Use "GitHub repository (edit in place)" for editing; this one is fine for browsing and for repo-level operations it does not cover.',
+    },
+  },
+  {
+    key: 'github-repo',
+    label: 'GitHub repository (edit in place)',
+    entry: {
+      slug: 'github-repo',
+      name: 'GitHub repository',
+      description: 'Read and edit the code behind one site repo. Edits are applied server-side by find-and-replace, so changing a headline on a large page costs a few tokens instead of the whole file. Pushing to the deploy branch publishes the site.',
+      category: 'dev',
+      transport: 'builtin' as const,
+      provider: 'github-repo',
+      authHint: 'A fine-grained PAT with Contents \u2192 Read and write on this repository. One connection = one repo: set the target to "owner/repo", or "owner/repo | branch" to pin the deploy branch. Add a second connection for a second site.',
     },
   },
 ];

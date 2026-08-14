@@ -811,9 +811,19 @@ export function buildPlatformTools(tenantId: string): {
   executors.set('read_file', {
     policy: 'auto',
     call: async (args) => {
-      const row = await getFile(tenantId, String(args.fileId ?? ''));
+      const wanted = String(args.fileId ?? '').trim();
+      const row = await getFile(tenantId, wanted);
       if (!row) {
-        throw new Error('File not found in this workspace.');
+        // Say which id missed and how to get a real one. The old message —
+        // "File not found in this workspace." — was true but dead-ended: it
+        // gave the agent nothing to do next, and triage read the words "not
+        // found" as an unreachable endpoint and told the user to check a
+        // server URL that has nothing to do with the file library.
+        throw new Error(
+          `No file with id "${wanted}" in this workspace. This is a WRONG ARGUMENT, not a platform fault — `
+          + 'call list_files to get the current ids and try again. File ids are UUIDs; a name, a path or a '
+          + 'partial id will never match.',
+        );
       }
       if (!row.textContent) {
         return JSON.stringify({

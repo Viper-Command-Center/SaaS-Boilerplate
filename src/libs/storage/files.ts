@@ -291,7 +291,34 @@ export async function listFiles(tenantId: string, limit = 100) {
     .limit(limit);
 }
 
+/**
+ * 🔴 An id that is not a UUID must never reach the query.
+ *
+ * `files.id` is a uuid column, so Postgres answers a malformed one with
+ * `invalid input syntax for type uuid` — a THROWN error, not an empty result.
+ * That string matches nothing in classifyToolError, so it fell through to the
+ * catch-all and was declared a platform bug: the operator got an escalation
+ * email, and the agent was told "this is not something you can fix, do NOT
+ * invent troubleshooting steps".
+ *
+ * Which is the expensive part. The agent had simply passed an id it had
+ * mis-copied; one retry with the right one would have worked. Instead it was
+ * instructed to stop trying, abandoned the file library, and fell back to
+ * fetching the whole file from GitHub — the route that then blew the
+ * output-token limit and ended the turn with nothing done. A wrong argument
+ * reported as an unfixable platform defect does not just misinform, it closes
+ * off the recovery.
+ *
+ * A lookup by an id that cannot exist is a miss, not a failure.
+ */
+function isUuid(id: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+}
+
 export async function getFile(tenantId: string, id: string) {
+  if (!isUuid(String(id ?? '').trim())) {
+    return undefined;
+  }
   const [row] = await db
     .select()
     .from(files)
