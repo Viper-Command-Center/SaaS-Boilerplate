@@ -208,8 +208,13 @@ export function buildMissionTools(tenantId: string): MissionToolset {
       if (!m) {
         throw new Error('No such mission in this workspace.');
       }
-      if (m.status === 'done') {
-        throw new Error(`Mission "${m.title}" is already done — nothing to change.`);
+      if (m.status === 'done' || m.status === 'cancelled') {
+        // Not an error when the request is a no-op: asking to cancel something
+        // already cancelled has got the outcome it wanted.
+        if (requested === 'cancelled') {
+          return `Mission "${m.title}" was already ${m.status} — nothing to cancel.`;
+        }
+        throw new Error(`Mission "${m.title}" is already ${m.status} — it cannot be resumed. Start a new mission instead.`);
       }
 
       if (requested === 'cancelled') {
@@ -224,8 +229,13 @@ export function buildMissionTools(tenantId: string): MissionToolset {
           ));
         await db
           .update(missions)
-          .set({ status: 'done', updatedAt: new Date() })
+          .set({ status: 'cancelled', updatedAt: new Date() })
           .where(eq(missions.id, m.id));
+        // 'cancelled', not 'done'. A cancelled mission and a completed one are
+        // different facts, and recording both as 'done' meant nobody could tell
+        // afterwards whether the work happened. It also made a second cancel
+        // throw "already done — nothing to change", which reads like the cancel
+        // failed rather than like it had already succeeded.
         return `Mission "${m.title}" cancelled — remaining steps marked skipped. It will not run again.`;
       }
 

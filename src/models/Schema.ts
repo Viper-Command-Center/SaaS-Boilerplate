@@ -625,7 +625,18 @@ export const missionSteps = pgTable(
     // pending | running | done | failed | skipped
     status: varchar('status', { length: 20 }).notNull().default('pending'),
     result: text('result'),
+    /** Failed ATTEMPTS. Two strikes and the mission pauses for a human. */
     attempts: integer('attempts').notNull().default(0),
+    /**
+     * Times this step ran out of tool budget and was continued.
+     *
+     * Separate from `attempts` because exhaustion is not failure — but it is
+     * not progress either. Without a ceiling a step that exhausts every tick
+     * runs forever: never failing, never finishing, holding the mission at
+     * 'running' and burning the budget on every tick. That is what "stuck at
+     * 1/9 steps" was.
+     */
+    continuations: integer('continuations').notNull().default(0),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },

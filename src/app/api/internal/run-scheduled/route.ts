@@ -48,6 +48,16 @@ const MAX_TASKS_PER_TICK = 3;
 const MISSION_MAX_ITERATIONS = 40;
 const MISSION_WALL_CLOCK_MS = 4 * 60_000;
 const CONTINUATION_DELAY_MS = 5 * 60_000;
+/**
+ * How many times one mission step may run out of budget before we stop.
+ *
+ * Exhaustion is not failure, so it never tripped MAX_STEP_ATTEMPTS — which
+ * meant a step that exhausted on every tick continued forever: never failing,
+ * never finishing, holding its mission at 'running' and spending the budget
+ * again every tick. Six continuations is roughly 24 minutes of model time on
+ * ONE step; past that it is not slow, it is not converging.
+ */
+const MAX_STEP_CONTINUATIONS = 6;
 // ── Tick time budgeting (Phase 28.2 — the mission-starvation fix) ──────────
 // This runs on Railway (a plain Node server), so Next's maxDuration is not a
 // hard kill and the GitHub curl disconnecting doesn't stop the handler. The
@@ -337,14 +347,66 @@ ${step.instructions}`;
         wallClockMs: MISSION_WALL_CLOCK_MS,
       });
 
+      /**
+       * 🔴 DID THIS MISSION GET CANCELLED WHILE THE STEP WAS RUNNING?
+       *
+       * A step holds the runner for up to four minutes. `set_mission_status`
+       * can land inside that window: it marks the open steps 'skipped' and
+       * closes the mission. Every write-back below then fired ANYWAY —
+       * un-skipping the step, and in the failure path setting the mission back
+       * to 'paused'. So a cancel issued at the wrong moment was silently
+       * reverted and the mission carried on, which is exactly what "I can't
+       * cancel it" looked like from outside: the cancel worked, and the runner
+       * undid it seconds later.
+       *
+       * Re-read the row and, if it is no longer running, write nothing.
+       */
+      const [current] = await db
+        .select({ status: missions.status })
+        .from(missions)
+        .where(eq(missions.id, mission.id))
+        .limit(1);
+      if (!current || current.status !== 'running') {
+        missionResults.push({ missionId: mission.id, stepId: step.id, outcome: `abandoned-${current?.status ?? 'gone'}` });
+        continue;
+      }
+
       if (run.exhausted) {
-        // Unfinished, not failed: keep it 'running' with the wrap-up stored —
-        // the next tick finds the running step and continues from it.
-        await db
-          .update(missionSteps)
-          .set({ result: run.text.slice(0, 4_000), updatedAt: new Date() })
-          .where(eq(missionSteps.id, step.id));
-        missionResults.push({ missionId: mission.id, stepId: step.id, outcome: 'continuing' });
+        const continuations = step.continuations + 1;
+
+        if (continuations >= MAX_STEP_CONTINUATIONS) {
+          // Not converging. Stop rather than continue forever — an unbounded
+          // loop here spends real money every tick and starves other missions,
+          // while looking from outside like steady progress.
+          await db
+            .update(missionSteps)
+            .set({
+              status: 'failed',
+              continuations,
+              result: `Stopped after ${continuations} continuations without finishing. Last status: ${run.text}`.slice(0, 4_000),
+              updatedAt: new Date(),
+            })
+            .where(eq(missionSteps.id, step.id));
+          await db
+            .update(missions)
+            .set({ status: 'paused', updatedAt: new Date() })
+            .where(eq(missions.id, mission.id));
+          await captureIssue({
+            tenantId: mission.tenantId,
+            source: `mission-step stalled: ${mission.title} / ${step.title}`.slice(0, 160),
+            error: new Error(`Step exhausted its tool budget ${continuations} times without completing.`),
+            detail: { missionId: mission.id, stepId: step.id, continuations },
+          }).catch(() => {});
+          missionResults.push({ missionId: mission.id, stepId: step.id, outcome: 'stalled+paused' });
+        } else {
+          // Unfinished, not failed: keep it 'running' with the wrap-up stored —
+          // the next tick finds the running step and continues from it.
+          await db
+            .update(missionSteps)
+            .set({ continuations, result: run.text.slice(0, 4_000), updatedAt: new Date() })
+            .where(eq(missionSteps.id, step.id));
+          missionResults.push({ missionId: mission.id, stepId: step.id, outcome: `continuing (${continuations}/${MAX_STEP_CONTINUATIONS})` });
+        }
       } else {
         await db
           .update(missionSteps)
@@ -364,6 +426,19 @@ ${step.instructions}`;
     } catch (err) {
       const message = err instanceof Error ? err.message : 'unknown error';
       const attempts = step.attempts + 1;
+
+      // Same check as the success path: never resurrect a mission a human
+      // cancelled mid-step. Without this the branch below would set a
+      // cancelled mission back to 'paused', and it would reappear in the list.
+      const [stillRunning] = await db
+        .select({ status: missions.status })
+        .from(missions)
+        .where(eq(missions.id, mission.id))
+        .limit(1);
+      if (!stillRunning || stillRunning.status !== 'running') {
+        missionResults.push({ missionId: mission.id, stepId: step.id, outcome: `abandoned-after-error-${stillRunning?.status ?? 'gone'}` });
+        continue;
+      }
       if (attempts >= MAX_STEP_ATTEMPTS) {
         // Second strike: stop the whole mission and put a human in the loop.
         // The step's real error is stored on the step AND captured as an

@@ -134,6 +134,13 @@
       "when": 1786600000000,
       "tag": "0018_scheduled-task-once",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1786700000000,
+      "tag": "0019_mission-step-continuations",
+      "breakpoints": true
     }
   ]
 }
