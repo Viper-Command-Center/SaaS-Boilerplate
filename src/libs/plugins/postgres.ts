@@ -36,9 +36,9 @@
  *    write reviewable rather than merely approved.
  */
 
+import type { BuiltinProvider, BuiltinTool } from '@/libs/plugins/types';
 import { Buffer } from 'node:buffer';
 import { Client } from 'pg';
-import type { BuiltinProvider, BuiltinTool } from '@/libs/plugins/types';
 
 const MAX_OUTPUT = 60_000;
 const STATEMENT_TIMEOUT_MS = 15_000;
@@ -54,7 +54,7 @@ const DEFAULT_SELECT_LIMIT = 200;
 const FORBIDDEN = /^\s*(drop|truncate|alter|create|grant|revoke|comment|reindex|vacuum|cluster|copy|do|call|set|reset|begin|commit|rollback|savepoint|listen|notify)\b/i;
 
 /** Statements that read. Everything else is treated as a write. */
-const READ_ONLY = /^\s*(select|with|explain|show|table)\b/i;
+const READ_ONLY = /^\s*(?:select|with|explain|show|table)\b/i;
 
 function cap(value: unknown): string {
   const json = JSON.stringify(value);
@@ -103,7 +103,7 @@ export function assertAllowed(sql: string): { readOnly: boolean } {
   const readOnly = READ_ONLY.test(trimmed);
 
   // The classic one. `DELETE FROM posts` is valid SQL and empties the table.
-  if (!readOnly && /^\s*(update|delete)\b/i.test(trimmed) && !/\bwhere\b/i.test(trimmed)) {
+  if (!readOnly && /^\s*(?:update|delete)\b/i.test(trimmed) && !/\bwhere\b/i.test(trimmed)) {
     throw new Error(
       'Postgres: an UPDATE or DELETE without a WHERE clause affects EVERY ROW in the table. If that is '
       + 'genuinely intended, it is a migration, not a tool call. Add a WHERE.',
@@ -253,7 +253,7 @@ export const postgresProvider: BuiltinProvider = {
     if (!connectionString) {
       throw new Error('Postgres: this connection has no connection string configured.');
     }
-    if (!/^postgres(ql)?:\/\//i.test(connectionString)) {
+    if (!/^postgres(?:ql)?:\/\//i.test(connectionString)) {
       throw new Error(
         'Postgres: the credential must be a connection string starting with postgresql:// — not a host name, '
         + 'an API key, or a Neon API token.',
