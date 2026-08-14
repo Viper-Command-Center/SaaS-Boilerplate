@@ -131,7 +131,11 @@ async function withClient<T>(connectionString: string, fn: (c: Client) => Promis
     // setting surfaces as an opaque connection reset rather than a TLS error.
     ssl: /sslmode=disable/i.test(connectionString) ? false : { rejectUnauthorized: false },
     connectionTimeoutMillis: 10_000,
-    statement_timeout: STATEMENT_TIMEOUT_MS,
+    // NOT statement_timeout here. As a startup parameter it is rejected by
+    // connection poolers (Neon's pooled endpoint, PgBouncer), and the failure
+    // looks like a connection error rather than a config one. It is set with
+    // SET LOCAL inside each transaction below instead, which is correct under
+    // transaction pooling and applies to exactly one statement.
   });
 
   try {
@@ -324,12 +328,27 @@ export const postgresProvider: BuiltinProvider = {
       const params = Array.isArray(args.params) ? args.params : [];
 
       return withClient(connectionString, async (c) => {
-        const res = await c.query(withLimit(sql, limit), params);
-        return cap({
-          rowCount: res.rowCount,
-          rows: serialise(res.rows),
-          truncated: res.rowCount === limit ? `Exactly ${limit} rows came back — there may be more.` : undefined,
-        });
+        /**
+         * READ ONLY is belt and braces. The regex above already classified this
+         * as a read, but a regex is a guess about SQL and Postgres is not — in
+         * a read-only transaction the SERVER refuses any write, so a
+         * misclassification becomes a database error instead of a silent
+         * mutation. It also makes SET LOCAL work correctly under a pooler.
+         */
+        await c.query('BEGIN TRANSACTION READ ONLY');
+        try {
+          await c.query(`SET LOCAL statement_timeout = ${STATEMENT_TIMEOUT_MS}`);
+          const res = await c.query(withLimit(sql, limit), params);
+          await c.query('COMMIT');
+          return cap({
+            rowCount: res.rowCount,
+            rows: serialise(res.rows),
+            truncated: res.rowCount === limit ? `Exactly ${limit} rows came back — there may be more.` : undefined,
+          });
+        } catch (e) {
+          await c.query('ROLLBACK').catch(() => {});
+          throw e;
+        }
       });
     }
 
@@ -359,6 +378,7 @@ export const postgresProvider: BuiltinProvider = {
       return withClient(connectionString, async (c) => {
         await c.query('BEGIN');
         try {
+          await c.query(`SET LOCAL statement_timeout = ${STATEMENT_TIMEOUT_MS}`);
           const res = await c.query(statement, params);
           const affected = res.rowCount ?? 0;
 
