@@ -13,6 +13,7 @@ import { elementorProvider } from '@/libs/plugins/elementor';
 import { googleAnalyticsProvider } from '@/libs/plugins/googleAnalytics';
 import { heygenProvider } from '@/libs/plugins/heygen';
 import { kieProvider } from '@/libs/plugins/kie';
+import { postgresProvider } from '@/libs/plugins/postgres';
 import { postmarkProvider } from '@/libs/plugins/postmark';
 import { smartermailProvider } from '@/libs/plugins/smartermail';
 import { whmcsProvider } from '@/libs/plugins/whmcs';
@@ -31,6 +32,7 @@ export const BUILTIN_PROVIDERS: Record<string, BuiltinProvider> = {
   [whmcsProvider.slug]: whmcsProvider,
   [smartermailProvider.slug]: smartermailProvider,
   [postmarkProvider.slug]: postmarkProvider,
+  [postgresProvider.slug]: postgresProvider,
 };
 
 export function getBuiltinProvider(slug: string): BuiltinProvider | undefined {
@@ -291,6 +293,24 @@ export const CATALOG_PRESETS = [
       transport: 'builtin' as const,
       provider: 'postmark',
       authHint: 'The Postmark SERVER API Token for the client\'s server (Postmark → Servers → pick the server → API Tokens tab). NOT the Account token and NOT the SMTP password. You will also be asked for a default From address, which must already be a CONFIRMED Sender Signature on that account — an unconfirmed From is the single most common Postmark failure (error 400/401). ⚠️ Postmark has NO scheduled-send API: every send goes immediately. Scheduling is done by Artivio\'s scheduled tasks (startAt + once), not by Postmark. Bulk/marketing mail also needs a BROADCAST message stream — the default outbound stream is transactional-only and rejects it.',
+    },
+  },
+  {
+    key: 'postgres',
+    label: 'Postgres database (Neon, Supabase, any server)',
+    entry: {
+      slug: 'postgres',
+      name: 'Postgres',
+      description: 'Read and write one Postgres database — inspect tables, run queries, insert and update rows.',
+      category: 'data',
+      // Built-in rather than Neon's hosted MCP. Neon's MCP WOULD work (it takes
+      // an API key in a static header, unlike Cloudflare's and HeyGen's), but a
+      // Neon API key is account-wide and can delete projects, while a connection
+      // string reaches exactly one database. Neon's own docs also say to use
+      // their MCP for development, "never against production databases".
+      transport: 'builtin' as const,
+      provider: 'postgres',
+      authHint: 'The full Postgres connection string — postgresql://user:password@host/dbname?sslmode=require. For Neon: Dashboard → your project → Connection Details → copy the POOLED connection string. Leave the target/URL field blank. ⚠️ This reaches a live database with no undo: schema changes (CREATE/ALTER/DROP/TRUNCATE) are refused outright, UPDATE and DELETE without a WHERE are refused, and every write runs in a transaction that ROLLS BACK if it affects more rows than the agent said it expected. Use a database role with only the privileges the work needs — a connection string with superuser rights hands over more than the task requires.',
     },
   },
   {
