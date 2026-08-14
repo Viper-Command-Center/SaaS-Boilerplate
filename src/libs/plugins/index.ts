@@ -11,6 +11,7 @@ import { cloudflareDnsProvider } from '@/libs/plugins/cloudflareDns';
 import { dataforseoProvider } from '@/libs/plugins/dataforseo';
 import { elementorProvider } from '@/libs/plugins/elementor';
 import { githubProvider } from '@/libs/plugins/github';
+import { googleAdsProvider } from '@/libs/plugins/googleAds';
 import { googleAnalyticsProvider } from '@/libs/plugins/googleAnalytics';
 import { heygenProvider } from '@/libs/plugins/heygen';
 import { kieProvider } from '@/libs/plugins/kie';
@@ -35,6 +36,7 @@ export const BUILTIN_PROVIDERS: Record<string, BuiltinProvider> = {
   [postmarkProvider.slug]: postmarkProvider,
   [postgresProvider.slug]: postgresProvider,
   [githubProvider.slug]: githubProvider,
+  [googleAdsProvider.slug]: googleAdsProvider,
 };
 
 export function getBuiltinProvider(slug: string): BuiltinProvider | undefined {
@@ -374,6 +376,19 @@ export const CATALOG_PRESETS = [
       url: 'https://api.githubcopilot.com/mcp/x/repos',
       authHeader: 'Authorization',
       authHint: 'Bearer <fine-grained PAT> with Contents read/write on the site repos. \u26a0\ufe0f Its only write verb takes the WHOLE file, so an agent cannot edit a page of any real size through it \u2014 the call exceeds the output-token limit. Use "GitHub repository (edit in place)" for editing; this one is fine for browsing and for repo-level operations it does not cover.',
+    },
+  },
+  {
+    key: 'google-ads',
+    label: 'Google Ads (one account)',
+    entry: {
+      slug: 'google-ads',
+      name: 'Google Ads',
+      description: 'Read and optimise one Google Ads account \u2014 search terms and wasted spend, keyword economics, negative keywords, bids, budgets and bidding strategy. Spend ceilings are enforced by the adapter.',
+      category: 'marketing',
+      transport: 'builtin' as const,
+      provider: 'google-ads',
+      authHint: 'FOUR LINES of key=value: developer_token, client_id, client_secret, refresh_token. The developer token comes from the Google Ads UI (Tools \u2192 API Center) \u2014 Explorer access is usually granted automatically and is enough for everything here except keyword ideas, which Zernio covers instead. The client_id/client_secret are an OAuth 2.0 Desktop-app client in a Google Cloud project with the Google Ads API enabled; generate the refresh_token once with that client under a Google account that can reach the ad account. \u26a0\ufe0f PUBLISH the OAuth consent screen \u2014 while it is in Testing mode Google expires refresh tokens after 7 days and the connection dies silently. The TARGET carries the account and its spend ceilings: "<customerId> | maxDailyBudget=<amount> maxCpc=<amount>". Both ceilings are required and the adapter refuses to cross them, whatever the agent is told.',
     },
   },
   {
