@@ -528,6 +528,17 @@ export async function renderPdf(a: {
    * vanish and the deck comes out white.
    */
   media?: 'screen' | 'print';
+  /**
+   * A Chrome-drawn footer, repeated on every page (page numbers, a document
+   * label). It is a separate mini-document: the page's own stylesheet does not
+   * reach it, so it must carry inline styles, and Chrome fills in the
+   * `pageNumber`/`totalPages` classes itself.
+   *
+   * Passing this also suppresses Chrome's DEFAULT header, which is a date and
+   * the document title in 8px grey — nobody asked for it and it looks like a
+   * browser print-out rather than a document.
+   */
+  footerHtml?: string;
 }): Promise<PdfResult> {
   if (!a.html && !a.url) {
     throw new Error('renderPdf needs html or url.');
@@ -574,6 +585,13 @@ export async function renderPdf(a: {
       marginBottom: a.marginIn ?? 0.4,
       marginLeft: a.marginIn ?? 0.4,
       marginRight: a.marginIn ?? 0.4,
+      ...(a.footerHtml
+        ? {
+            displayHeaderFooter: true,
+            headerTemplate: '<span></span>',
+            footerTemplate: a.footerHtml,
+          }
+        : {}),
     }, pageSession) as { data: string };
 
     if (!data) {

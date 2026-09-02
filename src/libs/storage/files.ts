@@ -13,6 +13,7 @@
 import { randomUUID } from 'node:crypto';
 import { and, desc, eq } from 'drizzle-orm';
 import { db } from '@/libs/DB';
+import { extractPdfText, isPdf } from '@/libs/docs/pdfText';
 import {
   archiveRemote,
   deleteObject,
@@ -31,7 +32,6 @@ export const MAX_TEXT_CHARS = 400_000;
 const TEXT_MIME = /^(?:text\/|application\/(?:json|xml|x-yaml|yaml|csv))/i;
 const TEXT_EXT = /\.(?:txt|md|markdown|csv|tsv|json|ya?ml|html?|xml|log)$/i;
 
-
 export function isTextual(name: string, mime?: string | null): boolean {
   return (mime ? TEXT_MIME.test(mime) : false) || TEXT_EXT.test(name);
 }
@@ -43,6 +43,44 @@ function keyFor(tenantId: string, name: string): string {
 
 /** Text is only worth extracting for things the agent can actually read. */
 const MAX_EXTRACT_BYTES = 5 * 1024 * 1024;
+
+/**
+ * PDFs get a bigger ceiling than plain text. A 12MB scanned contract is an
+ * ordinary thing for a client to upload, and parsing it is pure JS — the cost
+ * is milliseconds, not a download of someone else's video.
+ */
+const MAX_PDF_BYTES = 20 * 1024 * 1024;
+
+/**
+ * Extract a PDF's text layer at write time, WITHOUT OCR.
+ *
+ * OCR is deliberately not done here: it is a multi-minute model call, and doing
+ * it while someone waits on an upload spinner would bill every workspace for
+ * scanning documents nobody ever reads. A scan is stored with no text and is
+ * transcribed the first time an agent actually opens it (see `read_file`).
+ *
+ * Never throws — a PDF that will not parse is still a file worth keeping.
+ */
+async function pdfTextOrNull(a: {
+  tenantId: string;
+  name: string;
+  bytes: Buffer;
+}): Promise<string | null> {
+  if (a.bytes.length > MAX_PDF_BYTES) {
+    return null;
+  }
+  try {
+    const result = await extractPdfText({
+      bytes: a.bytes,
+      name: a.name,
+      tenantId: a.tenantId,
+      allowOcr: false,
+    });
+    return result.text ? result.text.slice(0, MAX_TEXT_CHARS) : null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Big uploads (HeyGen renders, raw footage) go browser → R2 directly, so the
@@ -81,7 +119,7 @@ export async function confirmUpload(a: {
   // Media uploaded here must be USABLE by the agent (handed to a social/ad
   // plugin, embedded in a post) — all of which need a public URL. Documents
   // (briefs, contracts, brand guides) stay private, as before.
-  const isMedia = /^(image|video|audio)\//i.test(mime);
+  const isMedia = /^(?:image|video|audio)\//i.test(mime);
   const kind: 'knowledge' | 'asset' = isMedia ? 'asset' : 'knowledge';
 
   // Small text documents get their text extracted now, so read_file is a single
@@ -91,6 +129,20 @@ export async function confirmUpload(a: {
     try {
       const { body } = await getObject(a.key);
       text = body.toString('utf8').slice(0, MAX_TEXT_CHARS);
+    } catch {
+      text = null;
+    }
+  } else if (isPdf(a.name, mime) && head.size <= MAX_PDF_BYTES) {
+    // The single most common upload after a .docx. Without this, every brief,
+    // contract and invoice a client uploads answered "no extractable text" and
+    // the agent's only move was to ask them to paste the file back.
+    try {
+      const { body } = await getObject(a.key);
+      text = await pdfTextOrNull({
+        tenantId: a.tenantId,
+        name: a.name,
+        bytes: body,
+      });
     } catch {
       text = null;
     }
@@ -137,7 +189,13 @@ export async function saveFile(input: SaveInput) {
 
   const text = isTextual(input.name, mime)
     ? input.bytes.toString('utf8').slice(0, MAX_TEXT_CHARS)
-    : null;
+    : isPdf(input.name, mime)
+      ? await pdfTextOrNull({
+          tenantId: input.tenantId,
+          name: input.name,
+          bytes: input.bytes,
+        })
+      : null;
 
   const kind = input.kind ?? 'knowledge';
 
@@ -325,6 +383,22 @@ export async function getFile(tenantId: string, id: string) {
     .where(and(eq(files.tenantId, tenantId), eq(files.id, id)))
     .limit(1);
   return row;
+}
+
+/**
+ * Cache text that was extracted after the fact (a scan transcribed on first
+ * read). Tenant-scoped like every other write here, and best-effort: failing to
+ * cache must never fail the read that produced the text.
+ */
+export async function setFileText(tenantId: string, id: string, text: string): Promise<void> {
+  try {
+    await db
+      .update(files)
+      .set({ textContent: text.slice(0, MAX_TEXT_CHARS) })
+      .where(and(eq(files.tenantId, tenantId), eq(files.id, id)));
+  } catch {
+    // The agent already has the text in hand; a cache miss next time is cheap.
+  }
 }
 
 export async function removeFile(tenantId: string, id: string) {

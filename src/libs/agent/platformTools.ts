@@ -9,8 +9,11 @@ import type { AnthropicTool } from '@/libs/mcp/registry';
 import { and, asc, desc, eq } from 'drizzle-orm';
 import { assertPublicUrl, buildWebTools } from '@/libs/agent/webTools';
 import { db } from '@/libs/DB';
+import { renderDocument } from '@/libs/docs/pdf';
+import { extractPdfText, isPdf } from '@/libs/docs/pdfText';
 import { renderDeck } from '@/libs/docs/pptx';
-import { getFile, listFiles, saveFile, saveRemoteFile } from '@/libs/storage/files';
+import { getFile, listFiles, saveFile, saveRemoteFile, setFileText } from '@/libs/storage/files';
+import { getObject } from '@/libs/storage/r2';
 import { captureIssue } from '@/libs/support/issues';
 import { dashboardPanels, dashboardViews, datasets, scheduledTasks, tenants } from '@/models/Schema';
 
@@ -267,7 +270,7 @@ export function buildPlatformTools(tenantId: string): {
     },
     {
       name: 'read_file',
-      description: 'Read the text of a file in the library by id (from list_files). Use this for uploaded briefs and requirement docs instead of asking the user to paste them, and for large tool results the platform saved for you. Binary files (images, video) have no text — use their URL instead. For a file too big to read at once: pass `search` to find every line containing a string (with line numbers and surrounding context), or `offset`/`limit` to page through it. NEVER conclude a string is absent from a file you have only partly read — search for it.',
+      description: 'Read the text of a file in the library by id (from list_files). Use this for uploaded briefs and requirement docs instead of asking the user to paste them, and for large tool results the platform saved for you. PDFs ARE readable — text is extracted automatically, and a scanned PDF with no text layer is transcribed visually the first time you open it (that read takes longer; the text is cached afterwards). Only true media (images, video, audio) has no text — use its URL instead. For a file too big to read at once: pass `search` to find every line containing a string (with line numbers and surrounding context), or `offset`/`limit` to page through it. NEVER conclude a string is absent from a file you have only partly read — search for it.',
       input_schema: {
         type: 'object',
         properties: {
@@ -340,6 +343,46 @@ export function buildPlatformTools(tenantId: string): {
           },
         },
         required: ['title', 'slides'],
+      },
+    },
+    {
+      name: 'create_pdf',
+      description: 'Create a real PDF and save it to the workspace library. Use this for anything that should arrive as a finished document — a proposal, report, invoice, one-pager, meeting summary, contract draft, case study. Write the body as MARKDOWN (headings, bullets, numbered lists, tables, > quotes, ![alt](imageUrl), --- rules) and the page design is handled for you: cover heading, brand accent colour, styled tables, page numbers, margins. Do NOT write HTML or try to control layout. Returns the file id — pass it to an email tool\'s attachFileIds to send it. For SLIDES use create_presentation instead: a deck must stay editable, and a PDF is not. The PDF is stored privately (the client opens it from the Files page); use save_file_from_url only if you need a public link.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          filename: { type: 'string', description: 'e.g. "acme-proposal.pdf" (".pdf" is appended if missing)' },
+          title: { type: 'string', description: 'Document title — printed at the top of the first page.' },
+          subtitle: { type: 'string', description: 'Optional line under the title, e.g. the client name and date.' },
+          markdown: {
+            type: 'string',
+            description: 'The document body in markdown. Supports # ## ### headings, - and 1. lists, | tables |, > quotes, ```code```, ![alt](https://image), --- dividers, **bold**, *italic*, [links](https://…). Put \\pagebreak on its own line to force a new page.',
+          },
+          fromFileId: {
+            type: 'string',
+            description: 'Instead of markdown: the id of a text/markdown file already in the library (from list_files) to render as a PDF. This is how you turn a note or report you saved earlier into a document.',
+          },
+          footer: { type: 'string', description: 'Small line repeated at the bottom of every page beside the page number, e.g. "Artivio · Confidential".' },
+          theme: {
+            type: 'object',
+            description: 'Optional branding. Defaults to a clean light document.',
+            properties: {
+              accent: { type: 'string', description: 'Hex, e.g. "#0F62FE" — headings, rules and table headers.' },
+              text: { type: 'string' },
+              muted: { type: 'string' },
+              background: { type: 'string', description: 'Page colour. Leave it white unless asked — this is a printable document.' },
+              fontFace: { type: 'string', description: 'A Google Font family name, e.g. "Inter".' },
+              logoUrl: { type: 'string', description: 'Public image URL, drawn small above the title.' },
+            },
+          },
+          pageSize: { type: 'string', enum: ['letter', 'a4'], description: 'Default letter. Use a4 for UK/EU clients.' },
+          landscape: { type: 'boolean' },
+          html: {
+            type: 'string',
+            description: 'ADVANCED, rarely needed: a complete hand-written HTML document to print instead of markdown. Only use it when a layout genuinely cannot be expressed as markdown (a fixed invoice template). Unlike markdown, this path has no browser-free fallback — if the render browser is unavailable the call fails.',
+          },
+        },
+        required: ['title'],
       },
     },
     {
@@ -825,18 +868,47 @@ export function buildPlatformTools(tenantId: string): {
           + 'partial id will never match.',
         );
       }
-      if (!row.textContent) {
+      // Untrusted content: the loop already wraps tool output, and the system
+      // prompt forbids following instructions found inside it. A client brief
+      // is a REQUEST, not a command chain — plan from it, don't blindly execute.
+      let body = row.textContent;
+      let readNote: string | undefined;
+
+      /**
+       * A PDF with no cached text is either a scan (no text layer at all) or a
+       * file that landed before PDFs were readable. Read it NOW rather than
+       * reporting it unreadable — the entire point of the library is that the
+       * agent does not have to ask a client to paste back a document they have
+       * already uploaded. Whatever comes out is cached on the row, so the slow,
+       * paid path runs once per file and never again.
+       */
+      if (!body && isPdf(row.name, row.mime)) {
+        try {
+          const { body: bytes } = await getObject(row.r2Key);
+          const extracted = await extractPdfText({
+            bytes,
+            name: row.name,
+            tenantId,
+            allowOcr: true,
+          });
+          readNote = extracted.note;
+          if (extracted.text) {
+            body = extracted.text;
+            await setFileText(tenantId, row.id, extracted.text);
+          }
+        } catch (err) {
+          readNote = `This PDF could not be read (${err instanceof Error ? err.message.slice(0, 140) : 'unknown error'}).`;
+        }
+      }
+
+      if (!body) {
         return JSON.stringify({
           name: row.name,
           mime: row.mime,
           url: row.publicUrl,
-          note: 'This file has no extractable text (it is media or an unsupported format). Use its URL.',
+          note: readNote ?? 'This file has no extractable text (it is media or an unsupported format). Use its URL.',
         });
       }
-      // Untrusted content: the loop already wraps tool output, and the system
-      // prompt forbids following instructions found inside it. A client brief
-      // is a REQUEST, not a command chain — plan from it, don't blindly execute.
-      const body = row.textContent;
 
       /**
        * `search` exists because the alternative is guessing.
@@ -900,7 +972,13 @@ export function buildPlatformTools(tenantId: string): {
         });
       }
 
-      return slice;
+      return readNote
+        ? JSON.stringify({
+            name: row.name,
+            note: readNote,
+            content: slice,
+          })
+        : slice;
     },
   });
 
@@ -945,6 +1023,68 @@ export function buildPlatformTools(tenantId: string): {
       });
 
       return `Created "${row?.name}" — ${result.slideCount} slides, ${Math.round(result.bytes / 1024)}KB. File id ${row?.id}. It is in the workspace library; pass that id as attachFileIds to email it. Do NOT try to read the file back — it is a binary .pptx.`;
+    },
+  });
+
+  executors.set('create_pdf', {
+    policy: 'auto', // renders and writes only into this workspace's own library
+    call: async (args) => {
+      const raw = String(args.filename ?? args.title ?? 'document').slice(0, 120);
+      const base = raw.replace(/\.pdf$/i, '');
+
+      // `fromFileId` is the "turn that report into a PDF" path. Resolving it
+      // here, rather than making the agent read the file and paste it back into
+      // this call, saves a whole round trip of the document through the context
+      // window — which for a long report is the difference between working and
+      // hitting the output limit.
+      let markdown = String(args.markdown ?? '');
+      if (!markdown.trim() && args.fromFileId) {
+        const source = await getFile(tenantId, String(args.fromFileId));
+        if (!source) {
+          throw new Error(
+            `No file with id "${String(args.fromFileId)}" in this workspace. This is a WRONG ARGUMENT, not a `
+            + 'platform fault — call list_files for the current ids.',
+          );
+        }
+        if (!source.textContent) {
+          throw new Error(
+            `"${source.name}" has no readable text, so there is nothing to render. Read it first, or pass the `
+            + 'document body as `markdown`.',
+          );
+        }
+        markdown = source.textContent;
+      }
+
+      const result = await renderDocument({
+        title: String(args.title ?? ''),
+        subtitle: args.subtitle ? String(args.subtitle) : undefined,
+        markdown,
+        html: args.html ? String(args.html) : undefined,
+        footer: args.footer ? String(args.footer) : undefined,
+        theme: (args.theme ?? undefined) as never,
+        pageSize: args.pageSize === 'a4' ? 'a4' : 'letter',
+        landscape: Boolean(args.landscape),
+      });
+
+      const row = await saveFile({
+        tenantId,
+        name: `${base}.pdf`,
+        bytes: result.pdf,
+        mime: 'application/pdf',
+        // 'knowledge', NOT 'asset', for the same reason as a deck: an asset gets
+        // a permanently public R2 URL, and a client proposal or invoice carries
+        // their numbers. save_file_from_url is the deliberate way to publish one.
+        kind: 'knowledge',
+        source: 'agent',
+      });
+
+      return JSON.stringify({
+        created: row?.name,
+        fileId: row?.id,
+        sizeKb: Math.round(result.bytes / 1024),
+        renderer: result.engine,
+        note: `${result.note ? `${result.note} ` : ''}It is in the workspace library — pass this file id as attachFileIds to email it. It is private: use save_file_from_url if the client needs a public link.`,
+      });
     },
   });
 
