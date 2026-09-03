@@ -4,15 +4,16 @@
  * GET    /api/admin/users            — all users + memberships + workspace list
  * POST   /api/admin/users            — create a user, optionally add to a workspace,
  *                                      email them an invite with a temp password
- * PATCH  /api/admin/users            — isAdmin, disable/restore, reset password,
- *                                      add/remove workspace membership
+ * PATCH  /api/admin/users            — isAdmin, disable/restore, reset password
+ *                                      (generated) or set one chosen by the
+ *                                      admin, add/remove workspace membership
  * DELETE /api/admin/users?userId=…   — permanently delete a user
  */
 
 import { and, desc, eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { generatePassword, hashPassword } from '@/libs/auth/password';
+import { generatePassword, hashPassword, validatePassword } from '@/libs/auth/password';
 import { getCurrentUser, revokeUserSessions } from '@/libs/auth/session';
 import { db } from '@/libs/DB';
 import { emailConfigured, sendInviteEmail } from '@/libs/email';
@@ -162,6 +163,16 @@ const PatchSchema = z.object({
   isAdmin: z.boolean().optional(),
   deleted: z.boolean().optional(),
   resetPassword: z.boolean().optional(),
+  // An admin choosing the password themselves, rather than generating one.
+  // Used when handing an account over in person or over the phone, where a
+  // 16-character random string is unusable.
+  setPassword: z.object({
+    password: z.string().min(1).max(128),
+    // Off by default: the admin picked this password deliberately and is
+    // about to give it to the person, so forcing an immediate change is
+    // usually not what they want. Still available for a temporary hand-over.
+    mustChange: z.boolean().optional(),
+  }).optional(),
   addMembership: z.object({ tenantId: z.string().uuid(), role: z.enum(ROLES) }).optional(),
   removeMembership: z.object({ tenantId: z.string().uuid() }).optional(),
 });
@@ -198,6 +209,23 @@ export async function PATCH(request: Request) {
     if (body.deleted === true) {
       await revokeUserSessions(body.userId);
     }
+  }
+
+  if (body.setPassword) {
+    const problems = validatePassword(body.setPassword.password);
+    if (problems.length > 0) {
+      return NextResponse.json({ error: problems.join(' ') }, { status: 400 });
+    }
+    await db
+      .update(users)
+      .set({
+        passwordHash: await hashPassword(body.setPassword.password),
+        mustChangePassword: Boolean(body.setPassword.mustChange),
+      })
+      .where(eq(users.id, body.userId));
+    // Same reasoning as a generated reset: an admin changing someone's
+    // password expects their existing sessions to stop working.
+    await revokeUserSessions(body.userId);
   }
 
   let tempPassword: string | undefined;
@@ -239,7 +267,17 @@ export async function PATCH(request: Request) {
     actor: admin.id,
     action: 'user.update',
     target: body.userId,
-    detail: { ...body, resetPassword: Boolean(body.resetPassword) },
+    // Never spread `body` verbatim — it can carry a plaintext password.
+    detail: {
+      isAdmin: body.isAdmin,
+      deleted: body.deleted,
+      resetPassword: Boolean(body.resetPassword),
+      setPassword: body.setPassword
+        ? { mustChange: Boolean(body.setPassword.mustChange) }
+        : undefined,
+      addMembership: body.addMembership,
+      removeMembership: body.removeMembership,
+    },
   }).catch(() => {});
 
   return NextResponse.json({ ok: true, ...(tempPassword ? { tempPassword } : {}) });

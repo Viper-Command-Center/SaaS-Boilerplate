@@ -118,6 +118,35 @@ export async function sendInviteEmail(a: {
   });
 }
 
+/**
+ * Sent when someone who ALREADY has an Artivio account is added to another
+ * workspace. There is no new password to hand over — they sign in with the
+ * one they already have — but without this they are never told the access
+ * exists, which reads exactly like the invite silently failing.
+ */
+export async function sendWorkspaceAddedEmail(a: {
+  to: string;
+  firstName?: string | null;
+  workspaceName: string;
+  role: string;
+}): Promise<boolean> {
+  const url = `${appUrl()}/sign-in`;
+  const hello = a.firstName ? `Hi ${a.firstName},` : 'Hi,';
+
+  return send({
+    to: a.to,
+    subject: `You've been added to ${a.workspaceName} on Artivio`,
+    html: shell(`You now have access to ${a.workspaceName}`, `
+      <p>${hello}</p>
+      <p>Your Artivio account has been given <strong>${a.role}</strong> access to the <strong>${a.workspaceName}</strong> workspace.</p>
+      <p>Sign in with your existing Artivio email and password — there's no new password for this.</p>
+      <p><a href="${url}" style="display:inline-block;background:#0f172a;color:#fff;text-decoration:none;padding:10px 18px;border-radius:8px;font-weight:600">Open Artivio</a></p>
+      <p style="font-size:13px;color:#64748b">Forgotten your password? Use the reset link on the <a href="${url}" style="color:#64748b">sign-in page</a>. If you weren't expecting this, you can ignore this email.</p>
+    `),
+    text: `${hello}\n\nYour Artivio account has been given ${a.role} access to the ${a.workspaceName} workspace.\n\nSign in with your existing email and password: ${url}\n\nForgotten your password? Use the reset link on the sign-in page.`,
+  });
+}
+
 /** Password reset link (token valid ~1 hour). */
 export async function sendPasswordResetEmail(a: {
   to: string;

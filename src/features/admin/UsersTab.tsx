@@ -27,6 +27,12 @@ export const UsersTab = (props: {
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [form, setForm] = useState({ email: '', firstName: '', tenantId: '', role: 'editor', isAdmin: false });
+  // Which user's "set a password" row is open, and what's been typed into it.
+  // A generated reset is unusable over the phone; this is the manual path.
+  const [pwFor, setPwFor] = useState<string | null>(null);
+  const [pwValue, setPwValue] = useState('');
+  const [pwMustChange, setPwMustChange] = useState(false);
+  const [pwBusy, setPwBusy] = useState(false);
 
   const input = 'w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring';
 
@@ -76,6 +82,45 @@ export const UsersTab = (props: {
     } else if (successMsg) {
       setNotice(successMsg);
     }
+    props.reload();
+  };
+
+  const openSetPassword = (userId: string) => {
+    setError(null);
+    setNotice(null);
+    setPwValue('');
+    setPwMustChange(false);
+    setPwFor(prev => (prev === userId ? null : userId));
+  };
+
+  const submitPassword = async (u: AdminUser) => {
+    setError(null);
+    setNotice(null);
+    if (pwValue.length < 10) {
+      setError('Password must be at least 10 characters.');
+      return;
+    }
+    setPwBusy(true);
+    const res = await fetch('/api/admin/users', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userId: u.id,
+        setPassword: { password: pwValue, mustChange: pwMustChange },
+      }),
+    });
+    const data = await res.json().catch(() => null);
+    setPwBusy(false);
+    if (!res.ok) {
+      setError(data?.error ?? 'Could not set the password.');
+      return;
+    }
+    setNotice(
+      `Password set for ${u.email}. Their existing sessions were signed out`
+      + `${pwMustChange ? ', and they must choose a new password on next sign-in.' : '.'}`,
+    );
+    setPwFor(null);
+    setPwValue('');
     props.reload();
   };
 
@@ -250,11 +295,49 @@ export const UsersTab = (props: {
                     <Button size="sm" variant="outline" onClick={() => patch(u.id, { resetPassword: true })}>
                       Reset password
                     </Button>
+                    <Button size="sm" variant="outline" onClick={() => openSetPassword(u.id)}>
+                      {pwFor === u.id ? 'Cancel' : 'Set password'}
+                    </Button>
                     <Button size="sm" variant="outline" onClick={() => patch(u.id, { deleted: !u.deletedAt }, 'Status updated.')}>
                       {u.deletedAt ? 'Restore' : 'Disable'}
                     </Button>
                     <Button size="sm" variant="outline" onClick={() => hardDelete(u)}>Delete</Button>
                   </div>
+
+                  {pwFor === u.id && (
+                    <div className="mt-2 space-y-2 rounded-md bg-white/5 p-2">
+                      <input
+                        className={input}
+                        type="text"
+                        autoComplete="off"
+                        placeholder="New password (min 10 characters)"
+                        value={pwValue}
+                        onChange={e => setPwValue(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            submitPassword(u);
+                          }
+                        }}
+                      />
+                      <label className="flex items-center gap-2 text-xs">
+                        <input
+                          type="checkbox"
+                          checked={pwMustChange}
+                          onChange={e => setPwMustChange(e.target.checked)}
+                        />
+                        Make them choose a new one on next sign-in
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <Button size="sm" onClick={() => submitPassword(u)} disabled={pwBusy}>
+                          {pwBusy ? 'Saving…' : `Set password for ${u.email}`}
+                        </Button>
+                        <span className="text-xs text-muted-foreground">
+                          Signs out their current sessions.
+                        </span>
+                      </div>
+                    </div>
+                  )}
                 </td>
               </tr>
             ))}

@@ -4,6 +4,9 @@
  *        doesn't exist yet, an account is created with a generated password.
  *        The password is EMAILED to them and also returned ONCE, so the admin
  *        can hand it over when mail is not configured or delivery fails.
+ *        If the user ALREADY has an account they keep their existing password
+ *        and are emailed a plain "you've been added to X" notice instead;
+ *        `created` in the response says which of the two happened.
  *        The account is flagged `mustChangePassword`, exactly as the platform
  *        admin console does — these two paths create the same kind of account
  *        and must not have different security properties.
@@ -16,7 +19,7 @@ import { z } from 'zod';
 import { generatePassword, hashPassword } from '@/libs/auth/password';
 import { getCurrentUser } from '@/libs/auth/session';
 import { db } from '@/libs/DB';
-import { sendInviteEmail } from '@/libs/email';
+import { sendInviteEmail, sendWorkspaceAddedEmail } from '@/libs/email';
 import { getUserTenants } from '@/libs/tenants';
 import { auditLog, memberships, users } from '@/models/Schema';
 
@@ -119,9 +122,14 @@ export async function POST(request: Request, ctx: { params: Promise<{ slug: stri
 
   await db.insert(memberships).values({ userId: member.id, tenantId: tenant.id, role: body.role });
 
-  // Tell them their account exists. Never let a failed send fail the request —
-  // the membership is already saved, and the password is returned below so the
-  // admin can always fall back to handing it over directly.
+  // Tell them either way. Never let a failed send fail the request — the
+  // membership is already saved, and for a new account the password is
+  // returned below so the admin can always hand it over directly.
+  //
+  // An EXISTING account gets no password (they sign in with the one they
+  // have), but it still needs an email: without one, being added to a second
+  // workspace is completely silent to them and looks to the admin exactly
+  // like a failed invite.
   let emailed = false;
   if (generatedPassword) {
     emailed = await sendInviteEmail({
@@ -129,6 +137,13 @@ export async function POST(request: Request, ctx: { params: Promise<{ slug: stri
       firstName: member.firstName,
       tempPassword: generatedPassword,
       workspaceName: tenant.name,
+    }).catch(() => false);
+  } else {
+    emailed = await sendWorkspaceAddedEmail({
+      to: member.email,
+      firstName: member.firstName,
+      workspaceName: tenant.name,
+      role: body.role,
     }).catch(() => false);
   }
 
@@ -144,6 +159,10 @@ export async function POST(request: Request, ctx: { params: Promise<{ slug: stri
     ok: true,
     member: { userId: member.id, email: member.email, role: body.role },
     emailed,
+    // Whether an account was created here. The panel needs this to tell the
+    // admin what happened: without it, adding someone who already had an
+    // account produced no password and therefore no feedback at all.
+    created: Boolean(generatedPassword),
     // Returned exactly once so the admin can hand it to the client. The hash
     // is what's stored; this value is never retrievable again.
     ...(generatedPassword ? { generatedPassword } : {}),

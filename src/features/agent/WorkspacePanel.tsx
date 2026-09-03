@@ -28,6 +28,9 @@ export const WorkspacePanel = (props: {
   const [role, setRole] = useState('editor');
   const [oneTimePassword, setOneTimePassword] = useState<string | null>(null);
   const [emailed, setEmailed] = useState(false);
+  // Adding someone who already has an account produces no password, so
+  // without an explicit result the form looked like it had done nothing.
+  const [added, setAdded] = useState<{ email: string; created: boolean } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -54,6 +57,7 @@ export const WorkspacePanel = (props: {
     setError(null);
     setOneTimePassword(null);
     setEmailed(false);
+    setAdded(null);
     setBusy(true);
     try {
       const res = await fetch(`/api/tenants/${encodeURIComponent(props.tenantSlug)}/members`, {
@@ -65,9 +69,10 @@ export const WorkspacePanel = (props: {
       if (!res.ok) {
         setError(data?.error ?? 'Could not add the member.');
       } else {
+        setAdded({ email, created: Boolean(data?.created) });
+        setEmailed(Boolean(data?.emailed));
         if (data?.generatedPassword) {
           setOneTimePassword(data.generatedPassword);
-          setEmailed(Boolean(data.emailed));
         }
         setEmail('');
         setFirstName('');
@@ -185,18 +190,36 @@ export const WorkspacePanel = (props: {
               </select>
             </div>
             {error && <p className="text-xs text-red-600" role="alert">{error}</p>}
-            {oneTimePassword && (
+            {added && (
               <p className="rounded-sm bg-muted p-2 text-xs">
-                {emailed
-                  ? 'Account created and the sign-in details were emailed to them. '
-                  : 'Account created, but the invite email could not be sent — share this yourself. '}
-                One-time password (shown once):
-                {' '}
-                <code className="font-semibold">{oneTimePassword}</code>
-                <br />
-                <span className="text-muted-foreground">
-                  They will be asked to choose their own password on first sign-in.
-                </span>
+                {added.created
+                  ? (
+                      <>
+                        {emailed
+                          ? 'Account created and the sign-in details were emailed to them. '
+                          : 'Account created, but the invite email could not be sent — share this yourself. '}
+                        {oneTimePassword && (
+                          <>
+                            One-time password (shown once):
+                            {' '}
+                            <code className="font-semibold">{oneTimePassword}</code>
+                          </>
+                        )}
+                        <br />
+                        <span className="text-muted-foreground">
+                          They will be asked to choose their own password on first sign-in.
+                        </span>
+                      </>
+                    )
+                  : (
+                      <>
+                        <strong>{added.email}</strong>
+                        {' already had an Artivio account, so they were added with their existing password — there is no new one to hand over. '}
+                        {emailed
+                          ? 'They\'ve been emailed to say they now have access.'
+                          : 'The notification email could not be sent, so tell them directly.'}
+                      </>
+                    )}
               </p>
             )}
             <Button type="submit" size="sm" disabled={busy}>{busy ? 'Adding…' : 'Add member'}</Button>
