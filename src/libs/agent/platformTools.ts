@@ -9,6 +9,8 @@ import type { AnthropicTool } from '@/libs/mcp/registry';
 import { and, asc, desc, eq } from 'drizzle-orm';
 import { assertPublicUrl, buildWebTools } from '@/libs/agent/webTools';
 import { db } from '@/libs/DB';
+import { extractOfficeImages, MAX_IMAGES } from '@/libs/docs/officeImages';
+import { extractOfficeText, isLegacyOffice, isOfficeDoc } from '@/libs/docs/officeText';
 import { renderDocument } from '@/libs/docs/pdf';
 import { extractPdfText, isPdf } from '@/libs/docs/pdfText';
 import { renderDeck } from '@/libs/docs/pptx';
@@ -270,7 +272,7 @@ export function buildPlatformTools(tenantId: string): {
     },
     {
       name: 'read_file',
-      description: 'Read the text of a file in the library by id (from list_files). Use this for uploaded briefs and requirement docs instead of asking the user to paste them, and for large tool results the platform saved for you. PDFs ARE readable — text is extracted automatically, and a scanned PDF with no text layer is transcribed visually the first time you open it (that read takes longer; the text is cached afterwards). Only true media (images, video, audio) has no text — use its URL instead. For a file too big to read at once: pass `search` to find every line containing a string (with line numbers and surrounding context), or `offset`/`limit` to page through it. NEVER conclude a string is absent from a file you have only partly read — search for it.',
+      description: 'Read the text of a file in the library by id (from list_files). Use this for uploaded briefs and requirement docs instead of asking the user to paste them, and for large tool results the platform saved for you. PDFs, Word (.docx), PowerPoint (.pptx) and Excel (.xlsx) ARE readable — text is extracted automatically, and a scanned PDF with no text layer is transcribed visually the first time you open it (that read takes longer; the text is cached afterwards). Only true media (images, video, audio) and legacy binary Office files (.doc/.xls/.ppt) have no text — the result says which. Never guess at a reason a file is unreadable; report the note verbatim. For a file too big to read at once: pass `search` to find every line containing a string (with line numbers and surrounding context), or `offset`/`limit` to page through it. NEVER conclude a string is absent from a file you have only partly read — search for it.',
       input_schema: {
         type: 'object',
         properties: {
@@ -395,6 +397,18 @@ export function buildPlatformTools(tenantId: string): {
           name: { type: 'string', description: 'Filename to save it as, with extension, e.g. "budgetsmart-qr-emerald.png".' },
         },
         required: ['url', 'name'],
+      },
+    },
+    {
+      name: 'extract_document_images',
+      description: 'Pull every embedded image out of a Word (.docx), PowerPoint (.pptx) or Excel (.xlsx) file in the library and save each one as its own image file with a permanent public URL. Numbered in reading order (docx) or by slide (pptx), so "the second image in the brief" is image 2. Use this when a client\'s document contains photos, logos or screenshots that belong on a website, in a post, or in an email — then pass the returned file ids to upload_media (WordPress) or use the URLs directly. read_file returns text only and never includes images.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          fileId: { type: 'string', description: 'Library id of the .docx/.pptx/.xlsx (from list_files).' },
+          namePrefix: { type: 'string', description: 'Optional filename stem for the saved images, e.g. "acme-brief". Defaults to the document\'s name.' },
+        },
+        required: ['fileId'],
       },
     },
     {
@@ -901,12 +915,39 @@ export function buildPlatformTools(tenantId: string): {
         }
       }
 
+      /**
+       * Same for .docx / .pptx / .xlsx: files uploaded before Office extraction
+       * existed (2026-09-04) have no cached text. Read them now, cache once.
+       */
+      if (!body && isOfficeDoc(row.name, row.mime)) {
+        try {
+          const { body: bytes } = await getObject(row.r2Key);
+          const extracted = await extractOfficeText({ bytes, name: row.name, mime: row.mime });
+          readNote = extracted.note;
+          if (extracted.text) {
+            body = extracted.text;
+            await setFileText(tenantId, row.id, extracted.text);
+          }
+        } catch (err) {
+          readNote = `This document could not be read (${err instanceof Error ? err.message.slice(0, 140) : 'unknown error'}).`;
+        }
+      }
+
       if (!body) {
+        // Be exact about WHY. A vague "no extractable text" led the agent to
+        // invent a reason ("complex formatting, older Word XML") and present
+        // it to the client as fact. State what is readable so the only
+        // honest move — ask for a supported format — is also the obvious one.
+        const fallback = isLegacyOffice(row.name)
+          ? `This is a legacy binary Office file (${row.name.split('.').pop()}), which the platform does not parse. Ask for it re-saved as .docx/.xlsx/.pptx or exported to PDF.`
+          : /^(?:image|video|audio)\//i.test(row.mime ?? '')
+            ? 'This is a media file, not a document — there is no text to read. Use its URL.'
+            : `This file type (${row.mime || row.name.split('.').pop() || 'unknown'}) is not one the platform can read. Readable formats: plain text, Markdown, CSV, JSON, HTML, PDF (including scans), .docx, .pptx and .xlsx.`;
         return JSON.stringify({
           name: row.name,
           mime: row.mime,
           url: row.publicUrl,
-          note: readNote ?? 'This file has no extractable text (it is media or an unsupported format). Use its URL.',
+          note: readNote ?? fallback,
         });
       }
 
@@ -1110,6 +1151,61 @@ export function buildPlatformTools(tenantId: string): {
         sizeKb: Math.round((row?.sizeBytes ?? 0) / 1024),
         url: row?.publicUrl,
         note: 'The real file is now in the workspace Files library and will show up under Generated media. Use this URL when publishing — it is permanent.',
+      });
+    },
+  });
+
+  executors.set('extract_document_images', {
+    policy: 'auto', // writes only into this workspace's own storage
+    call: async (args) => {
+      const wanted = String(args.fileId ?? '').trim();
+      const row = await getFile(tenantId, wanted);
+      if (!row) {
+        throw new Error(`No file with id "${wanted}" in this workspace — call list_files for current ids.`);
+      }
+      if (!isOfficeDoc(row.name, row.mime)) {
+        throw new Error(`${row.name} is not a .docx, .pptx or .xlsx. Images can only be extracted from those; a PDF's images are not extractable here.`);
+      }
+      const { body: bytes } = await getObject(row.r2Key);
+      const { images, skipped } = await extractOfficeImages({ bytes, name: row.name, mime: row.mime });
+      const stem = (String(args.namePrefix ?? '').trim() || row.name.replace(/\.[a-z0-9]+$/i, ''))
+        .replace(/[^\w.-]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 60) || 'document';
+
+      const saved: Array<Record<string, unknown>> = [];
+      for (const img of images) {
+        const name = `${stem}-image-${String(img.order).padStart(2, '0')}.${img.ext === 'jpeg' ? 'jpg' : img.ext}`;
+        // `asset`, not `knowledge`: a picture headed for a website needs the
+        // permanent public URL; knowledge files are membership-gated.
+        const file = await saveFile({
+          tenantId,
+          name,
+          bytes: img.bytes,
+          mime: img.mime,
+          kind: 'asset',
+          source: 'agent',
+          meta: { extractedFrom: row.id, sourceName: row.name, order: img.order, ...(img.slide ? { slide: img.slide } : {}) },
+        });
+        saved.push({
+          order: img.order,
+          ...(img.slide ? { slide: img.slide } : {}),
+          id: file?.id,
+          name: file?.name,
+          mime: img.mime,
+          sizeKb: Math.round(img.bytes.length / 1024),
+          url: file?.publicUrl,
+        });
+      }
+      return JSON.stringify({
+        source: { id: row.id, name: row.name },
+        count: saved.length,
+        images: saved,
+        ...(skipped.length ? { skipped } : {}),
+        note: saved.length
+          ? `Saved ${saved.length} image(s) to the library as public assets. Each id works with WordPress upload_media; each url can be used directly in HTML.${skipped.length ? ` ${skipped.length} part(s) were skipped — see skipped for why.` : ''}`
+          : 'This document contains no embedded images that can be extracted.',
+        limit: MAX_IMAGES,
       });
     },
   });

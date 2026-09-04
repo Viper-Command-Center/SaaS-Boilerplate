@@ -13,6 +13,7 @@
 import { randomUUID } from 'node:crypto';
 import { and, desc, eq } from 'drizzle-orm';
 import { db } from '@/libs/DB';
+import { extractOfficeText, isOfficeDoc } from '@/libs/docs/officeText';
 import { extractPdfText, isPdf } from '@/libs/docs/pdfText';
 import {
   archiveRemote,
@@ -83,6 +84,22 @@ async function pdfTextOrNull(a: {
 }
 
 /**
+ * .docx / .pptx / .xlsx at write time. Pure JS (OOXML is ZIP + XML), so it is
+ * as cheap as the PDF text layer and shares its size ceiling. Never throws.
+ */
+async function officeTextOrNull(a: { name: string; mime?: string | null; bytes: Buffer }): Promise<string | null> {
+  if (a.bytes.length > MAX_PDF_BYTES) {
+    return null;
+  }
+  try {
+    const result = await extractOfficeText(a);
+    return result.text ? result.text.slice(0, MAX_TEXT_CHARS) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Big uploads (HeyGen renders, raw footage) go browser → R2 directly, so the
  * app never touches the bytes. Two steps:
  *   1. reserveUpload()  → a tenant-scoped key + a presigned PUT URL
@@ -146,6 +163,15 @@ export async function confirmUpload(a: {
     } catch {
       text = null;
     }
+  } else if (isOfficeDoc(a.name, mime) && head.size <= MAX_PDF_BYTES) {
+    // Word, PowerPoint and Excel — the same "stored but unreadable" hole the
+    // PDF branch closed, one format family later.
+    try {
+      const { body } = await getObject(a.key);
+      text = await officeTextOrNull({ name: a.name, mime, bytes: body });
+    } catch {
+      text = null;
+    }
   }
 
   const [row] = await db
@@ -195,7 +221,9 @@ export async function saveFile(input: SaveInput) {
           name: input.name,
           bytes: input.bytes,
         })
-      : null;
+      : isOfficeDoc(input.name, mime)
+        ? await officeTextOrNull({ name: input.name, mime, bytes: input.bytes })
+        : null;
 
   const kind = input.kind ?? 'knowledge';
 

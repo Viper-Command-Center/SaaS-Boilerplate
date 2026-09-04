@@ -13,8 +13,12 @@
  */
 
 import type { BuiltinProvider } from '@/libs/plugins/types';
+import { getFile } from '@/libs/storage/files';
+import { getObject } from '@/libs/storage/r2';
 
 const MAX_BODY = 200_000;
+/** WordPress's own default upload cap is commonly 2–64MB (php.ini); 25MB is a safe ceiling for a photo or a short clip. */
+const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 
 function auth(credential: string): string {
   // credential is "user:application password" — WP wants HTTP Basic.
@@ -182,6 +186,7 @@ export const wordpressProvider: BuiltinProvider = {
           status: { type: 'string', description: 'draft (default) | publish' },
           categories: { type: 'array', items: { type: 'number' } },
           tags: { type: 'array', items: { type: 'number' } },
+          featuredMediaId: { type: 'number', description: 'WordPress media (attachment) id to use as the featured image — from upload_media. Not a library file id and not a URL.' },
         },
         required: ['title', 'content'],
       },
@@ -206,6 +211,7 @@ export const wordpressProvider: BuiltinProvider = {
           status: { type: 'string', description: 'draft (default) | publish' },
           slug: { type: 'string', description: 'URL slug. Keep it short — "get-started" beats a full sentence.' },
           parent: { type: 'number', description: 'Parent page id, for a nested URL.' },
+          featuredMediaId: { type: 'number', description: 'WordPress media (attachment) id to use as the featured image — from upload_media. Not a library file id and not a URL.' },
         },
         required: ['title', 'content'],
       },
@@ -239,6 +245,7 @@ export const wordpressProvider: BuiltinProvider = {
           content: { type: 'string' },
           excerpt: { type: 'string' },
           status: { type: 'string' },
+          featuredMediaId: { type: 'number', description: 'WordPress media (attachment) id to use as the featured image — from upload_media. Not a library file id and not a URL.' },
         },
         required: ['id'],
       },
@@ -260,8 +267,30 @@ export const wordpressProvider: BuiltinProvider = {
           id: { type: 'number' },
           title: { type: 'string' },
           content: { type: 'string' },
+          featuredMediaId: { type: 'number', description: 'WordPress media (attachment) id to use as the featured image — from upload_media. Not a library file id and not a URL.' },
         },
         required: ['id'],
+      },
+    },
+    {
+      /**
+       * Images reach the site BY LIBRARY FILE ID, never as base64 through the
+       * model (same rule as Postmark attachments — a 2MB photo is ~2.7M
+       * characters of context). Anything the agent has — a generated image, a
+       * picture pulled out of a client's .docx with extract_document_images, a
+       * download saved with save_file_from_url — is a library file first.
+       */
+      name: 'upload_media',
+      description: 'Upload an image (or PDF/video) from the workspace library into this WordPress site\'s Media Library. Pass the library file id from list_files, extract_document_images or save_file_from_url — NOT a URL and NOT file contents. Returns the WordPress media id (use it as featuredMediaId on create_post / update_post / create_page) and the site-hosted source_url (use it in <img> tags in content, so the image lives on the client\'s site rather than hot-linked from ours).',
+      input_schema: {
+        type: 'object',
+        properties: {
+          fileId: { type: 'string', description: 'Workspace library file id (UUID).' },
+          title: { type: 'string', description: 'Media title shown in the WordPress library. Defaults to the filename.' },
+          altText: { type: 'string', description: 'Alt text for accessibility and SEO. Describe what the image shows.' },
+          caption: { type: 'string' },
+        },
+        required: ['fileId'],
       },
     },
     {
@@ -309,7 +338,7 @@ export const wordpressProvider: BuiltinProvider = {
     },
   ],
 
-  call: async (tool, args, credential, siteUrl) => {
+  call: async (tool, args, credential, siteUrl, ctx) => {
     if (!siteUrl) {
       throw new Error('No WordPress site URL configured for this connection.');
     }
@@ -349,6 +378,7 @@ export const wordpressProvider: BuiltinProvider = {
                 ...(args.parent ? { parent: Number(args.parent) } : {}),
               }
             : { categories: args.categories, tags: args.tags }),
+          ...(args.featuredMediaId ? { featured_media: Number(args.featuredMediaId) } : {}),
         }),
       }) as Record<string, any>;
       return JSON.stringify({
@@ -392,6 +422,7 @@ export const wordpressProvider: BuiltinProvider = {
           ...(args.content !== undefined ? { content: String(args.content) } : {}),
           ...(args.excerpt !== undefined ? { excerpt: String(args.excerpt) } : {}),
           ...(args.status !== undefined ? { status: String(args.status) } : {}),
+          ...(args.featuredMediaId ? { featured_media: Number(args.featuredMediaId) } : {}),
         }),
       }) as Record<string, any>;
       return JSON.stringify({ id: updated.id, status: updated.status, link: updated.link, updated: true });
@@ -403,6 +434,62 @@ export const wordpressProvider: BuiltinProvider = {
         ...(args.search ? { search: String(args.search) } : {}),
       });
       return JSON.stringify(slim(await wp(siteUrl, credential, `/pages?${params}`)));
+    }
+
+    if (tool === 'upload_media') {
+      const fileId = String(args.fileId ?? '').trim();
+      if (!ctx?.tenantId) {
+        throw new Error('upload_media has no workspace context on this connection.');
+      }
+      const row = await getFile(ctx.tenantId, fileId);
+      if (!row) {
+        throw new Error(`No file with id "${fileId}" in this workspace's library. This is a WRONG ARGUMENT — pass the id from list_files / extract_document_images, not a URL or a name.`);
+      }
+      if (row.sizeBytes > MAX_UPLOAD_BYTES) {
+        throw new Error(`${row.name} is ${Math.round(row.sizeBytes / 1024 / 1024)}MB; WordPress uploads are capped at ${MAX_UPLOAD_BYTES / 1024 / 1024}MB here. Resize or compress it first.`);
+      }
+      const { body: bytes, contentType } = await getObject(row.r2Key);
+      const mime = row.mime && row.mime !== 'application/octet-stream' ? row.mime : contentType;
+      // Filename decides the extension WordPress stores and, through it, the
+      // MIME check it applies — keep the library name, only sanitised.
+      const filename = row.name.replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '') || 'upload';
+      const created = await wp(siteUrl, credential, '/media', {
+        method: 'POST',
+        headers: {
+          'Content-Type': mime,
+          'Content-Disposition': `attachment; filename="${filename}"`,
+        },
+        body: new Uint8Array(bytes),
+      }) as Record<string, any>;
+
+      // Title / alt / caption are separate fields on the attachment; the
+      // binary POST only accepts the bytes.
+      const meta = {
+        ...(args.title ? { title: String(args.title) } : {}),
+        ...(args.altText ? { alt_text: String(args.altText) } : {}),
+        ...(args.caption ? { caption: String(args.caption) } : {}),
+      };
+      if (Object.keys(meta).length && created?.id) {
+        try {
+          await wp(siteUrl, credential, `/media/${created.id}`, { method: 'POST', body: JSON.stringify(meta) });
+        } catch (err) {
+          return JSON.stringify({
+            mediaId: created.id,
+            sourceUrl: created.source_url,
+            uploaded: true,
+            note: `Uploaded, but setting ${Object.keys(meta).join('/')} failed: ${err instanceof Error ? err.message.slice(0, 160) : 'unknown error'}.`,
+          });
+        }
+      }
+      return JSON.stringify({
+        mediaId: created.id,
+        sourceUrl: created.source_url,
+        mime: created.mime_type ?? mime,
+        title: args.title ?? created.title?.raw ?? created.title?.rendered,
+        altText: args.altText ?? '',
+        uploaded: true,
+        note: 'In the site\'s Media Library. Use mediaId as featuredMediaId, or sourceUrl in an <img> tag in post content.',
+      });
     }
 
     if (tool === 'site_check') {
