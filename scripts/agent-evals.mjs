@@ -231,6 +231,19 @@ forbid('src/app/api/plugins/route.ts', 'siteUrl: z.string().url()', 'per-connect
 
 expect('src/libs/plugins/googleAnalytics.ts', 'avgEngagementSecondsPerSession', 'userEngagementDuration is a TOTAL and was read back as an average — the tool must do the division, not the model');
 
+// ── DiviOps section_replace (2026-09-04 — "fails on pages the runner already
+// wrote" + blank pages). Two plugin-side traps, guarded in-process: the plugin
+// escapes & < > " -- on write but matches sections by RAW substring, so such a
+// label can never be targeted again; and section_replace splices content in
+// verbatim, so a divi/placeholder wrapper nests and renders the page blank.
+// The vendor's divi-5-builder skill (not in the npm package) is condensed into
+// standing guidance — without it the agent writes Divi 5 JSON blind.
+expect('src/libs/mcp/stdioCatalog.ts', 'guardCall: diviopsGuard', 'DiviOps section-targeting guard must stay wired to the allowlist entry');
+expect('src/libs/mcp/stdioCatalog.ts', 'DIVI_PLACEHOLDER_OPEN', 'section_replace must strip a divi/placeholder wrapper — nested placeholder = blank page');
+expect('src/libs/mcp/stdioCatalog.ts', 'guidance: DIVIOPS_GUIDANCE', 'DiviOps authoring rules must reach the system prompt — the vendor skill is not in the npm package');
+expect('src/libs/mcp/registry.ts', 'guard(tool.name, args', 'stdio guardCall must run before the call is forwarded to the child');
+expect('src/libs/mcp/registry.ts', 'guidanceByProvider.set(`stdio:', 'stdio guidance must join the same system-prompt slot as built-in providers');
+
 // ── Report ──────────────────────────────────────────────────────────────────
 if (failures.length > 0) {
   console.error(`\n✗ agent-evals: ${failures.length} of ${checks} tripwires FAILED\n`);

@@ -652,6 +652,14 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
         const tools = await client.listTools();
         const policyMap = (conn.toolPolicy ?? {}) as Record<string, ToolPolicy>;
 
+        // A bundled server can carry standing guidance (the vendor's
+        // client-side skill, condensed) — keyed by allowlist key so two
+        // connections to the same server contribute it once.
+        if (spec.guidance) {
+          guidanceByProvider.set(`stdio:${spec.key}`, spec.guidance.trim());
+        }
+        const guard = spec.guardCall;
+
         // 🔴 tool.name is THIRD-PARTY DATA — same rule as the http branch:
         // one illegal name must never poison the shared tools array.
         const skipped: string[] = [];
@@ -678,12 +686,17 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
               // DiviOps exposes 74 tools that WRITE to a client's live site.
               policy: policyMap[tool.name] ?? policyMap['*'] ?? 'approval',
               call: async (args) => {
-                const result = await client.callTool(tool.name, args);
+                // In-process guard first (stdioCatalog.ts): it may rewrite the
+                // args, add a note to the result, or refuse the call outright
+                // with a reason the model can act on. A guard throw is a
+                // platform-side refusal, not a server error — no explainToolError.
+                const guarded = guard ? guard(tool.name, args as Record<string, unknown>) : { args: args as Record<string, unknown> };
+                const result = await client.callTool(tool.name, guarded.args);
                 const raw = flattenMcpContent(result.content);
                 if (result.isError) {
                   // Errors stay verbatim and short — never spill one to a file the
                   // agent then has to go and open — but do say whose fault it is.
-                  throw new Error(explainToolError(raw, tool.inputSchema, args));
+                  throw new Error(explainToolError(raw, tool.inputSchema, guarded.args));
                 }
                 const text = await capToolOutput({
                   text: raw,
@@ -691,7 +704,8 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
                   toolName: tool.name,
                   connectionName: conn.name,
                 });
-                return text || '(no output)';
+                const body = text || '(no output)';
+                return guarded.note ? `${body}\n\n${guarded.note}` : body;
               },
             },
           });
