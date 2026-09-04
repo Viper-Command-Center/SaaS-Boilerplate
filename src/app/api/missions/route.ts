@@ -24,6 +24,7 @@
 import { and, asc, desc, eq, inArray } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
+import { RESUME_PRIORITY_AT } from '@/libs/agent/missionTools';
 import { getLastTickAt } from '@/libs/agent/runnerHealth';
 import { getCurrentUser } from '@/libs/auth/session';
 import { db } from '@/libs/DB';
@@ -163,7 +164,9 @@ export async function PATCH(request: Request) {
     .where(and(eq(missionSteps.missionId, mission.id), eq(missionSteps.status, 'failed')));
   await db
     .update(missions)
-    .set({ status: 'running', updatedAt: new Date() })
+    // Backdated on purpose: the runner sorts by updatedAt ASC, so `now` would
+    // queue a resumed mission LAST. See RESUME_PRIORITY_AT in missionTools.
+    .set({ status: 'running', updatedAt: RESUME_PRIORITY_AT })
     .where(eq(missions.id, mission.id));
   return NextResponse.json({ ok: true, status: 'running' });
 }

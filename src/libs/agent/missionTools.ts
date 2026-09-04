@@ -16,6 +16,12 @@ import { and, asc, desc, eq, inArray } from 'drizzle-orm';
 import { db } from '@/libs/DB';
 import { missions, missionSteps } from '@/models/Schema';
 
+/**
+ * updatedAt to stamp on a resumed mission. The runner's fairness sort is
+ * `ORDER BY updatedAt ASC`, so an epoch timestamp = "run me next tick".
+ */
+export const RESUME_PRIORITY_AT = new Date(0);
+
 type Executor = {
   policy: 'auto';
   call: (args: Record<string, unknown>) => Promise<string>;
@@ -247,9 +253,13 @@ export function buildMissionTools(tenantId: string): MissionToolset {
           .set({ status: 'pending', attempts: 0, updatedAt: new Date() })
           .where(and(eq(missionSteps.missionId, m.id), eq(missionSteps.status, 'failed')));
       }
+      // The runner picks the LEAST-recently-updated running mission, so a
+      // resume that stamps `now` sends the mission to the BACK of the queue —
+      // the opposite of what someone "kicking" a stalled mission expects.
+      // Backdating updatedAt puts it first in line for the next tick.
       await db
         .update(missions)
-        .set({ status: requested, updatedAt: new Date() })
+        .set({ status: requested, updatedAt: requested === 'running' ? RESUME_PRIORITY_AT : new Date() })
         .where(eq(missions.id, m.id));
       return requested === 'paused'
         ? `Mission "${m.title}" paused — the runner will not pick up further steps until it is resumed.`
