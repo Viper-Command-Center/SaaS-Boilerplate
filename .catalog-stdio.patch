@@ -1,0 +1,97 @@
+diff --git a/src/features/admin/CatalogTab.tsx b/src/features/admin/CatalogTab.tsx
+index 7caf012..03c0e27 100644
+--- a/src/features/admin/CatalogTab.tsx
++++ b/src/features/admin/CatalogTab.tsx
+@@ -57,7 +57,7 @@ export type CatalogPreset = {
+     name: string;
+     description: string;
+     category: string;
+-    transport: 'http' | 'builtin';
++    transport: 'http' | 'builtin' | 'stdio';
+     provider?: string;
+     url?: string;
+     authHeader?: string;
+@@ -95,7 +95,10 @@ export const CatalogTab = (props: {
+   const [editingId, setEditingId] = useState<string | null>(null);
+   const [error, setError] = useState<string | null>(null);
+   const [busy, setBusy] = useState(false);
+-  const [kind, setKind] = useState<'builtin' | 'http'>('builtin');
++  // 'stdio' = a bundled MCP server (see src/libs/mcp/stdioCatalog.ts) spawned
++  // per connection. Like a perConnection built-in, it has NO platform URL:
++  // each workspace supplies its own site URL + credential when enabling.
++  const [kind, setKind] = useState<'builtin' | 'http' | 'stdio'>('builtin');
+   const [form, setForm] = useState({ ...EMPTY });
+   const [rows, setRows] = useState<Row[]>([]);
+   const [defaultMarkup, setDefaultMarkup] = useState('30');
+@@ -183,7 +186,7 @@ export const CatalogTab = (props: {
+     setEditingId(p.id);
+     setShow(true);
+     setError(null);
+-    setKind(p.transport === 'builtin' ? 'builtin' : 'http');
++    setKind(p.transport === 'builtin' || p.transport === 'stdio' ? p.transport : 'http');
+     setForm({
+       slug: p.slug,
+       name: p.name,
+@@ -264,7 +267,7 @@ export const CatalogTab = (props: {
+       category: form.category,
+       tier: form.tier,
+       transport: kind,
+-      provider: kind === 'builtin' ? form.provider : undefined,
++      provider: kind === 'builtin' || kind === 'stdio' ? form.provider : undefined,
+       url: kind === 'http' ? form.url : undefined,
+       authHeader: kind === 'http' ? form.authHeader : undefined,
+       authHint: form.authHint || undefined,
+@@ -365,7 +368,7 @@ export const CatalogTab = (props: {
+ 
+           {/* what kind */}
+           <div className="flex gap-2">
+-            {(['builtin', 'http'] as const).map(k => (
++            {(['builtin', 'http', 'stdio'] as const).map(k => (
+               <button
+                 key={k}
+                 type="button"
+@@ -379,7 +382,7 @@ export const CatalogTab = (props: {
+               }
+                 `}
+               >
+-                {k === 'builtin' ? 'Built-in provider (REST API we wrap)' : 'Hosted MCP server (URL)'}
++                {k === 'builtin' ? 'Built-in provider (REST API we wrap)' : k === 'http' ? 'Hosted MCP server (URL)' : 'Bundled MCP server (stdio)'}
+               </button>
+             ))}
+           </div>
+@@ -400,7 +403,18 @@ export const CatalogTab = (props: {
+                   )}
+                 </div>
+               )
+-            : (
++            : kind === 'stdio'
++              ? (
++                  <div>
++                    <label className="mb-1 block text-sm font-medium" htmlFor="cat-stdio-provider">Bundled server key</label>
++                    <input id="cat-stdio-provider" className={input} placeholder="e.g. diviops" value={form.provider} onChange={e => setForm({ ...form, provider: e.target.value })} required />
++                    <p className="mt-1 text-xs text-muted-foreground">
++                      Must match an allowlisted key in stdioCatalog.ts. Spawned as a child process per connection — there is no platform URL.
++                      Each workspace enters their own site URL and credential when enabling, so set this to Tier 2.
++                    </p>
++                  </div>
++                )
++              : (
+                 <div className="
+                   grid gap-3
+                   sm:grid-cols-2
+@@ -803,13 +817,13 @@ export const CatalogTab = (props: {
+                 >
+                   {p.tier === 'tier1' ? 'Tier 1 · metered' : 'Tier 2 · BYO key'}
+                 </span>
+-                {p.transport === 'builtin' && (
++                {(p.transport === 'builtin' || p.transport === 'stdio') && (
+                   <span className="
+                     rounded-sm bg-emerald-400/15 px-1.5 py-0.5 text-xs
+                     text-emerald-300
+                   "
+                   >
+-                    built-in
++                    {p.transport === 'builtin' ? 'built-in' : 'bundled (stdio)'}
+                   </span>
+                 )}
+                 {!p.enabled && (
