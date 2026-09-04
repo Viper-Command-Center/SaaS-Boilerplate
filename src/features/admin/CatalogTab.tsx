@@ -415,15 +415,15 @@ export const CatalogTab = (props: {
                   </div>
                 )
               : (
-                <div className="
-                  grid gap-3
-                  sm:grid-cols-2
-                "
-                >
-                  <input className={input} placeholder="MCP server URL" value={form.url} onChange={e => setForm({ ...form, url: e.target.value })} required />
-                  <input className={input} placeholder="Auth header (Authorization)" value={form.authHeader} onChange={e => setForm({ ...form, authHeader: e.target.value })} />
-                </div>
-              )}
+                  <div className="
+                    grid gap-3
+                    sm:grid-cols-2
+                  "
+                  >
+                    <input className={input} placeholder="MCP server URL" value={form.url} onChange={e => setForm({ ...form, url: e.target.value })} required />
+                    <input className={input} placeholder="Auth header (Authorization)" value={form.authHeader} onChange={e => setForm({ ...form, authHeader: e.target.value })} />
+                  </div>
+                )}
 
           <div className="
             grid gap-3
