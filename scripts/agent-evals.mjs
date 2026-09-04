@@ -244,6 +244,23 @@ expect('src/libs/mcp/stdioCatalog.ts', 'guidance: DIVIOPS_GUIDANCE', 'DiviOps au
 expect('src/libs/mcp/registry.ts', 'guard(tool.name, args', 'stdio guardCall must run before the call is forwarded to the child');
 expect('src/libs/mcp/registry.ts', 'guidanceByProvider.set(`stdio:', 'stdio guidance must join the same system-prompt slot as built-in providers');
 
+// ── WP-CLI over SSH (2026-09-04 — Theo's "missing superpower"). Runs ON the
+// live host as the hosting account, and shared-hosting SSH logins are
+// account-wide, so the site path is pinned and code-execution subcommands are
+// refused in the adapter — the approvals gateway gates tools, not arguments.
+// The private key is minted server-side and never leaves the vault.
+expect('src/libs/plugins/wpcli.ts', '\'eval\'', 'wp eval (a PHP shell) must stay on the deny list');
+expect('src/libs/plugins/wpcli.ts', '\'db query\'', 'arbitrary SQL through wp db query must stay denied');
+expect('src/libs/plugins/wpcli.ts', 'DENIED_FLAG_RE', '--path/--url/--ssh/--require must be refused so a connection cannot leave its pinned site');
+expect('src/libs/plugins/wpcli.ts', 'map(shellQuote)', 'argv must be shell-quoted element by element — never interpolated into a command string');
+expect('src/libs/plugins/wpcli.ts', 'hostVerifier', 'host-key posture is explicit (accept-new); pin fingerprints here when hardening');
+
+forbid('src/app/api/plugins/ssh-key/route.ts', 'privateKeyPem }', 'the ssh-key route must never return the private key');
+
+expect('src/app/api/plugins/ssh-key/route.ts', 'sealSecret(pair.privateKeyPem)', 'generated private keys go straight into the vault');
+expect('src/app/api/plugins/route.ts', 'eq(credentials.provider, plugin.slug)', 'a supplied credentialId must be re-scoped to this tenant AND this plugin');
+expect('next.config.ts', '\'ssh2\'', 'ssh2 must stay a server-external package like ws');
+
 // ── Report ──────────────────────────────────────────────────────────────────
 if (failures.length > 0) {
   console.error(`\n✗ agent-evals: ${failures.length} of ${checks} tripwires FAILED\n`);

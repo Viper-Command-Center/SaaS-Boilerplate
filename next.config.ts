@@ -21,7 +21,7 @@ const baseConfig: NextConfig = {
   // `ws` is a server-only native package (it's the only WebSocket client that
   // can send the SigV4 headers the AgentCore browser stream requires). Keep it
   // out of the bundler so it loads as a normal Node module at runtime.
-  serverExternalPackages: ['ws'],
+  serverExternalPackages: ['ws', 'ssh2'],
 };
 
 // Initialize the Next-Intl plugin

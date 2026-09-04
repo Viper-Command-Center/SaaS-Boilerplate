@@ -18,6 +18,7 @@ type Connection = {
   targetLabel?: string;
   targetPlaceholder?: string;
   targetIsUrl?: boolean;
+  credentialKind?: 'ssh-key' | null;
 };
 
 type CatalogPlugin = {
@@ -35,6 +36,8 @@ type CatalogPlugin = {
   targetLabel?: string;
   targetPlaceholder?: string;
   targetIsUrl?: boolean;
+  /** 'ssh-key' = platform-generated key; the form shows Generate instead of a paste box. */
+  credentialKind?: 'ssh-key' | null;
   installed: boolean;
   pricing: Array<{ tool: string; unit: string; retailUsd: number }>;
 };
@@ -60,6 +63,11 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
   const [keyFor, setKeyFor] = useState<string | null>(null);
   const [keyValue, setKeyValue] = useState('');
   const [siteUrl, setSiteUrl] = useState('');
+  // SSH-backed plugins (WP-CLI): the key is minted server-side; we hold only
+  // the credential id to enable with, and the PUBLIC key to show the client.
+  const [sshKey, setSshKey] = useState<{ pluginId: string; credentialId: string; publicKey: string } | null>(null);
+  const [sshBusy, setSshBusy] = useState(false);
+  const [shownPublicKeys, setShownPublicKeys] = useState<Record<string, string>>({});
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   // When set, the form is EDITING this connection rather than creating one.
@@ -88,7 +96,8 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
 
   const enablePlugin = async (plugin: CatalogPlugin) => {
     // Open the inline form first if we still need something from the client.
-    const missing = (plugin.needsKey && !keyValue.trim())
+    const hasGeneratedKey = plugin.credentialKind === 'ssh-key' && sshKey?.pluginId === plugin.id;
+    const missing = (plugin.needsKey && !keyValue.trim() && !hasGeneratedKey)
       || (plugin.needsSiteUrl && !siteUrl.trim());
     if (missing) {
       setKeyFor(plugin.id);
@@ -101,7 +110,8 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
       body: JSON.stringify({
         tenantSlug: props.tenantSlug,
         pluginId: plugin.id,
-        credentialValue: plugin.needsKey ? keyValue.trim() : undefined,
+        credentialValue: plugin.needsKey && !hasGeneratedKey ? keyValue.trim() : undefined,
+        credentialId: hasGeneratedKey ? sshKey?.credentialId : undefined,
         siteUrl: plugin.needsSiteUrl ? siteUrl.trim() : undefined,
       }),
     });
@@ -113,7 +123,39 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
     setKeyFor(null);
     setKeyValue('');
     setSiteUrl('');
+    setSshKey(null);
     reload();
+  };
+
+  /** Mint an SSH key pair on the platform; only the public half comes back. */
+  const generateSshKey = async (plugin: CatalogPlugin) => {
+    setSshBusy(true);
+    setError(null);
+    try {
+      const res = await fetch('/api/plugins/ssh-key', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tenantSlug: props.tenantSlug, pluginId: plugin.id }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        setError(data?.error ?? 'Could not generate a key.');
+        return;
+      }
+      setSshKey({ pluginId: plugin.id, credentialId: data.credentialId, publicKey: data.publicKey });
+    } finally {
+      setSshBusy(false);
+    }
+  };
+
+  const showPublicKey = async (conn: Connection) => {
+    const res = await fetch(`/api/plugins/ssh-key?tenant=${encodeURIComponent(props.tenantSlug)}&connection=${encodeURIComponent(conn.id)}`);
+    const data = await res.json().catch(() => null);
+    if (!res.ok) {
+      setError(data?.error ?? 'Could not read the public key.');
+      return;
+    }
+    setShownPublicKeys(prev => ({ ...prev, [conn.id]: data.publicKey }));
   };
 
   /**
@@ -473,16 +515,66 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
                         onChange={e => setSiteUrl(e.target.value)}
                       />
                     )}
-                    <div className="flex gap-2">
-                      <input
-                        type="password"
-                        className={inputClass}
-                        placeholder={p.authHint ?? 'Your API key'}
-                        value={keyValue}
-                        onChange={e => setKeyValue(e.target.value)}
-                      />
-                      <Button size="sm" onClick={() => enablePlugin(p)}>Save</Button>
-                    </div>
+                    {p.credentialKind === 'ssh-key'
+                      ? (
+                          <div className="space-y-2">
+                            {sshKey?.pluginId === p.id
+                              ? (
+                                  <>
+                                    <p className="text-xs text-white/60">
+                                      Key generated and stored encrypted. Add this PUBLIC key on your host
+                                      (Hostinger: Websites → Advanced → SSH Access → Add SSH key), then Save.
+                                    </p>
+                                    <textarea
+                                      readOnly
+                                      className={`
+                                        ${inputClass}
+                                        h-20 font-mono text-[11px]
+                                      `}
+                                      value={sshKey.publicKey}
+                                      onFocus={e => e.currentTarget.select()}
+                                    />
+                                    <div className="flex gap-2">
+                                      <Button
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={() => navigator.clipboard?.writeText(sshKey.publicKey).catch(() => {})}
+                                      >
+                                        Copy public key
+                                      </Button>
+                                      <Button size="sm" onClick={() => enablePlugin(p)}>Save</Button>
+                                    </div>
+                                  </>
+                                )
+                              : (
+                                  <div className="flex gap-2">
+                                    <Button size="sm" disabled={sshBusy} onClick={() => generateSshKey(p)}>
+                                      {sshBusy ? 'Generating…' : 'Generate SSH key'}
+                                    </Button>
+                                    <input
+                                      type="password"
+                                      className={inputClass}
+                                      placeholder="…or paste an existing private key (PEM)"
+                                      value={keyValue}
+                                      onChange={e => setKeyValue(e.target.value)}
+                                    />
+                                    {keyValue.trim() && <Button size="sm" onClick={() => enablePlugin(p)}>Save</Button>}
+                                  </div>
+                                )}
+                          </div>
+                        )
+                      : (
+                          <div className="flex gap-2">
+                            <input
+                              type="password"
+                              className={inputClass}
+                              placeholder={p.authHint ?? 'Your API key'}
+                              value={keyValue}
+                              onChange={e => setKeyValue(e.target.value)}
+                            />
+                            <Button size="sm" onClick={() => enablePlugin(p)}>Save</Button>
+                          </div>
+                        )}
                     {p.authHint && (
                       <p className="text-xs text-white/35">{p.authHint}</p>
                     )}
@@ -518,8 +610,19 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
                 <span className="text-sm font-medium text-white">{conn.name}</span>
               </div>
               <p className="truncate pl-3.5 text-xs text-white/35">
-                {conn.transport === 'builtin' ? 'built-in plugin' : conn.url}
+                {conn.transport === 'builtin' ? (conn.perConnection && conn.url ? conn.url : 'built-in plugin') : conn.url}
               </p>
+              {shownPublicKeys[conn.id] && (
+                <textarea
+                  readOnly
+                  className={`
+                    ${inputClass}
+                    mt-1.5 ml-3.5 h-16 w-full font-mono text-[11px]
+                  `}
+                  value={shownPublicKeys[conn.id]}
+                  onFocus={e => e.currentTarget.select()}
+                />
+              )}
               {/* Approval policy. Deliberately three explicit words rather than
                   an on/off switch — "Ask" is the safe default and should look
                   like a choice, not an absence. */}
@@ -570,6 +673,9 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
                   editable: otherwise a mistyped GA4 property ID can only be
                   fixed by Remove-and-recreate, which also silently drops the
                   tool policies. Same defect as Phase 11, one table over. */}
+              {conn.credentialKind === 'ssh-key' && (
+                <Button variant="outline" size="sm" onClick={() => showPublicKey(conn)}>Show public key</Button>
+              )}
               {(conn.transport !== 'builtin' || conn.perConnection) && (
                 <Button variant="outline" size="sm" onClick={() => startEdit(conn)}>Edit</Button>
               )}

@@ -20,6 +20,7 @@ import { postmarkProvider } from '@/libs/plugins/postmark';
 import { smartermailProvider } from '@/libs/plugins/smartermail';
 import { whmcsProvider } from '@/libs/plugins/whmcs';
 import { wordpressProvider } from '@/libs/plugins/wordpress';
+import { wpcliProvider } from '@/libs/plugins/wpcli';
 
 export const BUILTIN_PROVIDERS: Record<string, BuiltinProvider> = {
   [kieProvider.slug]: kieProvider,
@@ -37,6 +38,7 @@ export const BUILTIN_PROVIDERS: Record<string, BuiltinProvider> = {
   [postgresProvider.slug]: postgresProvider,
   [githubProvider.slug]: githubProvider,
   [googleAdsProvider.slug]: googleAdsProvider,
+  [wpcliProvider.slug]: wpcliProvider,
 };
 
 export function getBuiltinProvider(slug: string): BuiltinProvider | undefined {
@@ -176,6 +178,19 @@ export const CATALOG_PRESETS = [
       transport: 'builtin' as const,
       provider: 'wordpress',
       authHint: 'username:application password — create one in WP Admin → Users → Profile → Application Passwords.',
+    },
+  },
+  {
+    key: 'wpcli',
+    label: 'WP-CLI over SSH (any WordPress host)',
+    entry: {
+      slug: 'wpcli',
+      name: 'WP-CLI over SSH',
+      description: 'Run WP-CLI on a WordPress site over SSH — cache flush, options, plugin updates, safe search-replace. Works on Hostinger, WP Engine, Kinsta, SiteGround, Cloudways and any host with SSH + WP-CLI.',
+      category: 'dev',
+      transport: 'builtin' as const,
+      provider: 'wpcli',
+      authHint: 'Click "Generate SSH key" — the platform creates the key and shows you the public half to paste into your host\'s SSH keys page (Hostinger: Websites → Advanced → SSH Access → Add SSH key). Target = user@host:port:/path/to/wordpress from that same page.',
     },
   },
   {
@@ -375,7 +390,7 @@ export const CATALOG_PRESETS = [
       transport: 'http' as const,
       url: 'https://api.githubcopilot.com/mcp/x/repos',
       authHeader: 'Authorization',
-      authHint: 'Bearer <fine-grained PAT> with Contents read/write on the site repos. \u26a0\ufe0f Its only write verb takes the WHOLE file, so an agent cannot edit a page of any real size through it \u2014 the call exceeds the output-token limit. Use "GitHub repository (edit in place)" for editing; this one is fine for browsing and for repo-level operations it does not cover.',
+      authHint: 'Bearer <fine-grained PAT> with Contents read/write on the site repos. \u26A0\uFE0F Its only write verb takes the WHOLE file, so an agent cannot edit a page of any real size through it \u2014 the call exceeds the output-token limit. Use "GitHub repository (edit in place)" for editing; this one is fine for browsing and for repo-level operations it does not cover.',
     },
   },
   {
@@ -388,7 +403,7 @@ export const CATALOG_PRESETS = [
       category: 'marketing',
       transport: 'builtin' as const,
       provider: 'google-ads',
-      authHint: 'FOUR LINES of key=value: developer_token, client_id, client_secret, refresh_token. The developer token comes from the Google Ads UI (Tools \u2192 API Center) \u2014 Explorer access is usually granted automatically and is enough for everything here except keyword ideas, which Zernio covers instead. The client_id/client_secret are an OAuth 2.0 Desktop-app client in a Google Cloud project with the Google Ads API enabled; generate the refresh_token once with that client under a Google account that can reach the ad account. \u26a0\ufe0f PUBLISH the OAuth consent screen \u2014 while it is in Testing mode Google expires refresh tokens after 7 days and the connection dies silently. The TARGET carries the account and its spend ceilings: "<customerId> | maxDailyBudget=<amount> maxCpc=<amount>". Both ceilings are required and the adapter refuses to cross them, whatever the agent is told.',
+      authHint: 'FOUR LINES of key=value: developer_token, client_id, client_secret, refresh_token. The developer token comes from the Google Ads UI (Tools \u2192 API Center) \u2014 Explorer access is usually granted automatically and is enough for everything here except keyword ideas, which Zernio covers instead. The client_id/client_secret are an OAuth 2.0 Desktop-app client in a Google Cloud project with the Google Ads API enabled; generate the refresh_token once with that client under a Google account that can reach the ad account. \u26A0\uFE0F PUBLISH the OAuth consent screen \u2014 while it is in Testing mode Google expires refresh tokens after 7 days and the connection dies silently. The TARGET carries the account and its spend ceilings: "<customerId> | maxDailyBudget=<amount> maxCpc=<amount>". Both ceilings are required and the adapter refuses to cross them, whatever the agent is told.',
     },
   },
   {

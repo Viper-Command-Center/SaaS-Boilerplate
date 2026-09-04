@@ -89,6 +89,8 @@ export async function GET(request: Request) {
       targetPlaceholder: builtin?.targetPlaceholder ?? 'Your site URL — https://yoursite.com',
       targetIsUrl: builtin ? builtin.targetIsUrl !== false : true,
       credentialLabel: builtin?.credentialLabel ?? entry?.authHint ?? null,
+      // 'ssh-key' → the panel offers "Show public key" (re-derived from the vault).
+      credentialKind: builtin?.credentialKind ?? null,
     };
   });
 

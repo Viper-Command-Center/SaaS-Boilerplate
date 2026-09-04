@@ -81,6 +81,8 @@ export async function GET(request: Request) {
         targetLabel: provider?.targetLabel ?? 'Site URL',
         targetPlaceholder: provider?.targetPlaceholder ?? 'Your site URL — https://yoursite.com',
         targetIsUrl: provider ? provider.targetIsUrl !== false : true,
+        // 'ssh-key' = the Tools panel offers "Generate SSH key" instead of a paste box.
+        credentialKind: provider?.credentialKind ?? null,
         installed: installedIds.has(p.id),
         // Show clients what they'll be charged, never our raw cost.
         // Usage-priced plugins (Kie.ai) are one rate for every tool — collapse
@@ -119,6 +121,13 @@ const EnableSchema = z.object({
    * unenterable (Phase 30.1).
    */
   siteUrl: z.string().min(1).max(500).optional(),
+  /**
+   * A credential row ALREADY sealed for this workspace — today only the SSH
+   * private key minted by POST /api/plugins/ssh-key. Verified below to belong
+   * to this tenant AND this plugin, so a stray id cannot borrow another
+   * workspace's (or the platform's) secret.
+   */
+  credentialId: z.string().uuid().optional(),
 });
 
 export async function POST(request: Request) {
@@ -186,7 +195,21 @@ export async function POST(request: Request) {
   }
 
   const headerCredentials: Record<string, string> = {};
-  if (needsOwnCredential) {
+  if (needsOwnCredential && body.credentialId) {
+    const [own] = await db
+      .select({ id: credentials.id })
+      .from(credentials)
+      .where(and(
+        eq(credentials.id, body.credentialId),
+        eq(credentials.tenantId, tenant.id),
+        eq(credentials.provider, plugin.slug),
+      ))
+      .limit(1);
+    if (!own) {
+      return NextResponse.json({ error: 'That generated key does not belong to this workspace and plugin — generate it again.' }, { status: 400 });
+    }
+    headerCredentials[plugin.authHeader ?? 'Authorization'] = own.id;
+  } else if (needsOwnCredential) {
     if (!body.credentialValue) {
       return NextResponse.json({ error: 'This plugin needs your credential.' }, { status: 400 });
     }

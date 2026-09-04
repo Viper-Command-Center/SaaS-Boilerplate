@@ -90,6 +90,14 @@ export type BuiltinProvider = {
   /** Default true (a URL). False = free-form, e.g. a numeric property ID. */
   targetIsUrl?: boolean;
   /**
+   * 'ssh-key' = the per-connection credential is an SSH private key that the
+   * PLATFORM generates (POST /api/plugins/ssh-key) and seals straight into the
+   * vault. The Tools panel shows a "Generate SSH key" button and the resulting
+   * PUBLIC key for the client to paste into their host; the private half never
+   * transits chat, a file or a form. Default (undefined) = a pasted secret.
+   */
+  credentialKind?: 'ssh-key';
+  /**
    * 🔴 PHASE 32 — cross-tool operating notes, injected into the system prompt
    * for every workspace that has this provider enabled.
    *
