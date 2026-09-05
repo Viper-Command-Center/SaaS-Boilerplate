@@ -1,12 +1,10 @@
 import { setRequestLocale } from 'next-intl/server';
+import Link from 'next/link';
 import { AgentChat } from '@/features/agent/AgentChat';
 import { ApprovalsPanel } from '@/features/agent/ApprovalsPanel';
 import { ChatJumpButton } from '@/features/agent/ChatJumpButton';
-import { EmployeePanel } from '@/features/agent/EmployeePanel';
-import { MissionsPanel } from '@/features/agent/MissionsPanel';
 
 import { PanelsGrid } from '@/features/agent/PanelsGrid';
-import { ToolsPanel } from '@/features/agent/ToolsPanel';
 import { WorkspacePanel } from '@/features/agent/WorkspacePanel';
 import { resolveAgentForTenant } from '@/libs/agent/persona';
 import { getCurrentUser } from '@/libs/auth/session';
@@ -151,10 +149,11 @@ export default async function DashboardIndexPage(props: {
 
             rail  = sticky, exactly viewport-high (100vh − top − bottom margin),
                     a flex column, overflow hidden so it can never exceed that;
-            chat  = flex-[3] with a floor, so it always has the larger share;
-            rest  = flex-[2] with min-h-0 + overflow-y-auto, so Employee /
-                    Missions / Approvals / Tools scroll in their own region and
-                    the Tools panel stays reachable however long it grows.
+            chat  = flex-1 with a floor, so it takes all the height not needed
+                    by the approvals region below;
+            rest  = shrinkable, min-h-0 + overflow-y-auto — Approvals plus a
+                    link to /dashboard/agent, where Employee / Missions / Tools
+                    now live full-width (they were unusable squeezed in here).
 
           `min-h-0` on both flex children is load-bearing: a flex item's default
           min-height is `auto` (= its content), which would let the rest-region
@@ -169,7 +168,7 @@ export default async function DashboardIndexPage(props: {
         >
           <div
             id="agent-chat"
-            className="lg:flex lg:min-h-[360px] lg:flex-3 lg:flex-col"
+            className="lg:flex lg:min-h-[360px] lg:flex-1 lg:flex-col"
           >
             <AgentChat
               tenantSlug={tenant.slug}
@@ -181,15 +180,31 @@ export default async function DashboardIndexPage(props: {
             />
           </div>
 
+          {/*
+            Only APPROVALS live under the chat now. Approving a queued call is
+            what lets the agent finish its turn, so it belongs beside the
+            conversation. Employee, Missions and Tools moved to /dashboard/agent
+            (2026-09-05): in this ~40%-height region the Tools panel was
+            unusable — the WordPress connection's Edit form could not be
+            reached at all. The link card is the way there.
+          */}
           <div className="
             space-y-6
-            lg:min-h-0 lg:flex-2 lg:overflow-y-auto lg:pr-1
+            lg:min-h-0 lg:shrink lg:overflow-y-auto lg:pr-1
           "
           >
-            {canManage && <EmployeePanel tenantSlug={tenant.slug} />}
-            <MissionsPanel tenantSlug={tenant.slug} canControl={canApprove} />
             {canApprove && <ApprovalsPanel tenantSlug={tenant.slug} />}
-            {canManage && <ToolsPanel tenantSlug={tenant.slug} />}
+            <Link
+              href={`/dashboard/agent?t=${tenant.slug}`}
+              className="
+                glass flex items-center justify-between gap-3 px-4 py-3 text-sm
+                text-white/70 transition
+                hover:text-white
+              "
+            >
+              <span>{`Manage ${agent.name} — tools, missions, persona`}</span>
+              <span aria-hidden="true">→</span>
+            </Link>
           </div>
         </div>
       </div>
