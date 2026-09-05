@@ -86,9 +86,25 @@ const DIVI_PLACEHOLDER_OPEN = /^\s*<!--\s*wp:divi\/placeholder\s*-->\s*/;
 const DIVI_PLACEHOLDER_CLOSE = /\s*<!--\s*\/wp:divi\/placeholder\s*-->\s*$/;
 const DIVI_ADMIN_LABEL_RE = /"adminLabel":\{"desktop":\{"value":"([^"]*)"/g;
 
+/**
+ * DiviOps' own WP-CLI passthrough needs `WP_PATH` (a Local by Flywheel install
+ * on THIS machine) or `WP_CLI_CMD` (an ssh binary + key file) in the child
+ * env. Neither exists on the platform, so the tool always answers
+ * `meta_wp_cli.not_configured` — and the agent's next move was to ask the
+ * owner for env vars that cannot be set (2026-09-05). WP-CLI lives in the
+ * `wpcli` built-in (SSH via ssh2, per-connection key); say so instead.
+ */
+const DIVI_WP_CLI_TOOLS = new Set(['diviops_meta_wp_cli', 'diviops_scf_status', 'diviops_scf_export', 'diviops_scf_import', 'diviops_scf_sync', 'diviops_scf_field_group_list', 'diviops_scf_field_group_get']);
+
 export function diviopsGuard(toolName: string, args: Record<string, unknown>): { args: Record<string, unknown>; note?: string } {
   const out: Record<string, unknown> = { ...args };
   const notes: string[] = [];
+
+  if (DIVI_WP_CLI_TOOLS.has(toolName)) {
+    throw new Error(
+      `${toolName} is not available on this platform — DiviOps' WP-CLI passthrough needs a local WordPress install (WP_PATH) and there is none here; no environment variable or connection setting can enable it, so do not ask the owner for WP_PATH or WP_CLI_CMD. WP-CLI runs through the separate "wpcli" connection (tools wp_status, wp_cli, wp_cache_flush, wp_option_get/update, wp_search_replace, wp_plugin_list/update). If those tools are not in your list, the workspace owner needs to enable the "WP-CLI over SSH" plugin in the Tools panel (or click Enable on its connection row if it is disabled).`,
+    );
+  }
 
   if (DIVI_SECTION_TARGETING_TOOLS.has(toolName)) {
     for (const field of ['label', 'match_text'] as const) {
@@ -134,7 +150,8 @@ const DIVIOPS_GUIDANCE = `DiviOps (Divi 5 authoring) — these rules come from t
 - Give every section meta.adminLabel, using ONLY letters, digits and spaces. The plugin stores & < > " and -- as JSON escapes but looks sections up by raw substring, so such a label (or match_text) can never be matched again. This is why section_replace/section_get report not_found on sections you wrote earlier — it is a plugin limitation, not a wrong page id.
 - page_update_content takes the whole page wrapped in <!-- wp:divi/placeholder -->…<!-- /wp:divi/placeholder -->. section_append and section_replace take ONE section with NO placeholder wrapper (the platform strips it from section_replace for you, because a nested placeholder renders the page blank).
 - Prefer incremental edits (diviops_module_update by admin label, section_replace with a plain match_text) over rewriting whole pages. Pass backup: true on writes you may need to undo; diviops_rollback_snapshot_restore reverses them. Pass dry_run: true first when unsure.
-- diviops_template_list / diviops_template_get return verified starter sections (hero, features, cards, CTA) — start from one rather than from memory.`;
+- diviops_template_list / diviops_template_get return verified starter sections (hero, features, cards, CTA) — start from one rather than from memory.
+- WP-CLI is NOT diviops_meta_wp_cli (that needs a local install and is refused here). Use the wpcli connection's wp_status / wp_cli / wp_cache_flush tools; if they are missing, ask the owner to enable the WP-CLI over SSH plugin — never ask for WP_PATH or WP_CLI_CMD.`;
 
 // Resolve from the APP's node_modules at runtime (not from whatever module
 // graph the bundler built) — Next.js never needs to know these packages exist.

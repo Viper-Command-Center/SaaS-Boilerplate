@@ -594,96 +594,102 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
           </p>
         )}
         {connections.map(conn => (
-          <div
-            key={conn.id}
-            className="flex items-center justify-between gap-3 px-4 py-3"
-          >
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <span className={`
-                  size-1.5 rounded-full
-                  ${conn.enabled
+          <div key={conn.id} className="px-4 py-3">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className={`
+                    size-1.5 rounded-full
+                    ${conn.enabled
             ? `bg-emerald-400`
             : `bg-white/25`}
-                `}
-                />
-                <span className="text-sm font-medium text-white">{conn.name}</span>
-              </div>
-              <p className="truncate pl-3.5 text-xs text-white/35">
-                {conn.transport === 'builtin' ? (conn.perConnection && conn.url ? conn.url : 'built-in plugin') : conn.url}
-              </p>
-              {shownPublicKeys[conn.id] && (
-                <textarea
-                  readOnly
-                  className={`
-                    ${inputClass}
-                    mt-1.5 ml-3.5 h-16 w-full font-mono text-[11px]
                   `}
-                  value={shownPublicKeys[conn.id]}
-                  onFocus={e => e.currentTarget.select()}
-                />
-              )}
-              {/* Approval policy. Deliberately three explicit words rather than
+                  />
+                  <span className="text-sm font-medium text-white">{conn.name}</span>
+                </div>
+                <p className="truncate pl-3.5 text-xs text-white/35">
+                  {conn.transport === 'builtin' ? (conn.perConnection && conn.url ? conn.url : 'built-in plugin') : conn.url}
+                </p>
+                {/* Approval policy. Deliberately three explicit words rather than
                   an on/off switch — "Ask" is the safe default and should look
                   like a choice, not an absence. */}
-              <div className="mt-1.5 flex items-center gap-1 pl-3.5">
-                {(['auto', 'approval', 'deny'] as const).map((p) => {
-                  const current = (conn.toolPolicy?.['*'] as string | undefined) ?? 'approval';
-                  const active = current === p;
-                  const label = p === 'auto' ? 'Auto-run' : p === 'approval' ? 'Ask first' : 'Blocked';
-                  return (
-                    <button
-                      key={p}
-                      type="button"
-                      onClick={() => setPolicy(conn, p)}
-                      title={
-                        p === 'auto'
-                          ? 'Run this tool’s calls without asking. Spend caps still apply.'
-                          : p === 'approval'
-                            ? 'Queue every call in Approvals for your sign-off (default)'
-                            : 'Refuse all calls to this tool'
+                <div className="mt-1.5 flex items-center gap-1 pl-3.5">
+                  {(['auto', 'approval', 'deny'] as const).map((p) => {
+                    const current = (conn.toolPolicy?.['*'] as string | undefined) ?? 'approval';
+                    const active = current === p;
+                    const label = p === 'auto' ? 'Auto-run' : p === 'approval' ? 'Ask first' : 'Blocked';
+                    return (
+                      <button
+                        key={p}
+                        type="button"
+                        onClick={() => setPolicy(conn, p)}
+                        title={
+                          p === 'auto'
+                            ? 'Run this tool’s calls without asking. Spend caps still apply.'
+                            : p === 'approval'
+                              ? 'Queue every call in Approvals for your sign-off (default)'
+                              : 'Refuse all calls to this tool'
+                        }
+                        className={`
+                          rounded-full border px-2 py-0.5 text-[10px] transition
+                          ${
+                      active
+                        ? p === 'auto'
+                          ? `border-amber-400/40 bg-amber-400/10 text-amber-200`
+                          : p === 'deny'
+                            ? `border-rose-400/40 bg-rose-400/10 text-rose-200`
+                            : 'border-white/20 bg-white/10 text-white/70'
+                        : `
+                          border-transparent text-white/25
+                          hover:text-white/50
+                        `
                       }
-                      className={`
-                        rounded-full border px-2 py-0.5 text-[10px] transition
-                        ${
-                    active
-                      ? p === 'auto'
-                        ? `border-amber-400/40 bg-amber-400/10 text-amber-200`
-                        : p === 'deny'
-                          ? `border-rose-400/40 bg-rose-400/10 text-rose-200`
-                          : 'border-white/20 bg-white/10 text-white/70'
-                      : `
-                        border-transparent text-white/25
-                        hover:text-white/50
-                      `
-                    }
-                      `}
-                    >
-                      {label}
-                    </button>
-                  );
-                })}
+                        `}
+                      >
+                        {label}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
-            </div>
-            <div className="flex shrink-0 items-center gap-2">
-              {/* A TIER-1 built-in (Kie, AgentCore, HeyGen) keeps its key on
+              <div className="flex shrink-0 items-center gap-2">
+                {/* A TIER-1 built-in (Kie, AgentCore, HeyGen) keeps its key on
                   the admin catalog entry — nothing here to edit. A
                   PER-CONNECTION built-in (WordPress, Google Analytics) keeps
                   both its target and its credential on this row, so it must be
                   editable: otherwise a mistyped GA4 property ID can only be
                   fixed by Remove-and-recreate, which also silently drops the
                   tool policies. Same defect as Phase 11, one table over. */}
-              {conn.credentialKind === 'ssh-key' && (
-                <Button variant="outline" size="sm" onClick={() => showPublicKey(conn)}>Show public key</Button>
-              )}
-              {(conn.transport !== 'builtin' || conn.perConnection) && (
-                <Button variant="outline" size="sm" onClick={() => startEdit(conn)}>Edit</Button>
-              )}
-              <Button variant="outline" size="sm" onClick={() => toggle(conn)}>
-                {conn.enabled ? 'Disable' : 'Enable'}
-              </Button>
-              <Button variant="outline" size="sm" onClick={() => remove(conn)}>Remove</Button>
+                {conn.credentialKind === 'ssh-key' && (
+                  <Button variant="outline" size="sm" onClick={() => showPublicKey(conn)}>Show public key</Button>
+                )}
+                {(conn.transport !== 'builtin' || conn.perConnection) && (
+                  <Button variant="outline" size="sm" onClick={() => startEdit(conn)}>Edit</Button>
+                )}
+                <Button variant="outline" size="sm" onClick={() => toggle(conn)}>
+                  {conn.enabled ? 'Disable' : 'Enable'}
+                </Button>
+                <Button variant="outline" size="sm" onClick={() => remove(conn)}>Remove</Button>
+              </div>
             </div>
+            {/* Full-width, BELOW the row — inside the min-w-0 flex column it
+                collapsed to a 60px box hiding behind the buttons (2026-09-05). */}
+            {shownPublicKeys[conn.id] && (
+              <div className="mt-2 pl-3.5">
+                <p className="mb-1 text-xs text-white/50">
+                  Public key — add it on the host's SSH keys page (Hostinger: Websites → Advanced → SSH Access → Add SSH key). Click to select all.
+                </p>
+                <textarea
+                  readOnly
+                  className={`
+                    ${inputClass}
+                    h-20 w-full font-mono text-[11px]
+                  `}
+                  value={shownPublicKeys[conn.id]}
+                  onFocus={e => e.currentTarget.select()}
+                />
+              </div>
+            )}
           </div>
         ))}
       </div>
