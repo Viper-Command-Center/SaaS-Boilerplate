@@ -637,6 +637,7 @@ export const AgentChat = (props: {
     <div className="
       glass glass-topline relative flex h-[62vh] min-h-[440px] flex-col
       overflow-hidden
+      lg:h-auto lg:min-h-0 lg:flex-1
     "
     >
       {/* Header */}

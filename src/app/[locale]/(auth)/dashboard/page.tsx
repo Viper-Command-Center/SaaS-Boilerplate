@@ -135,15 +135,42 @@ export default async function DashboardIndexPage(props: {
           )}
         </div>
 
-        <div className="min-w-0 space-y-6">
-          {/*
-            Only the CHAT is sticky, not the whole rail. A sticky wrapper around
-            chat + rail would be taller than the viewport, and a sticky element
-            taller than the viewport has its bottom permanently cut off — the
-            Tools panel would become unreachable. Chat is 62vh, so it fits with
-            room to spare, and the rail scrolls beneath it as normal.
-          */}
-          <div id="agent-chat" className="lg:sticky lg:top-6">
+        {/*
+          🔴 THE WHOLE RAIL IS STICKY AND VIEWPORT-BOUNDED (2026-09-05).
+
+          Previously only the chat was sticky and the Employee / Missions /
+          Approvals / Tools cards scrolled beneath it as normal siblings. That
+          fails on any dashboard taller than one screen: the later siblings
+          paint OVER the sticky chat as they scroll up (the glass card is
+          translucent, so they show straight through it), and the user has to
+          scroll back to the top to talk to the agent — the exact complaint the
+          sticky was meant to fix. The reason the rail was not made sticky was
+          the trap noted below: a sticky element taller than the viewport has
+          its bottom cut off. The fix is not "don't stick the rail", it is
+          "bound the rail to the viewport and scroll INSIDE it":
+
+            rail  = sticky, exactly viewport-high (100vh − top − bottom margin),
+                    a flex column, overflow hidden so it can never exceed that;
+            chat  = flex-[3] with a floor, so it always has the larger share;
+            rest  = flex-[2] with min-h-0 + overflow-y-auto, so Employee /
+                    Missions / Approvals / Tools scroll in their own region and
+                    the Tools panel stays reachable however long it grows.
+
+          `min-h-0` on both flex children is load-bearing: a flex item's default
+          min-height is `auto` (= its content), which would let the rest-region
+          push the rail past the viewport again and silently defeat the bound.
+          Below `lg` none of this applies (single column, ChatJumpButton).
+        */}
+        <div className="
+          min-w-0 space-y-6
+          lg:sticky lg:top-6 lg:flex lg:h-[calc(100vh-3rem)] lg:flex-col
+          lg:gap-6 lg:space-y-0 lg:overflow-hidden
+        "
+        >
+          <div
+            id="agent-chat"
+            className="lg:flex lg:min-h-[360px] lg:flex-3 lg:flex-col"
+          >
             <AgentChat
               tenantSlug={tenant.slug}
               tenantName={tenant.name}
@@ -154,10 +181,16 @@ export default async function DashboardIndexPage(props: {
             />
           </div>
 
-          {canManage && <EmployeePanel tenantSlug={tenant.slug} />}
-          <MissionsPanel tenantSlug={tenant.slug} canControl={canApprove} />
-          {canApprove && <ApprovalsPanel tenantSlug={tenant.slug} />}
-          {canManage && <ToolsPanel tenantSlug={tenant.slug} />}
+          <div className="
+            space-y-6
+            lg:min-h-0 lg:flex-2 lg:overflow-y-auto lg:pr-1
+          "
+          >
+            {canManage && <EmployeePanel tenantSlug={tenant.slug} />}
+            <MissionsPanel tenantSlug={tenant.slug} canControl={canApprove} />
+            {canApprove && <ApprovalsPanel tenantSlug={tenant.slug} />}
+            {canManage && <ToolsPanel tenantSlug={tenant.slug} />}
+          </div>
         </div>
       </div>
 
