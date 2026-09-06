@@ -7,11 +7,13 @@
 
 import type { AnthropicTool } from '@/libs/mcp/registry';
 import { and, asc, desc, eq } from 'drizzle-orm';
+import { buildBookTools } from '@/libs/agent/bookTools';
 import { assertPublicUrl, buildWebTools } from '@/libs/agent/webTools';
 import { db } from '@/libs/DB';
 import { extractOfficeImages, MAX_IMAGES } from '@/libs/docs/officeImages';
 import { extractOfficeText, isLegacyOffice, isOfficeDoc } from '@/libs/docs/officeText';
 import { renderDocument } from '@/libs/docs/pdf';
+import { extractPdfImages, MAX_PDF_IMAGES } from '@/libs/docs/pdfImages';
 import { extractPdfText, isPdf } from '@/libs/docs/pdfText';
 import { renderDeck } from '@/libs/docs/pptx';
 import { getFile, listFiles, saveFile, saveRemoteFile, setFileText } from '@/libs/storage/files';
@@ -401,11 +403,11 @@ export function buildPlatformTools(tenantId: string): {
     },
     {
       name: 'extract_document_images',
-      description: 'Pull every embedded image out of a Word (.docx), PowerPoint (.pptx) or Excel (.xlsx) file in the library and save each one as its own image file with a permanent public URL. Numbered in reading order (docx) or by slide (pptx), so "the second image in the brief" is image 2. Use this when a client\'s document contains photos, logos or screenshots that belong on a website, in a post, or in an email — then pass the returned file ids to upload_media (WordPress) or use the URLs directly. read_file returns text only and never includes images.',
+      description: 'Pull every embedded image out of a PDF, Word (.docx), PowerPoint (.pptx) or Excel (.xlsx) file in the library and save each one as its own image file with a permanent public URL. Numbered in reading order (docx), by slide (pptx) or by page (pdf), so "the second image in the brief" is image 2. A picture-book or coloring-book PDF exported from Canva yields one image per page — for BOOKS prefer import_book_pages, which does this AND adds the pages to the book. Use this when a client\'s document contains photos, logos or screenshots that belong on a website, in a post, or in an email — then pass the returned file ids to upload_media (WordPress) or use the URLs directly. read_file returns text only and never includes images.',
       input_schema: {
         type: 'object',
         properties: {
-          fileId: { type: 'string', description: 'Library id of the .docx/.pptx/.xlsx (from list_files).' },
+          fileId: { type: 'string', description: 'Library id of the .pdf/.docx/.pptx/.xlsx (from list_files).' },
           namePrefix: { type: 'string', description: 'Optional filename stem for the saved images, e.g. "acme-brief". Defaults to the document\'s name.' },
         },
         required: ['fileId'],
@@ -1163,11 +1165,25 @@ export function buildPlatformTools(tenantId: string): {
       if (!row) {
         throw new Error(`No file with id "${wanted}" in this workspace — call list_files for current ids.`);
       }
-      if (!isOfficeDoc(row.name, row.mime)) {
-        throw new Error(`${row.name} is not a .docx, .pptx or .xlsx. Images can only be extracted from those; a PDF's images are not extractable here.`);
+      const pdf = isPdf(row.name, row.mime);
+      if (!pdf && !isOfficeDoc(row.name, row.mime)) {
+        throw new Error(`${row.name} is not a .pdf, .docx, .pptx or .xlsx. Images can only be extracted from those.`);
       }
       const { body: bytes } = await getObject(row.r2Key);
-      const { images, skipped } = await extractOfficeImages({ bytes, name: row.name, mime: row.mime });
+      // PDF: the page images are XObjects — pulled out losslessly, page order.
+      // Office: unchanged path (officeImages.ts).
+      const { images, skipped } = pdf
+        ? await (async () => {
+            const r = await extractPdfImages(bytes, { max: MAX_PDF_IMAGES });
+            return {
+              images: r.images.map(i => ({ order: i.order, part: `page ${i.page}`, ext: i.ext, mime: i.mime, bytes: i.bytes, slide: undefined as number | undefined, page: i.page as number | undefined })),
+              skipped: r.skipped.map(s => ({ part: `page ${s.page}`, reason: s.reason })),
+            };
+          })()
+        : await (async () => {
+            const r = await extractOfficeImages({ bytes, name: row.name, mime: row.mime });
+            return { images: r.images.map(i => ({ ...i, page: undefined as number | undefined })), skipped: r.skipped };
+          })();
       const stem = (String(args.namePrefix ?? '').trim() || row.name.replace(/\.[a-z0-9]+$/i, ''))
         .replace(/[^\w.-]+/g, '-')
         .replace(/^-+|-+$/g, '')
@@ -1185,11 +1201,12 @@ export function buildPlatformTools(tenantId: string): {
           mime: img.mime,
           kind: 'asset',
           source: 'agent',
-          meta: { extractedFrom: row.id, sourceName: row.name, order: img.order, ...(img.slide ? { slide: img.slide } : {}) },
+          meta: { extractedFrom: row.id, sourceName: row.name, order: img.order, ...(img.slide ? { slide: img.slide } : {}), ...(img.page ? { page: img.page } : {}) },
         });
         saved.push({
           order: img.order,
           ...(img.slide ? { slide: img.slide } : {}),
+          ...(img.page ? { page: img.page } : {}),
           id: file?.id,
           name: file?.name,
           mime: img.mime,
@@ -1205,7 +1222,7 @@ export function buildPlatformTools(tenantId: string): {
         note: saved.length
           ? `Saved ${saved.length} image(s) to the library as public assets. Each id works with WordPress upload_media; each url can be used directly in HTML.${skipped.length ? ` ${skipped.length} part(s) were skipped — see skipped for why.` : ''}`
           : 'This document contains no embedded images that can be extracted.',
-        limit: MAX_IMAGES,
+        limit: pdf ? MAX_PDF_IMAGES : MAX_IMAGES,
       });
     },
   });
@@ -1271,6 +1288,14 @@ export function buildPlatformTools(tenantId: string): {
   anthropicTools.push(...web.anthropicTools);
   for (const [name, executor] of web.executors) {
     executors.set(name, executor);
+  }
+
+  // Book publisher (Phase 35) — same policy, same tenant scoping; kept in its
+  // own module so this file stops growing.
+  const bookTools = buildBookTools(tenantId);
+  anthropicTools.push(...bookTools.anthropicTools);
+  for (const [name, exec] of bookTools.executors) {
+    executors.set(name, exec);
   }
 
   return { anthropicTools, executors };

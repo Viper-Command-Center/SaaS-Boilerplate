@@ -711,3 +711,45 @@ export const missionSteps = pgTable(
   },
   t => [index('mission_steps_mission_pos_idx').on(t.missionId, t.position)],
 );
+
+// ─── Books (Phase 35 — print book publisher) ────────────────────────────────
+// One row per book project. Pages/cover/listing are JSON: they change shape
+// as the tool grows and are only ever read whole. File bytes live in `files`
+// (R2) — this table holds file IDS, never bytes.
+export const books = pgTable(
+  'books',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+    title: text('title').notNull(),
+    subtitle: text('subtitle'),
+    author: text('author'),
+    // coloring | illustrated | text — drives line-art thresholding + defaults
+    kind: varchar('kind', { length: 20 }).notNull().default('coloring'),
+    trimWidthIn: numeric('trim_width_in', { precision: 6, scale: 3 }).notNull(),
+    trimHeightIn: numeric('trim_height_in', { precision: 6, scale: 3 }).notNull(),
+    bleed: boolean('bleed').notNull().default(false),
+    paper: varchar('paper', { length: 10 }).notNull().default('white'), // white | cream
+    ink: varchar('ink', { length: 20 }).notNull().default('black'), // black | color-standard | color-premium
+    // Blank page behind every art page (coloring books: stops marker bleed-through)
+    singleSided: boolean('single_sided').notNull().default(true),
+    // Ordered LOGICAL pages: [{ kind:'art', fileId, label? } | { kind:'text', heading?, lines? } | { kind:'blank' }]
+    pages: jsonb('pages').notNull().default([]),
+    // { frontArtFileId?, backArtFileId?, background?, spineColor?, textColor?, blurb?, spineText?, titlePosition?, titleBand?, backFooter? }
+    cover: jsonb('cover').notNull().default({}),
+    // KDP listing: { description?, keywords?: string[], categories?: string[], priceUsd?, language?, ageRange? }
+    listing: jsonb('listing').notNull().default({}),
+    // draft | ready | published
+    status: varchar('status', { length: 12 }).notNull().default('draft'),
+    interiorFileId: uuid('interior_file_id'),
+    coverFileId: uuid('cover_file_id'),
+    coverPreviewFileId: uuid('cover_preview_file_id'),
+    lastPreflight: jsonb('last_preflight'),
+    createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  t => [index('books_tenant_idx').on(t.tenantId, t.updatedAt)],
+);

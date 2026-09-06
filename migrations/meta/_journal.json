@@ -148,6 +148,13 @@
       "when": 1788710809078,
       "tag": "0020_wp-sites",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1788800000000,
+      "tag": "0021_books",
+      "breakpoints": true
     }
   ]
 }
