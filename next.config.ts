@@ -18,10 +18,12 @@ const baseConfig: NextConfig = {
   outputFileTracingIncludes: {
     '/': ['./migrations/**/*'],
   },
-  // `ws` is a server-only native package (it's the only WebSocket client that
-  // can send the SigV4 headers the AgentCore browser stream requires). Keep it
-  // out of the bundler so it loads as a normal Node module at runtime.
-  serverExternalPackages: ['ws', 'ssh2'],
+  // Server-only packages with native bindings stay OUT of the bundler and load
+  // as normal Node modules at runtime: `ws` (SigV4 headers for the AgentCore
+  // stream), `ssh2` (WP-CLI over SSH), `@napi-rs/canvas` (book covers — its
+  // .node binding is "not placeable in ESM chunks" and fails `next build`)
+  // and `sharp` (Next externalises it by default; listed so nobody wonders).
+  serverExternalPackages: ['ws', 'ssh2', '@napi-rs/canvas', 'sharp'],
 };
 
 // Initialize the Next-Intl plugin
