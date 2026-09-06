@@ -91,6 +91,9 @@ export async function GET(request: Request) {
       credentialLabel: builtin?.credentialLabel ?? entry?.authHint ?? null,
       // 'ssh-key' → the panel offers "Show public key" (re-derived from the vault).
       credentialKind: builtin?.credentialKind ?? null,
+      // Phase 34: the Tools panel renders a provider-specific sub-panel
+      // (WordPress Sites) under the connection row.
+      provider: builtin?.slug ?? stdioSpec?.key ?? null,
     };
   });
 

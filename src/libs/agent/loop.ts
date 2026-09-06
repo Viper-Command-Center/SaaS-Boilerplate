@@ -242,14 +242,21 @@ export async function runToolLoop(a: {
       let resultText: string;
       let isError = false;
 
+      // Phase 34: a provider may decide policy per CALL (which site, which
+      // channel, read or write). Falls back to the static policy on any error
+      // so a broken resolver fails safe (approval), never open.
+      const policy = resolved?.policyFor
+        ? await resolved.policyFor(args as Record<string, unknown>).catch((): 'approval' => 'approval')
+        : resolved?.policy;
+
       if (!resolved) {
         resultText = `Unknown tool: ${name}`;
         isError = true;
-      } else if (resolved.policy === 'deny') {
+      } else if (policy === 'deny') {
         resultText = 'This tool is not permitted in this workspace (policy: deny).';
         isError = true;
         await audit(a.tenantId, 'tool.denied', name, { args: redact(args) });
-      } else if (resolved.policy === 'approval') {
+      } else if (policy === 'approval') {
         const [row] = await db
           .insert(approvals)
           .values({

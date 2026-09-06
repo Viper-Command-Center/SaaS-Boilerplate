@@ -21,6 +21,7 @@ import { smartermailProvider } from '@/libs/plugins/smartermail';
 import { whmcsProvider } from '@/libs/plugins/whmcs';
 import { wordpressProvider } from '@/libs/plugins/wordpress';
 import { wpcliProvider } from '@/libs/plugins/wpcli';
+import { wpSitesProvider } from '@/libs/plugins/wpSites';
 
 export const BUILTIN_PROVIDERS: Record<string, BuiltinProvider> = {
   [kieProvider.slug]: kieProvider,
@@ -39,6 +40,7 @@ export const BUILTIN_PROVIDERS: Record<string, BuiltinProvider> = {
   [githubProvider.slug]: githubProvider,
   [googleAdsProvider.slug]: googleAdsProvider,
   [wpcliProvider.slug]: wpcliProvider,
+  [wpSitesProvider.slug]: wpSitesProvider,
 };
 
 export function getBuiltinProvider(slug: string): BuiltinProvider | undefined {
@@ -168,8 +170,21 @@ export const CATALOG_PRESETS = [
     },
   },
   {
+    key: 'wp-sites',
+    label: 'WordPress Sites (multi-site: REST + MCP + WP-CLI)',
+    entry: {
+      slug: 'wp-sites',
+      name: 'WordPress Sites',
+      description: 'All of a workspace\'s WordPress sites in one connector — REST, the site\'s MCP abilities (Oxygen Agent Connector / MCP Adapter) and WP-CLI over SSH, addressed by label. Replaces "WordPress" and "WP-CLI over SSH".',
+      category: 'dev',
+      transport: 'builtin' as const,
+      provider: 'wp-sites',
+      authHint: 'Nothing to paste here. Enable it, then add sites in Tools → WordPress Sites (label, URL, username + application password; SSH optional).',
+    },
+  },
+  {
     key: 'wordpress',
-    label: 'WordPress (any site)',
+    label: 'WordPress (any site) — legacy, use WordPress Sites',
     entry: {
       slug: 'wordpress',
       name: 'WordPress',
@@ -182,7 +197,7 @@ export const CATALOG_PRESETS = [
   },
   {
     key: 'wpcli',
-    label: 'WP-CLI over SSH (any WordPress host)',
+    label: 'WP-CLI over SSH — legacy, use WordPress Sites',
     entry: {
       slug: 'wpcli',
       name: 'WP-CLI over SSH',

@@ -1,6 +1,12 @@
 /**
  * WP-CLI over SSH — built-in provider (per-connection, bring-your-own host).
  *
+ * ⚠️ DEPRECATED (Phase 34): superseded by the multi-site "WordPress Sites"
+ * connector (`wp-sites`, src/libs/plugins/wpSites.ts), which reuses the SSH
+ * exec + argument guard exported from this file. Kept enabled for one release
+ * so existing connections keep working; the Sites panel offers a one-click
+ * import that disables the old rows.
+ *
  * WP-CLI is a PHP program that runs ON the WordPress host with filesystem and
  * database access; it cannot be reached through the REST API. Every managed
  * WordPress host that matters (Hostinger, WP Engine, Kinsta, SiteGround,
@@ -52,7 +58,7 @@ const MAX_OUTPUT = 60_000;
 
 // ─── Target ──────────────────────────────────────────────────────────────────
 
-type Target = { user: string; host: string; port: number; path: string };
+export type Target = { user: string; host: string; port: number; path: string };
 
 const TARGET_RE = /^([\w.+-]+)@([\w.-]+)(?::(\d{1,5}))?:(\/[^\s'"`$;&|<>]*)$/;
 
@@ -101,7 +107,7 @@ export const WP_DENY_PREFIXES = [
 /** Global flags that would move the call off the pinned site or run code. */
 const DENIED_FLAG_RE = /^--(?:path|url|ssh|http|require|exec|skip-packages)(?:=|$)/;
 
-function assertArgsSafe(args: string[]): void {
+export function assertArgsSafe(args: string[]): void {
   if (args.length === 0) {
     throw new Error('WP-CLI: no command given.');
   }
@@ -135,15 +141,15 @@ function assertArgsSafe(args: string[]): void {
 }
 
 /** POSIX single-quote each argv element so nothing in it reaches the shell. */
-function shellQuote(a: string): string {
+export function shellQuote(a: string): string {
   return `'${a.replace(/'/g, `'\\''`)}'`;
 }
 
 // ─── SSH exec ────────────────────────────────────────────────────────────────
 
-type ExecResult = { stdout: string; stderr: string; code: number | null };
+export type ExecResult = { stdout: string; stderr: string; code: number | null };
 
-function sshExec(target: Target, privateKey: string, command: string): Promise<ExecResult> {
+export function sshExec(target: Target, privateKey: string, command: string): Promise<ExecResult> {
   return new Promise((resolve, reject) => {
     const conn = new SshClient();
     let settled = false;
@@ -202,13 +208,13 @@ function sshExec(target: Target, privateKey: string, command: string): Promise<E
   });
 }
 
-async function wp(target: Target, privateKey: string, args: string[]): Promise<ExecResult> {
+export async function wpExec(target: Target, privateKey: string, args: string[]): Promise<ExecResult> {
   assertArgsSafe(args);
   const argv = ['wp', `--path=${target.path}`, '--no-color', ...args].map(shellQuote).join(' ');
   return sshExec(target, privateKey, argv);
 }
 
-function render(r: ExecResult, label: string): string {
+export function renderExec(r: ExecResult, label: string): string {
   const out = r.stdout.trim();
   const err = r.stderr.trim();
   if (r.code !== 0) {
@@ -341,11 +347,11 @@ export const wpcliProvider: BuiltinProvider = {
 
     switch (tool) {
       case 'wp_status': {
-        const version = render(await wp(t, key, ['core', 'version']), 'wp core version');
-        const siteurl = render(await wp(t, key, ['option', 'get', 'siteurl']), 'wp option get siteurl');
+        const version = renderExec(await wpExec(t, key, ['core', 'version']), 'wp core version');
+        const siteurl = renderExec(await wpExec(t, key, ['option', 'get', 'siteurl']), 'wp option get siteurl');
         // `wp cli info` reports the PHP binary + version and the WP-CLI version.
-        const info = render(await wp(t, key, ['cli', 'info']), 'wp cli info');
-        const plugins = render(await wp(t, key, ['plugin', 'list', '--update=available', '--format=count']), 'wp plugin list');
+        const info = renderExec(await wpExec(t, key, ['cli', 'info']), 'wp cli info');
+        const plugins = renderExec(await wpExec(t, key, ['plugin', 'list', '--update=available', '--format=count']), 'wp plugin list');
         return [
           `WordPress ${version} at ${siteurl}`,
           `Path: ${t.path} (${t.user}@${t.host}:${t.port})`,
@@ -356,13 +362,13 @@ export const wpcliProvider: BuiltinProvider = {
       }
       case 'wp_cli': {
         const argv = asStringArray(args.args, 'args');
-        return render(await wp(t, key, argv), `wp ${argv.slice(0, 2).join(' ')}`);
+        return renderExec(await wpExec(t, key, argv), `wp ${argv.slice(0, 2).join(' ')}`);
       }
       case 'wp_cache_flush': {
         const steps: string[] = [];
         const run = async (label: string, argv: string[], optional = false) => {
           try {
-            steps.push(`${label}: ${render(await wp(t, key, argv), label).split('\n')[0]}`);
+            steps.push(`${label}: ${renderExec(await wpExec(t, key, argv), label).split('\n')[0]}`);
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             steps.push(optional ? `${label}: skipped (${msg.split('.')[0]})` : `${label}: FAILED — ${msg}`);
@@ -379,7 +385,7 @@ export const wpcliProvider: BuiltinProvider = {
         if (!name) {
           throw new Error('WP-CLI: name is required.');
         }
-        return render(await wp(t, key, ['option', 'get', name, '--format=json']), `wp option get ${name}`);
+        return renderExec(await wpExec(t, key, ['option', 'get', name, '--format=json']), `wp option get ${name}`);
       }
       case 'wp_option_update': {
         const name = String(args.name ?? '').trim();
@@ -391,7 +397,7 @@ export const wpcliProvider: BuiltinProvider = {
         if (args.format === 'json') {
           argv.push('--format=json');
         }
-        return render(await wp(t, key, argv), `wp option update ${name}`);
+        return renderExec(await wpExec(t, key, argv), `wp option update ${name}`);
       }
       case 'wp_search_replace': {
         const search = String(args.search ?? '');
@@ -415,24 +421,24 @@ export const wpcliProvider: BuiltinProvider = {
         // the one deliberate exception, so bypass assertArgsSafe's rule by
         // calling sshExec through wp() with --dry-run present, or directly when live.
         const result = dryRun
-          ? await wp(t, key, argv)
+          ? await wpExec(t, key, argv)
           : await sshExec(t, key, ['wp', `--path=${t.path}`, '--no-color', ...argv].map(shellQuote).join(' '));
-        const body = render(result, dryRun ? 'wp search-replace (dry run)' : 'wp search-replace (LIVE)');
+        const body = renderExec(result, dryRun ? 'wp search-replace (dry run)' : 'wp search-replace (LIVE)');
         return dryRun
           ? `DRY RUN — nothing changed. Per-table counts of what WOULD change:\n${body}\n\nTo apply, call wp_search_replace again with dry_run:false after the human has seen these counts.`
           : `LIVE search-replace applied:\n${body}\n\nRun wp_cache_flush so the change is visible.`;
       }
       case 'wp_plugin_list':
-        return render(await wp(t, key, ['plugin', 'list', '--format=json']), 'wp plugin list');
+        return renderExec(await wpExec(t, key, ['plugin', 'list', '--format=json']), 'wp plugin list');
       case 'wp_plugin_update': {
         const name = String(args.name ?? '').trim();
         if (args.all === true) {
-          return render(await wp(t, key, ['plugin', 'update', '--all']), 'wp plugin update --all');
+          return renderExec(await wpExec(t, key, ['plugin', 'update', '--all']), 'wp plugin update --all');
         }
         if (!name) {
           throw new Error('WP-CLI: give a plugin slug in name, or all:true.');
         }
-        return render(await wp(t, key, ['plugin', 'update', name]), `wp plugin update ${name}`);
+        return renderExec(await wpExec(t, key, ['plugin', 'update', name]), `wp plugin update ${name}`);
       }
       default:
         throw new Error(`WP-CLI: unknown tool ${tool}`);

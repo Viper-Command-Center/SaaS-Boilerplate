@@ -11,7 +11,7 @@
  * HTTP connections instead — no code required.
  */
 
-import type { AnthropicTool } from '@/libs/mcp/registry';
+import type { AnthropicTool, ToolPolicy } from '@/libs/mcp/registry';
 
 export type BuiltinTool = AnthropicTool & {
   /** Optional: which numeric argument drives per-unit pricing (e.g. seconds). */
@@ -121,6 +121,23 @@ export type BuiltinProvider = {
    * would get right anyway is pure overhead. A few hundred tokens, not a manual.
    */
   guidance?: string;
+  /**
+   * 🔴 PHASE 34 — guidance that depends on the WORKSPACE, appended after
+   * `guidance`. The WordPress Sites connector uses it to list the workspace's
+   * site labels (and which is default) so the agent can address a site
+   * without a discovery call. One cheap query per toolset build; the text
+   * only changes when the sites do, so the cached prefix survives.
+   */
+  guidanceFor?: (ctx: { tenantId: string }) => Promise<string | undefined>;
+  /**
+   * 🔴 PHASE 34 — per-CALL policy. The registry's policy is per tool, which
+   * cannot express "auto-run on the staging site, ask on production" when the
+   * site is an ARGUMENT of the same tool. When present, the loop calls this
+   * with the arguments and applies the answer exactly as it applies a static
+   * policy (deny → refused, approval → queued, auto → run). Return undefined
+   * to fall back to the connection's tool policy.
+   */
+  policyFor?: (tool: string, args: Record<string, unknown>, ctx: { tenantId: string }) => Promise<ToolPolicy | undefined>;
   tools: BuiltinTool[];
   /**
    * Execute one tool.

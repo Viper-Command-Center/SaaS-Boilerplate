@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
+import { WpSitesPanel } from '@/features/agent/WpSitesPanel';
 
 type Connection = {
   id: string;
@@ -19,6 +20,8 @@ type Connection = {
   targetPlaceholder?: string;
   targetIsUrl?: boolean;
   credentialKind?: 'ssh-key' | null;
+  /** Built-in provider slug — `wp-sites` renders its own sub-panel (Phase 34). */
+  provider?: string | null;
 };
 
 type CatalogPlugin = {
@@ -612,45 +615,62 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
                 </p>
                 {/* Approval policy. Deliberately three explicit words rather than
                   an on/off switch — "Ask" is the safe default and should look
-                  like a choice, not an absence. */}
-                <div className="mt-1.5 flex items-center gap-1 pl-3.5">
-                  {(['auto', 'approval', 'deny'] as const).map((p) => {
-                    const current = (conn.toolPolicy?.['*'] as string | undefined) ?? 'approval';
-                    const active = current === p;
-                    const label = p === 'auto' ? 'Auto-run' : p === 'approval' ? 'Ask first' : 'Blocked';
-                    return (
-                      <button
-                        key={p}
-                        type="button"
-                        onClick={() => setPolicy(conn, p)}
-                        title={
-                          p === 'auto'
-                            ? 'Run this tool’s calls without asking. Spend caps still apply.'
-                            : p === 'approval'
-                              ? 'Queue every call in Approvals for your sign-off (default)'
-                              : 'Refuse all calls to this tool'
-                        }
-                        className={`
-                          rounded-full border px-2 py-0.5 text-[10px] transition
-                          ${
-                      active
-                        ? p === 'auto'
-                          ? `border-amber-400/40 bg-amber-400/10 text-amber-200`
-                          : p === 'deny'
-                            ? `border-rose-400/40 bg-rose-400/10 text-rose-200`
-                            : 'border-white/20 bg-white/10 text-white/70'
-                        : `
-                          border-transparent text-white/25
-                          hover:text-white/50
-                        `
-                      }
-                        `}
-                      >
-                        {label}
-                      </button>
-                    );
-                  })}
-                </div>
+                  like a choice, not an absence. WordPress Sites decides policy
+                  PER SITE AND CHANNEL in its own panel below, so the
+                  connection-wide pills would be misleading there. */}
+                {conn.provider === 'wp-sites'
+                  ? (
+                      <p className="mt-1 pl-3.5 text-[10px] text-white/30">
+                        Policy is set per site and channel below.
+                      </p>
+                    )
+                  : (
+                      <div className="mt-1.5 flex items-center gap-1 pl-3.5">
+                        {(['auto', 'approval', 'deny'] as const).map((p) => {
+                          const current = (conn.toolPolicy?.['*'] as string | undefined) ?? 'approval';
+                          const active = current === p;
+                          const label = p === 'auto' ? 'Auto-run' : p === 'approval' ? 'Ask first' : 'Blocked';
+                          return (
+                            <button
+                              key={p}
+                              type="button"
+                              onClick={() => setPolicy(conn, p)}
+                              title={
+                                p === 'auto'
+                                  ? 'Run this tool’s calls without asking. Spend caps still apply.'
+                                  : p === 'approval'
+                                    ? 'Queue every call in Approvals for your sign-off (default)'
+                                    : 'Refuse all calls to this tool'
+                              }
+                              className={`
+                                rounded-full border px-2 py-0.5 text-[10px]
+                                transition
+                                ${
+                            active
+                              ? p === 'auto'
+                                ? `
+                                  border-amber-400/40 bg-amber-400/10
+                                  text-amber-200
+                                `
+                                : p === 'deny'
+                                  ? `
+                                    border-rose-400/40 bg-rose-400/10
+                                    text-rose-200
+                                  `
+                                  : 'border-white/20 bg-white/10 text-white/70'
+                              : `
+                                border-transparent text-white/25
+                                hover:text-white/50
+                              `
+                            }
+                              `}
+                            >
+                              {label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
               </div>
               <div className="flex shrink-0 items-center gap-2">
                 {/* A TIER-1 built-in (Kie, AgentCore, HeyGen) keeps its key on
@@ -674,6 +694,9 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
             </div>
             {/* Full-width, BELOW the row — inside the min-w-0 flex column it
                 collapsed to a 60px box hiding behind the buttons (2026-09-05). */}
+            {conn.provider === 'wp-sites' && conn.enabled && (
+              <WpSitesPanel tenantSlug={props.tenantSlug} />
+            )}
             {shownPublicKeys[conn.id] && (
               <div className="mt-2 pl-3.5">
                 <p className="mb-1 text-xs text-white/50">

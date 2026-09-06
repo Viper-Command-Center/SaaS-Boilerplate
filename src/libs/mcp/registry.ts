@@ -32,6 +32,8 @@ type ExecutorEntry = {
   connectionName: string;
   toolName: string;
   policy: ToolPolicy;
+  /** Phase 34: per-call policy from the ARGUMENTS (see BuiltinProvider.policyFor). */
+  policyFor?: (args: Record<string, unknown>) => Promise<ToolPolicy>;
   call: (args: Record<string, unknown>) => Promise<string>;
 };
 
@@ -44,6 +46,7 @@ export type TenantToolset = {
     connectionName: string;
     toolName: string;
     policy: ToolPolicy;
+    policyFor?: (args: Record<string, unknown>) => Promise<ToolPolicy>;
     call: (args: Record<string, unknown>) => Promise<string>;
   } | null;
   /** Names of connections that failed to respond (surfaced to the model). */
@@ -476,6 +479,12 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
         if (provider.guidance) {
           guidanceByProvider.set(provider.slug, provider.guidance.trim());
         }
+        if (provider.guidanceFor) {
+          const extra = await provider.guidanceFor({ tenantId }).catch(() => undefined);
+          if (extra?.trim()) {
+            guidanceByProvider.set(provider.slug, `${provider.guidance?.trim() ?? ''}\n${extra.trim()}`.trim());
+          }
+        }
 
         // Where the credential lives depends on the provider:
         //  · noCredential (AgentCore browser) → none; it uses platform AWS keys
@@ -566,6 +575,12 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
               // at scale — Zernio alone exposes 51 tools, and nobody is setting 51
               // switches to say "I trust this vendor".
               policy: policyMap[tool.name] ?? policyMap['*'] ?? 'approval',
+              ...(provider.policyFor
+                ? {
+                    policyFor: async (args: Record<string, unknown>) =>
+                      (await provider.policyFor!(tool.name, args, { tenantId })) ?? policyMap[tool.name] ?? policyMap['*'] ?? 'approval',
+                  }
+                : {}),
               call: async (args) => {
                 const raw = await provider.call(tool.name, args, apiKey, target, { tenantId });
                 const result = typeof raw === 'string' ? { output: raw } : raw;

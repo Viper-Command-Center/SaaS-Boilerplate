@@ -1,6 +1,10 @@
 /**
  * WordPress — built-in provider (per-site, bring-your-own credential).
  *
+ * ⚠️ DEPRECATED (Phase 34): superseded by the multi-site "WordPress Sites"
+ * connector (`wp-sites`, src/libs/plugins/wpSites.ts). Kept enabled for one
+ * release; the Sites panel imports existing connections and disables these.
+ *
  * WordPress has no hosted MCP server, but every modern WP site already exposes
  * the REST API, and WP ships "Application Passwords" (Users → Profile →
  * Application Passwords) for exactly this: a revocable credential for an

@@ -124,6 +124,8 @@ export class McpHttpClient {
   private t: Transport;
   private nextId = 1;
   private initialized = false;
+  /** `serverInfo` from initialize — name/version of the server (Phase 34 uses it for plugin versions). */
+  serverInfo: { name?: string; version?: string } | null = null;
 
   constructor(url: string, headers: Record<string, string> = {}) {
     this.t = { url, headers };
@@ -137,8 +139,9 @@ export class McpHttpClient {
       protocolVersion: PROTOCOL_VERSION,
       capabilities: {},
       clientInfo: { name: 'artivio-command-center', version: '1.0.0' },
-    }, this.nextId++) as { protocolVersion?: string } | undefined;
+    }, this.nextId++) as { protocolVersion?: string; serverInfo?: { name?: string; version?: string } } | undefined;
     this.t.protocolVersion = result?.protocolVersion || PROTOCOL_VERSION;
+    this.serverInfo = result?.serverInfo ?? null;
     await rpc(this.t, 'notifications/initialized');
     this.initialized = true;
   }

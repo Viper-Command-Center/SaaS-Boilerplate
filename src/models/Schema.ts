@@ -197,6 +197,75 @@ export const mcpConnections = pgTable(
   ],
 );
 
+// ─── WordPress Sites connector (Phase 34) ───────────────────────────────────
+// One workspace holds N WordPress sites; the agent addresses them by label and
+// every site carries all three channels (REST, MCP, WP-CLI over SSH). Secrets
+// are vault-sealed (auth_secret_enc / private_key_enc) and never leave the
+// server in plaintext. Everything under "discovered" is refreshed by Test.
+
+export const workspaceSshKeys = pgTable(
+  'workspace_ssh_keys',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+    label: varchar('label', { length: 80 }).notNull(),
+    publicKey: text('public_key').notNull(), // one-line OpenSSH; safe to display
+    privateKeyEnc: text('private_key_enc').notNull(), // vault-sealed PEM
+    fingerprint: varchar('fingerprint', { length: 120 }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  t => [
+    index('workspace_ssh_keys_tenant_idx').on(t.tenantId),
+    uniqueIndex('workspace_ssh_keys_tenant_label_uq').on(t.tenantId, t.label),
+  ],
+);
+
+export const wpSites = pgTable(
+  'wp_sites',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+    label: varchar('label', { length: 60 }).notNull(), // slug-safe, unique per workspace
+    isDefault: boolean('is_default').notNull().default(false),
+    siteUrl: text('site_url').notNull(), // normalised, no trailing slash
+    // ── REST / MCP credential ──
+    authScheme: varchar('auth_scheme', { length: 10 }).notNull().default('basic'), // basic | bearer
+    authUser: varchar('auth_user', { length: 120 }), // basic only
+    authSecretEnc: text('auth_secret_enc').notNull(), // app password or token, vault-sealed
+    appPasswordUuid: varchar('app_password_uuid', { length: 60 }), // for rotation bookkeeping
+    // ── SSH / WP-CLI channel (optional) ──
+    sshHost: varchar('ssh_host', { length: 255 }),
+    sshPort: integer('ssh_port'),
+    sshUser: varchar('ssh_user', { length: 120 }),
+    wpPath: text('wp_path'),
+    sshKeyId: uuid('ssh_key_id').references(() => workspaceSshKeys.id, { onDelete: 'set null' }),
+    // ── discovered (read-only in the UI, refreshed by Test) ──
+    mcpEndpointUrl: text('mcp_endpoint_url'),
+    wpVersion: varchar('wp_version', { length: 40 }),
+    phpVersion: varchar('php_version', { length: 40 }),
+    builder: varchar('builder', { length: 20 }), // oxygen | divi | bricks | elementor | gutenberg | none
+    builderVersion: varchar('builder_version', { length: 40 }),
+    agentConnectorVersion: varchar('agent_connector_version', { length: 40 }),
+    capabilities: jsonb('capabilities'), // { rest, mcp, cli, builder_abilities[], plugins[], mcp_tools[] }
+    // ── policy: { rest: auto|ask|blocked, mcp: …, cli: … } ──
+    policy: jsonb('policy'),
+    // ── status ──
+    status: varchar('status', { length: 12 }).notNull().default('untested'), // healthy | degraded | failed | untested
+    lastTestAt: timestamp('last_test_at', { withTimezone: true }),
+    lastTestReport: jsonb('last_test_report'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  t => [
+    index('wp_sites_tenant_idx').on(t.tenantId),
+    uniqueIndex('wp_sites_tenant_label_uq').on(t.tenantId, t.label),
+  ],
+);
+
 export const approvals = pgTable(
   'approvals',
   {

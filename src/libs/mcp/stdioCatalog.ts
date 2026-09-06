@@ -102,7 +102,7 @@ export function diviopsGuard(toolName: string, args: Record<string, unknown>): {
 
   if (DIVI_WP_CLI_TOOLS.has(toolName)) {
     throw new Error(
-      `${toolName} is not available on this platform — DiviOps' WP-CLI passthrough needs a local WordPress install (WP_PATH) and there is none here; no environment variable or connection setting can enable it, so do not ask the owner for WP_PATH or WP_CLI_CMD. WP-CLI runs through the separate "wpcli" connection (tools wp_status, wp_cli, wp_cache_flush, wp_option_get/update, wp_search_replace, wp_plugin_list/update). If those tools are not in your list, the workspace owner needs to enable the "WP-CLI over SSH" plugin in the Tools panel (or click Enable on its connection row if it is disabled).`,
+      `${toolName} is not available on this platform — DiviOps' WP-CLI passthrough needs a local WordPress install (WP_PATH) and there is none here; no environment variable or connection setting can enable it, so do not ask the owner for WP_PATH or WP_CLI_CMD. WP-CLI runs through the "wp-sites" connection (WordPress Sites: wp_cli, wp_cache_flush, wp_search_replace, wp_snapshot — pass the site label) or, on older workspaces, the legacy "wpcli" connection (wp_status, wp_cli…). If neither is in your list, the workspace owner needs to enable "WordPress Sites" in the Tools panel and add the site with its SSH details (or click Enable on the connection row if it is disabled).`,
     );
   }
 

@@ -3,7 +3,7 @@
  * Plugin Name:  Artivio WP Agent (base)
  * Plugin URI:   https://artivio.io
  * Description:  Builder-agnostic base plugin for Artivio. Repairs WordPress Application Passwords on CGI/FastCGI hosts, exposes a self-diagnosing auth check, reports what a site actually runs, and reads/writes SEO fields for Rank Math or Yoast. Install on every client WordPress site regardless of page builder.
- * Version:      1.0.0
+ * Version:      1.1.0
  * Requires PHP: 7.4
  * Author:       Artivio
  * License:      GPL-2.0-or-later
@@ -37,7 +37,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'ARTIVIO_WP_VERSION', '1.0.0' );
+define( 'ARTIVIO_WP_VERSION', '1.1.0' );
 define( 'ARTIVIO_WP_NS', 'artivio/v1' );
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -408,6 +408,24 @@ function artivio_wp_register_routes() {
 		)
 	);
 
+	/**
+	 * Provisioning hook (Artivio Phase 34 §8). On a freshly cloned template
+	 * site an ADMINISTRATOR (template admin over HTTP Basic, or WP-CLI) calls
+	 * this once; it creates the agent user, mints an application password and
+	 * returns { site_url, username, app_password } — pasted into Artivio's
+	 * "Add site from provisioning token", the site is registered and tested in
+	 * one step. The password is returned exactly once and never stored here.
+	 */
+	register_rest_route(
+		ARTIVIO_WP_NS,
+		'/provision-agent',
+		array(
+			'methods'             => 'POST',
+			'permission_callback' => 'artivio_wp_can_manage',
+			'callback'            => 'artivio_wp_provision_agent_rest',
+		)
+	);
+
 	register_rest_route(
 		ARTIVIO_WP_NS,
 		'/documents/(?P<id>\d+)/seo',
@@ -562,6 +580,12 @@ function artivio_wp_site() {
 	if ( defined( 'FL_BUILDER_VERSION' ) ) {
 		$builders['beaverBuilder'] = FL_BUILDER_VERSION;
 	}
+	// Oxygen: classic (CT_VERSION) and Oxygen 6+ (OXYGEN_VERSION / Breakdance-era constant).
+	if ( defined( 'OXYGEN_VERSION' ) ) {
+		$builders['oxygen'] = OXYGEN_VERSION;
+	} elseif ( defined( 'CT_VERSION' ) ) {
+		$builders['oxygen'] = CT_VERSION;
+	}
 
 	return array(
 		'plugin'        => 'artivio-wp-agent',
@@ -628,3 +652,90 @@ function artivio_wp_annotate_auth_failure( $response, $server, $request ) {
 	return $response;
 }
 add_filter( 'rest_post_dispatch', 'artivio_wp_annotate_auth_failure', 10, 3 );
+
+// ─── Provisioning (Phase 34 §8) ──────────────────────────────────────────────
+
+function artivio_wp_can_manage(): bool {
+	return current_user_can( 'manage_options' );
+}
+
+/**
+ * Create (or reuse) the agent user and mint a fresh application password.
+ * Returns array{site_url,username,app_password,label} or WP_Error.
+ */
+function artivio_wp_provision_agent( string $username = 'artivio-agent', string $email = '', string $label = '' ) {
+	if ( ! class_exists( 'WP_Application_Passwords' ) ) {
+		return new WP_Error( 'artivio_no_app_passwords', 'This WordPress does not support Application Passwords (needs 5.6+).', array( 'status' => 500 ) );
+	}
+	$username = sanitize_user( $username ?: 'artivio-agent', true );
+	if ( '' === $username ) {
+		return new WP_Error( 'artivio_bad_username', 'Invalid username.', array( 'status' => 400 ) );
+	}
+	$user = get_user_by( 'login', $username );
+	if ( ! $user ) {
+		$email = $email ? sanitize_email( $email ) : $username . '@' . wp_parse_url( home_url(), PHP_URL_HOST );
+		$id    = wp_insert_user(
+			array(
+				'user_login'   => $username,
+				'user_pass'    => wp_generate_password( 32, true, true ), // never used; app passwords only
+				'user_email'   => $email,
+				'display_name' => 'Artivio Agent',
+				'role'         => 'administrator',
+			)
+		);
+		if ( is_wp_error( $id ) ) {
+			return $id;
+		}
+		$user = get_user_by( 'id', $id );
+	} elseif ( ! in_array( 'administrator', (array) $user->roles, true ) ) {
+		$user->set_role( 'administrator' );
+	}
+
+	$name    = 'artivio-provision-' . gmdate( 'Y-m-d-His' );
+	$created = WP_Application_Passwords::create_new_application_password( $user->ID, array( 'name' => $name ) );
+	if ( is_wp_error( $created ) ) {
+		return $created;
+	}
+	list( $plain ) = $created;
+
+	return array(
+		'site_url'     => untrailingslashit( home_url() ),
+		'username'     => $user->user_login,
+		'app_password' => $plain,
+		'label'        => $label,
+		'note'         => 'Paste this JSON into Artivio → Tools → WordPress Sites → "Add from provisioning token". The password is shown once.',
+	);
+}
+
+function artivio_wp_provision_agent_rest( WP_REST_Request $request ) {
+	$result = artivio_wp_provision_agent(
+		(string) $request->get_param( 'username' ),
+		(string) $request->get_param( 'email' ),
+		(string) $request->get_param( 'label' )
+	);
+	if ( is_wp_error( $result ) ) {
+		return $result;
+	}
+	return new WP_REST_Response( $result, 201 );
+}
+
+if ( defined( 'WP_CLI' ) && WP_CLI ) {
+	/**
+	 * `wp artivio provision-agent [--user=<login>] [--email=<email>] [--label=<label>]`
+	 * Same hook for automation that clones sites over SSH. Prints the JSON once.
+	 */
+	WP_CLI::add_command(
+		'artivio provision-agent',
+		function ( $args, $assoc ) {
+			$result = artivio_wp_provision_agent(
+				isset( $assoc['user'] ) ? (string) $assoc['user'] : 'artivio-agent',
+				isset( $assoc['email'] ) ? (string) $assoc['email'] : '',
+				isset( $assoc['label'] ) ? (string) $assoc['label'] : ''
+			);
+			if ( is_wp_error( $result ) ) {
+				WP_CLI::error( $result->get_error_message() );
+			}
+			WP_CLI::line( wp_json_encode( $result ) );
+		}
+	);
+}
