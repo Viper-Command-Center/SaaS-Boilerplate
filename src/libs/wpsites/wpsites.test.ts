@@ -6,7 +6,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildAuthHeader, LABEL_RE, maskSecret, normaliseLabel, normaliseSecret, normaliseSiteUrl } from '@/libs/wpsites/auth';
 import { MAX_REST_BODY, resolveRoute, restRequest } from '@/libs/wpsites/channels';
-import { detectBuilder, findMcpRoute } from '@/libs/wpsites/discovery';
+import { compareVersions, detectBuilder, findMcpRoute } from '@/libs/wpsites/discovery';
 import { parseProvisioningPayload } from '@/libs/wpsites/legacy';
 import { cliIsWrite, restIsWrite, serialisedForSite, toToolPolicy } from '@/libs/wpsites/policy';
 import { redactSecrets } from '@/libs/wpsites/redact';
@@ -178,6 +178,15 @@ describe('discovery', () => {
     expect(c.version).toBe('1.9');
     expect(detectBuilder({ themes: [{ name: 'Divi', status: 'active' }] }).builder).toBe('divi');
     expect(detectBuilder({}).builder).toBe('gutenberg');
+  });
+});
+
+describe('compareVersions', () => {
+  it('reads a v-prefixed or pre-release version as its number', () => {
+    expect(compareVersions('v1.0.0', '0.1.0')).toBeGreaterThan(0);
+    expect(compareVersions('6.2.0-beta.8', '6.1.3')).toBeGreaterThan(0);
+    expect(compareVersions('0.0.9', '0.1.0')).toBeLessThan(0);
+    expect(compareVersions('1.0', '1.0.0')).toBe(0);
   });
 });
 

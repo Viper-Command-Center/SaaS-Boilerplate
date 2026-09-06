@@ -134,9 +134,16 @@ export function findMcpRoute(index: { namespaces?: string[]; routes?: Record<str
   return candidates[0]!;
 }
 
-function compareVersions(a: string, b: string): number {
-  const pa = a.split('.').map(n => Number.parseInt(n, 10) || 0);
-  const pb = b.split('.').map(n => Number.parseInt(n, 10) || 0);
+/**
+ * Numeric dotted compare. Tolerates a "v" prefix and pre-release suffixes
+ * ("v1.0.0", "6.2.0-beta.8"): the MCP Adapter reports "v1.0.0", and
+ * `parseInt('v1')` is NaN → 0, which made 1.0.0 read as 0.0.0 and told Ryan
+ * to update a plugin that was already current (2026-09-06).
+ */
+export function compareVersions(a: string, b: string): number {
+  const parts = (v: string) => v.trim().replace(/^v/i, '').split(/[-+]/)[0]!.split('.').map(n => Number.parseInt(n, 10) || 0);
+  const pa = parts(a);
+  const pb = parts(b);
   for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
     const d = (pa[i] ?? 0) - (pb[i] ?? 0);
     if (d !== 0) {
