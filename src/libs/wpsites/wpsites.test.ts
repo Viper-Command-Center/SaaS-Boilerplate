@@ -5,7 +5,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildAuthHeader, LABEL_RE, maskSecret, normaliseLabel, normaliseSecret, normaliseSiteUrl } from '@/libs/wpsites/auth';
-import { resolveRoute } from '@/libs/wpsites/channels';
+import { MAX_REST_BODY, resolveRoute, restRequest } from '@/libs/wpsites/channels';
 import { detectBuilder, findMcpRoute } from '@/libs/wpsites/discovery';
 import { parseProvisioningPayload } from '@/libs/wpsites/legacy';
 import { cliIsWrite, restIsWrite, serialisedForSite, toToolPolicy } from '@/libs/wpsites/policy';
@@ -130,6 +130,30 @@ describe('routes', () => {
     expect(resolveRoute('https://x.com', '/wp-json/mcp/x')).toBe('https://x.com/wp-json/mcp/x');
     expect(resolveRoute('https://x.com', 'https://x.com/wp-json/mcp/x')).toBe('https://x.com/wp-json/mcp/x');
     expect(() => resolveRoute('https://x.com', 'https://evil.com/steal')).toThrow(/refusing/);
+  });
+});
+
+describe('restRequest', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('parses a REST index larger than the text cap (plugin-heavy /wp-json/ is 300–500 KB)', async () => {
+    const namespaces = Array.from({ length: 20 }, (_, i) => `plugin${i}/v1`);
+    const routes: Record<string, unknown> = {};
+    for (let i = 0; i < 4000; i++) {
+      routes[`/plugin${i % 20}/v1/route-${i}`] = { namespace: `plugin${i % 20}/v1`, methods: ['GET'], endpoints: [{ args: { id: { description: 'x'.repeat(40) } } }] };
+    }
+    const body = JSON.stringify({ name: 'big', namespaces, routes });
+
+    expect(body.length).toBeGreaterThan(MAX_REST_BODY);
+
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(body, { status: 200, headers: { 'content-type': 'application/json' } })));
+
+    const r = await restRequest({ id: 's', label: 'big', siteUrl: 'https://example.com', authScheme: 'basic', authUser: 'u', authSecret: 'abcdefghijklmnopqrstuvwx' } as never, 'GET', '/');
+
+    expect(r.ok).toBe(true);
+    expect(typeof r.body).toBe('object');
+    expect((r.body as { namespaces: string[] }).namespaces).toHaveLength(20);
+    expect(r.text.length).toBeLessThanOrEqual(MAX_REST_BODY);
   });
 });
 

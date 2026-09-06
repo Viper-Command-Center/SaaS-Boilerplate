@@ -13,6 +13,8 @@ import { redactError, redactSecrets } from '@/libs/wpsites/redact';
 
 export const REST_TIMEOUT_MS = 30_000;
 export const MAX_REST_BODY = 200_000;
+/** Largest body we will JSON-parse in full (REST indexes with many plugins run to ~500 KB). */
+export const MAX_PARSE_BODY = 8_000_000;
 export const MAX_OUTPUT = 60_000;
 
 export function siteSecrets(site: ResolvedSite): string[] {
@@ -68,11 +70,17 @@ export async function restRequest(
   } catch (err) {
     throw redactError(new Error(`WordPress (${site.label}): could not reach ${site.siteUrl} — ${err instanceof Error ? err.message : 'network error'}`), siteSecrets(site));
   }
-  const text = redactSecrets((await resp.text()).slice(0, MAX_REST_BODY), siteSecrets(site));
+  // Parse the WHOLE body, then cap what we keep as text. Truncating first
+  // broke JSON that was simply large — a site's /wp-json/ index with a page
+  // builder and a dozen plugins is 300–500 KB — and Reachability then
+  // reported "HTTP 200" and "failed" in the same row (build.churchwebglobal.com,
+  // 2026-09-06). MAX_REST_BODY still bounds what reaches the agent/logs.
+  const full = redactSecrets((await resp.text()).slice(0, MAX_PARSE_BODY), siteSecrets(site));
+  const text = full.slice(0, MAX_REST_BODY);
   let parsed: unknown = text;
   try {
-    parsed = JSON.parse(text);
-  } catch { /* not JSON — text stays */ }
+    parsed = JSON.parse(full);
+  } catch { /* not JSON (or over MAX_PARSE_BODY) — text stays */ }
   const outHeaders: Record<string, string> = {};
   resp.headers.forEach((v, k) => {
     outHeaders[k.toLowerCase()] = v;
