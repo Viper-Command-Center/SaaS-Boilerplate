@@ -196,6 +196,8 @@ describe('wp_cli argument handling (Noah capability test findings F4/F5)', () =>
     expect(normaliseArgv('cron event list --format=json')).toEqual(['cron', 'event', 'list', '--format=json']);
     expect(normaliseArgv('wp rewrite list')).toEqual(['rewrite', 'list']);
     expect(normaliseArgv(['post', 'get', 27, '--field=post_title'])).toEqual(['post', 'get', '27', '--field=post_title']);
+    // a JSON array sent as a string (the F5 variant seen live 2026-09-07)
+    expect(normaliseArgv('["plugin", "get", "artivio-wp-agent", "--field=version"]')).toEqual(['plugin', 'get', 'artivio-wp-agent', '--field=version']);
     expect(normaliseArgv(undefined)).toEqual([]);
   });
 

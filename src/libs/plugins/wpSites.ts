@@ -45,7 +45,19 @@ const MAX_BODY = 200_000;
  */
 export function normaliseArgv(raw: unknown): string[] {
   if (typeof raw === 'string') {
-    return raw.trim().replace(/^wp\s+/, '').split(/\s+/).filter(Boolean);
+    const t = raw.trim();
+    // A JSON array sent as a string ('["plugin","get","x"]') — seen live
+    // 2026-09-07: whitespace-splitting it yields '["plugin",' which WP-CLI
+    // reports as "not a registered wp command".
+    if (t.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(t);
+        if (Array.isArray(parsed)) {
+          return normaliseArgv(parsed);
+        }
+      } catch { /* fall through to whitespace split */ }
+    }
+    return t.replace(/^wp\s+/, '').split(/\s+/).filter(Boolean);
   }
   if (Array.isArray(raw)) {
     return raw
@@ -416,10 +428,26 @@ async function execute(tool: string, args: Record<string, unknown>, tenantId: st
       try {
         out = renderCli(await cliRaw(site, cmd), 'wp db export');
       } catch (err) {
+        // Exit 255 with NO output (Hostinger, 2026-09-06/07) is either a
+        // missing mysqldump or a PHP fatal that CLI display_errors=Off hides.
+        // Find out here, once, instead of handing the agent a bare exit code
+        // to speculate about — it already guessed twice.
         const msg = err instanceof Error ? err.message : String(err);
+        const diag = await cliRaw(site, [
+          'echo "mysqldump: $(command -v mysqldump || echo MISSING)"',
+          'echo "wp: $(command -v wp || echo MISSING)"',
+          'echo "php: $(php -r \'echo PHP_VERSION;\' 2>&1)"',
+          `echo "dir: $(ls -ld ${shellQuote(dir)} 2>&1)"`,
+          // Force fatals to stderr; dump ONE small table to stdout, capped.
+          `php -d display_errors=stderr -d error_reporting=E_ALL "$(command -v wp)" --path=${shellQuote(ssh.path)} --no-color --skip-plugins --skip-themes db export - --no-tablespaces --tables=wp_options 2>&1 | head -c 1500`,
+        ].join('; ')).catch(e => ({ stdout: '', stderr: e instanceof Error ? e.message : 'diagnostic failed', code: 1 }));
+        const report = `${diag.stdout}\n${diag.stderr}`.trim();
+        const noDump = /mysqldump: MISSING/.test(report);
         throw new Error(
-          `${msg}\nDiagnose with wp_cli ["db","check"] and wp_cli ["db","export","-","--skip-plugins","--skip-themes","--no-tablespaces","--tables=wp_options"] (dumps one table to stdout). `
-          + 'If that works the folder is the problem; if it fails the message names the mysqldump error. Report it to the human; do not skip the snapshot silently.',
+          `${msg}\n\n[snapshot diagnostics]\n${report}\n\n${
+            noDump
+              ? 'ROOT CAUSE: mysqldump is not installed for this SSH user, so WP-CLI cannot export. Nothing on the Artivio side can fix that. Tell the human: on Hostinger take backups from hPanel → Websites → Backups (or ask their support to enable mysqldump); on other hosts install mysql-client. Proceed with the build only if the human accepts working without a snapshot.'
+              : 'Read the diagnostics above: a "PHP Fatal" line names the real cause; a mysqldump "Got error"/"Access denied" line is a database-credential or privilege problem. Report the exact line to the human; do not skip the snapshot silently.'}`,
         );
       }
       return `Snapshot written: ${file}\n${out}\nRestore (human, over SSH): wp --path=${ssh.path} db import ${file}`;
