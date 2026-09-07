@@ -27,6 +27,19 @@ export type AnthropicTool = {
 };
 
 /** The executor + policy behind a namespaced tool name. */
+/**
+ * A tool result that carries pictures (Phase 35.2). Anthropic accepts image
+ * blocks inside a tool_result, which is how the agent gets to LOOK at a cover
+ * preview or a coloring page it just produced — instead of reaching for a
+ * browser session to "view" a PNG. Only platform tools return this; MCP and
+ * built-in providers keep returning strings.
+ */
+export type ToolResultRich = {
+  text: string;
+  images: Array<{ mediaType: 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif'; base64: string }>;
+};
+export type ToolResult = string | ToolResultRich;
+
 type ExecutorEntry = {
   connectionId: string;
   connectionName: string;
@@ -34,7 +47,7 @@ type ExecutorEntry = {
   policy: ToolPolicy;
   /** Phase 34: per-call policy from the ARGUMENTS (see BuiltinProvider.policyFor). */
   policyFor?: (args: Record<string, unknown>) => Promise<ToolPolicy>;
-  call: (args: Record<string, unknown>) => Promise<string>;
+  call: (args: Record<string, unknown>) => Promise<ToolResult>;
 };
 
 export type TenantToolset = {
@@ -47,7 +60,7 @@ export type TenantToolset = {
     toolName: string;
     policy: ToolPolicy;
     policyFor?: (args: Record<string, unknown>) => Promise<ToolPolicy>;
-    call: (args: Record<string, unknown>) => Promise<string>;
+    call: (args: Record<string, unknown>) => Promise<ToolResult>;
   } | null;
   /** Names of connections that failed to respond (surfaced to the model). */
   failedConnections: string[];

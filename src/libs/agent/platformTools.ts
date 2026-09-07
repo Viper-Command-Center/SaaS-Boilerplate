@@ -5,8 +5,9 @@
  * "show me weekly Shopify revenue" → write_dataset + create_panel.
  */
 
-import type { AnthropicTool } from '@/libs/mcp/registry';
+import type { AnthropicTool, ToolResult, ToolResultRich } from '@/libs/mcp/registry';
 import { and, asc, desc, eq } from 'drizzle-orm';
+import sharp from 'sharp';
 import { buildBookTools } from '@/libs/agent/bookTools';
 import { assertPublicUrl, buildWebTools } from '@/libs/agent/webTools';
 import { db } from '@/libs/DB';
@@ -23,8 +24,12 @@ import { dashboardPanels, dashboardViews, datasets, scheduledTasks, tenants } fr
 
 export type PlatformExecutor = {
   policy: 'auto';
-  call: (args: Record<string, unknown>) => Promise<string>;
+  call: (args: Record<string, unknown>) => Promise<ToolResult>;
 };
+
+/** Longest side Anthropic recommends for a vision input; bigger is downscaled anyway. */
+const VIEW_IMAGE_MAX_PX = 1568;
+const VIEW_IMAGE_MAX_COUNT = 4;
 
 const PANEL_TYPES = ['kpi', 'timeseries', 'table', 'markdown'];
 
@@ -411,6 +416,17 @@ export function buildPlatformTools(tenantId: string): {
           namePrefix: { type: 'string', description: 'Optional filename stem for the saved images, e.g. "acme-brief". Defaults to the document\'s name.' },
         },
         required: ['fileId'],
+      },
+    },
+    {
+      name: 'view_image',
+      description: 'LOOK at up to 4 images from the workspace library — you receive the actual pixels and can judge them: is this coloring page clean, is the cover title legible, is the photo the right one, is a page blank. Pass library file ids (from list_files, generate_image results, import_book_pages, build_book_cover previewFileId, extract_document_images). This is the ONLY way to see an image; fetch_url returns text and the browser tool cannot show you pictures. Use it before telling a user that an image "looks good".',
+      input_schema: {
+        type: 'object',
+        properties: {
+          fileIds: { type: 'array', items: { type: 'string' }, description: 'Library file ids of images (png/jpg/webp/gif), max 4 per call.' },
+        },
+        required: ['fileIds'],
       },
     },
     {
@@ -1224,6 +1240,45 @@ export function buildPlatformTools(tenantId: string): {
           : 'This document contains no embedded images that can be extracted.',
         limit: pdf ? MAX_PDF_IMAGES : MAX_IMAGES,
       });
+    },
+  });
+
+  executors.set('view_image', {
+    policy: 'auto', // reads this workspace's own files
+    call: async (args) => {
+      const ids = (Array.isArray(args.fileIds) ? args.fileIds : []).map(String).map(x => x.trim()).filter(Boolean).slice(0, VIEW_IMAGE_MAX_COUNT);
+      if (ids.length === 0) {
+        throw new Error('Pass at least one library file id.');
+      }
+      const images: ToolResultRich['images'] = [];
+      const lines: string[] = [];
+      for (const id of ids) {
+        const row = await getFile(tenantId, id);
+        if (!row) {
+          lines.push(`${id}: no such file in this workspace (call list_files for current ids).`);
+          continue;
+        }
+        if (!(row.mime ?? '').startsWith('image/') && !/\.(?:png|jpe?g|webp|gif|tiff?|bmp)$/i.test(row.name)) {
+          lines.push(`${row.name}: not an image (${row.mime ?? 'unknown type'}). PDFs: import or extract pages first, then view those.`);
+          continue;
+        }
+        const { body } = await getObject(row.r2Key);
+        // Downscale + JPEG so a 2550-px print page costs ~1.5K tokens, not 20K,
+        // and so TIFF/BMP/16-bit PNGs become something the model accepts.
+        const meta = await sharp(body, { failOn: 'none' }).metadata();
+        const jpeg = await sharp(body, { failOn: 'none' })
+          .rotate()
+          .flatten({ background: '#ffffff' })
+          .resize({ width: VIEW_IMAGE_MAX_PX, height: VIEW_IMAGE_MAX_PX, fit: 'inside', withoutEnlargement: true })
+          .jpeg({ quality: 82 })
+          .toBuffer();
+        images.push({ mediaType: 'image/jpeg', base64: jpeg.toString('base64') });
+        lines.push(`Image ${images.length}: ${row.name} — original ${meta.width ?? '?'}x${meta.height ?? '?'} px${row.publicUrl ? ` (${row.publicUrl})` : ''}`);
+      }
+      return {
+        text: `${lines.join('\n')}\n${images.length ? 'The image(s) follow. Describe what you actually see; do not assume.' : 'No viewable images.'}`,
+        images,
+      };
     },
   });
 

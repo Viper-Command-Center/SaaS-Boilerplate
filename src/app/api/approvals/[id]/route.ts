@@ -242,7 +242,9 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
       throw new Error(`"${approval.toolName}" is not available in this workspace right now.${detail}`);
     }
 
-    const text = (await executor.call((approval.args ?? {}) as Record<string, unknown>)).slice(0, 20_000);
+    const raw = await executor.call((approval.args ?? {}) as Record<string, unknown>);
+    // An approved call cannot hand pictures back into a live turn; keep the text.
+    const text = (typeof raw === 'string' ? raw : `${raw.text}\n[${raw.images.length} image(s) were produced — use view_image to look at them]`).slice(0, 20_000);
 
     await db
       .update(approvals)

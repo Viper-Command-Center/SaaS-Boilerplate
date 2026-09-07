@@ -82,7 +82,7 @@ export function buildBookTools(tenantId: string): {
     },
     {
       name: 'get_book',
-      description: 'Full state of one book: settings, every page in order (with image URLs you can look at), cover settings, listing metadata, output files, and a fresh KDP preflight. Call this before changing pages so you work from the current order.',
+      description: 'Full state of one book: settings, every page in order (with file ids you can look at via view_image), cover settings, listing metadata, output files, and a fresh KDP preflight. Call this before changing pages so you work from the current order.',
       input_schema: {
         type: 'object',
         properties: { book: { type: 'string', description: 'Book id or exact title.' } },
@@ -887,7 +887,7 @@ export function buildBookTools(tenantId: string): {
         pageCountUsed: pageCount,
         px: `${r.widthPx}x${r.heightPx}`,
         notes: r.notes,
-        note: 'Open previewUrl and LOOK at it before reporting success: title legible, nothing important near the edges, barcode box (bottom-right of the back) clear. If the page count changes later, rebuild — the spine width depends on it.',
+        note: 'LOOK at it before reporting success: call view_image with previewFileId and check title legibility, nothing important near the edges, barcode box (bottom-right of the back) clear. If the page count changes later, rebuild — the spine width depends on it.',
       });
     },
   });
@@ -949,7 +949,7 @@ export function buildBookTools(tenantId: string): {
         uploadSheet: { fileId: sheetFile?.id, name: sheetFile?.name },
         kdpSettings: settings,
         preflight: summarise(pre.issues),
-        note: 'Amazon has no publishing API: the user downloads the two PDFs from the Files page and uploads them on kdp.amazon.com following the sheet. Look at the cover preview first. Set status published (update_book) once KDP approves.',
+        note: 'Amazon has no publishing API: the user downloads the two PDFs from the Files page and uploads them on kdp.amazon.com following the sheet. Look at the cover preview first (view_image with cover.previewFileId). Set status published (update_book) once KDP approves.',
       });
     },
   });

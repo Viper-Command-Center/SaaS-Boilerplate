@@ -21,7 +21,7 @@
  */
 
 import type { BlockMessage } from '@/libs/agent/anthropic';
-import type { TenantToolset } from '@/libs/mcp/registry';
+import type { TenantToolset, ToolResultRich } from '@/libs/mcp/registry';
 import { callClaudeWithTools } from '@/libs/agent/anthropic';
 import { checkSpend, meterLlm } from '@/libs/billing/meter';
 import { db } from '@/libs/DB';
@@ -37,6 +37,8 @@ const DEFAULT_WALL_CLOCK_MS = 4 * 60_000; // stay under typical route limits
 // iteration, which is pure waste once the model has already read them.
 const KEEP_RECENT_TOOL_RESULT_MESSAGES = 6;
 const EVICT_MIN_CHARS = 2_000;
+/** Hard cap on pictures one tool call may put in front of the model. */
+const MAX_TOOL_RESULT_IMAGES = 4;
 const EVICTED_PLACEHOLDER = '[tool result elided to save context — call the tool again if you need it]';
 
 export type ToolLoopResult = {
@@ -240,6 +242,7 @@ export async function runToolLoop(a: {
       lastTool = name; // most recent tool the agent chose this turn
 
       let resultText: string;
+      let resultImages: ToolResultRich['images'] = [];
       let isError = false;
 
       // Phase 34: a provider may decide policy per CALL (which site, which
@@ -275,8 +278,14 @@ export async function runToolLoop(a: {
       } else {
         a.onDelta(`\n\n[tool] calling ${name}…\n`);
         try {
-          resultText = await resolved.call(args as Record<string, unknown>);
-          await audit(a.tenantId, 'tool.call', name, { args: redact(args), ok: true });
+          const out = await resolved.call(args as Record<string, unknown>);
+          if (typeof out === 'string') {
+            resultText = out;
+          } else {
+            resultText = out.text;
+            resultImages = out.images.slice(0, MAX_TOOL_RESULT_IMAGES);
+          }
+          await audit(a.tenantId, 'tool.call', name, { args: redact(args), ok: true, images: resultImages.length || undefined });
         } catch (err) {
           // Triage the failure instead of handing the model a bare string to
           // speculate about. captureIssue records the REAL error, decides who
@@ -318,7 +327,14 @@ export async function runToolLoop(a: {
       toolResults.push({
         type: 'tool_result',
         tool_use_id: use.id,
-        content: framed,
+        // Pictures ride inside the tool_result (Anthropic supports image blocks
+        // there). Text first, so the trust framing still leads.
+        content: resultImages.length
+          ? [
+              { type: 'text', text: framed },
+              ...resultImages.map(img => ({ type: 'image', source: { type: 'base64', media_type: img.mediaType, data: img.base64 } })),
+            ]
+          : framed,
         ...(isError ? { is_error: true } : {}),
       });
     }
@@ -430,6 +446,13 @@ function evictOldToolResults(messages: BlockMessage[]): void {
         const content = block.content;
         if (typeof content === 'string' && content.length > EVICT_MIN_CHARS) {
           block.content = EVICTED_PLACEHOLDER;
+        } else if (Array.isArray(content) && content.some(b => (b as { type?: string })?.type === 'image')) {
+          // Images are the expensive part (~1.5K tokens each, re-sent every
+          // iteration). Once out of the recent window, keep the text and drop
+          // the pixels — the model was told what it saw when it saw it.
+          block.content = (content as Array<Record<string, unknown>>).map(b =>
+            b.type === 'image' ? { type: 'text', text: '[image elided to save context — call view_image again if you need to look at it]' } : b,
+          );
         }
       }
     }
