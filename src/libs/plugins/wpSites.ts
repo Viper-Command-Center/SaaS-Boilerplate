@@ -29,8 +29,9 @@ import { assertArgsSafe, shellQuote } from '@/libs/plugins/wpcli';
 import { getFile } from '@/libs/storage/files';
 import { getObject } from '@/libs/storage/r2';
 import { logSiteCall } from '@/libs/wpsites/audit';
-import { cliExec, cliRaw, explainRestFailure, mcpCall, mcpListTools, renderCli, requireSsh, restRequest } from '@/libs/wpsites/channels';
+import { cliExec, cliRaw, cliUpload, explainRestFailure, mcpCall, mcpListTools, renderCli, requireSsh, restRequest } from '@/libs/wpsites/channels';
 import { formatReport, runSiteTest } from '@/libs/wpsites/discovery';
+import { pickPluginZip } from '@/libs/wpsites/pluginZip';
 import { cliIsWrite, restIsWrite, serialisedForSite, toToolPolicy } from '@/libs/wpsites/policy';
 import { listSites, resolveSiteByLabel } from '@/libs/wpsites/store';
 
@@ -55,7 +56,14 @@ export function normaliseArgv(raw: unknown): string[] {
         if (Array.isArray(parsed)) {
           return normaliseArgv(parsed);
         }
-      } catch { /* fall through to whitespace split */ }
+      } catch { /* not strict JSON — try the lenient bracket form below */ }
+      // ['plugin', 'get', '--field=version'] — single quotes, or a trailing
+      // comma: still unambiguous. Strip the brackets, split on commas, unquote.
+      const inner = t.replace(/^\[|\]$/g, '');
+      const parts = inner.split(',').map(x => x.trim().replace(/^['"]|['"]$/g, '')).filter(Boolean);
+      if (parts.length) {
+        return parts;
+      }
     }
     return t.replace(/^wp\s+/, '').split(/\s+/).filter(Boolean);
   }
@@ -70,6 +78,7 @@ export function normaliseArgv(raw: unknown): string[] {
 /** CLI commands after which web requests must see fresh state (F2 root cause). */
 const CLI_FLUSH_AFTER_RE = /^(?:plugin|theme|core|option|rewrite|language|site)\s+(?:install|activate|deactivate|toggle|update|delete|uninstall|add|patch|set|flush|switch)/;
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+const MAX_PLUGIN_ZIP_BYTES = 80 * 1024 * 1024;
 
 const SITE_ARG = {
   site: { type: 'string', description: 'Site label (from wp_sites). Optional when the workspace has one site or a default site.' },
@@ -210,6 +219,15 @@ const tools: BuiltinTool[] = [
     },
   },
   {
+    name: 'wp_install_plugin',
+    description: 'Install a plugin from a .zip in the workspace file library (premium plugins: Slider Revolution, ACF Pro, WP Rocket…). Pass the LIBRARY FILE ID. The platform pushes the zip to the host over SFTP, unwraps a package zip that contains the real plugin zip, runs `wp plugin install --force`, optionally activates, flushes caches and removes the temp file. This is the ONLY working route: library URLs are private (the host cannot download them) and the Media Library rejects .zip. Needs the CLI channel. For wordpress.org plugins use wp_cli ["plugin","install","<slug>","--activate"].',
+    input_schema: {
+      type: 'object',
+      properties: { ...SITE_ARG, fileId: { type: 'string' }, activate: { type: 'boolean', description: 'Activate after install (default true).' } },
+      required: ['fileId'],
+    },
+  },
+  {
     name: 'wp_seo_get',
     description: 'Read a page/post\'s SEO fields (title, description, focus keyword, canonical, robots, social cards) from Rank Math or Yoast, with character counts. Needs the artivio-wp-agent base plugin on the site.',
     input_schema: { type: 'object', properties: { ...SITE_ARG, id: { type: 'number' } }, required: ['id'] },
@@ -262,6 +280,29 @@ const tools: BuiltinTool[] = [
   },
 ];
 
+/**
+ * `args` for wp_mcp arrives as a JSON STRING often enough to matter
+ * (`"args": "{\"post_id\": 43}"`, 2026-09-07) — the site's Abilities API then
+ * says "post_id is a required property", which the agent reported as an
+ * intermittent platform bug. Same class as normaliseArgv: unambiguous, accept.
+ */
+export function mcpArgs(raw: unknown): Record<string, unknown> {
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    return raw as Record<string, unknown>;
+  }
+  if (typeof raw === 'string' && raw.trim().startsWith('{')) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      throw new Error('wp_mcp: args must be a JSON object (it arrived as a string that is not valid JSON). Pass it as an object, not a string.');
+    }
+  }
+  return {};
+}
+
 // ─── Channel + write classification (drives policy AND the write queue) ──────
 
 function classify(tool: string, args: Record<string, unknown>): { channel: Channel | 'meta'; write: boolean } {
@@ -284,6 +325,8 @@ function classify(tool: string, args: Record<string, unknown>): { channel: Chann
       return { channel: 'cli', write: false };
     case 'wp_search_replace':
       return { channel: 'cli', write: args.dry_run === false };
+    case 'wp_install_plugin':
+      return { channel: 'cli', write: true };
     case 'wp_content_list':
     case 'wp_content_get':
     case 'wp_seo_get':
@@ -314,6 +357,31 @@ async function rest(site: ResolvedSite, method: string, route: string, body?: un
     throw new Error(explainRestFailure(site, r, route));
   }
   return r.body;
+}
+
+/** Identify the page/post a builder write targets (post_id / id / postId). */
+async function describeTarget(site: ResolvedSite, a: Record<string, unknown>): Promise<{ id: number; exists: boolean; title: string; type: string; status: string; link: string } | null> {
+  const raw = a.post_id ?? a.postId ?? a.id;
+  const id = Number(raw);
+  if (!Number.isFinite(id) || id <= 0) {
+    return null;
+  }
+  for (const coll of ['pages', 'posts'] as const) {
+    const r = await restRequest(site, 'GET', `/wp/v2/${coll}/${id}?context=edit&_fields=id,title,status,link,type`).catch(() => null);
+    if (r?.ok && r.body && typeof r.body === 'object') {
+      const b = r.body as Record<string, any>;
+      return { id, exists: true, title: String(b.title?.raw ?? b.title?.rendered ?? '').slice(0, 80), type: String(b.type ?? coll), status: String(b.status ?? ''), link: String(b.link ?? '') };
+    }
+    if (r && r.status !== 404) {
+      // Auth/network trouble: don't block the write on a side lookup.
+      return null;
+    }
+  }
+  // A builder template (oxygen_header, et_template…) is a CPT with no REST
+  // route here — unknown, not absent. Only 404-on-both with a REST-visible
+  // site is "absent", and even then only pages/posts are claimed.
+  const probe = await restRequest(site, 'GET', `/wp/v2/types/page?_fields=slug`).catch(() => null);
+  return probe?.ok ? { id, exists: false, title: '', type: '', status: '', link: '' } : null;
 }
 
 function collection(args: Record<string, unknown>): 'posts' | 'pages' {
@@ -402,8 +470,18 @@ async function execute(tool: string, args: Record<string, unknown>, tenantId: st
       if (!name) {
         throw new Error('WordPress Sites: tool is required — pick one from wp_mcp_tools.');
       }
-      const a = (args.args && typeof args.args === 'object') ? args.args as Record<string, unknown> : {};
-      return mcpCall(site, name, a);
+      const a = mcpArgs(args.args);
+      const isWrite = !MCP_READ_RE.test(name);
+      const target = isWrite ? await describeTarget(site, a) : null;
+      if (target && !target.exists) {
+        throw new Error(`wp_mcp ${name}: post_id ${target.id} is not a page or post on ${site.label} (REST returns 404 for both). Page ids in notes go stale when pages are recreated — call wp_content_list type:page and use the id whose TITLE is the page you mean.`);
+      }
+      const out = await mcpCall(site, name, a);
+      // build.churchwebglobal.com, 2026-09-07: the Sermons layout was written
+      // to the Events page and the Events layout to Contact, because the ids
+      // in the agent's notes were from a previous build. The write "succeeded".
+      // Name the page every write actually touched so the agent can see it.
+      return target ? `${out}\n\n[artivio] wrote to #${target.id} "${target.title}" (${target.type}, ${target.status}) ${target.link}` : out;
     }
     case 'wp_snapshot': {
       const ssh = requireSsh(site);
@@ -437,12 +515,22 @@ async function execute(tool: string, args: Record<string, unknown>, tenantId: st
           'echo "mysqldump: $(command -v mysqldump || echo MISSING)"',
           'echo "wp: $(command -v wp || echo MISSING)"',
           'echo "php: $(php -r \'echo PHP_VERSION;\' 2>&1)"',
+          'echo "disabled: $(php -r \'echo ini_get("disable_functions");\' 2>&1)"',
           `echo "dir: $(ls -ld ${shellQuote(dir)} 2>&1)"`,
           // Force fatals to stderr; dump ONE small table to stdout, capped.
           `php -d display_errors=stderr -d error_reporting=E_ALL "$(command -v wp)" --path=${shellQuote(ssh.path)} --no-color --skip-plugins --skip-themes db export - --no-tablespaces --tables=wp_options 2>&1 | head -c 1500`,
         ].join('; ')).catch(e => ({ stdout: '', stderr: e instanceof Error ? e.message : 'diagnostic failed', code: 1 }));
         const report = `${diag.stdout}\n${diag.stderr}`.trim();
         const noDump = /mysqldump: MISSING/.test(report);
+        // Hostinger (2026-09-07, Noah): mysqldump exists but PHP exec() is in
+        // disable_functions, so WP-CLI's db export dies with an uncaught
+        // "Call to undefined function exec()". Nothing on our side fixes it.
+        const noExec = /undefined function exec\(\)|disabled:[^\n]*\bexec\b/.test(report);
+        if (noExec && !noDump) {
+          throw new Error(
+            `Snapshots are not available on this host: PHP exec() is disabled in php.ini, and WP-CLI's db export needs it to run mysqldump. This is a hosting restriction, not an Artivio or WordPress fault. Tell the human to take a backup from the hosting control panel (Hostinger: hPanel → Websites → Backups) before destructive changes, and proceed only if they accept working without a snapshot.\n\n[snapshot diagnostics]\n${report}`,
+          );
+        }
         throw new Error(
           `${msg}\n\n[snapshot diagnostics]\n${report}\n\n${
             noDump
@@ -541,6 +629,32 @@ async function execute(tool: string, args: Record<string, unknown>, tenantId: st
       }
       return JSON.stringify({ mediaId: created.id, sourceUrl: created.source_url, mime: created.mime_type ?? mime, uploaded: true });
     }
+    case 'wp_install_plugin': {
+      const ssh = requireSsh(site);
+      const fileId = String(args.fileId ?? '').trim();
+      const row = await getFile(tenantId, fileId);
+      if (!row) {
+        throw new Error(`No file with id "${fileId}" in this workspace's library — pass the id from list_files, not a URL.`);
+      }
+      if (row.sizeBytes > MAX_PLUGIN_ZIP_BYTES) {
+        throw new Error(`${row.name} is ${Math.round(row.sizeBytes / 1024 / 1024)}MB; plugin zips are capped at ${MAX_PLUGIN_ZIP_BYTES / 1024 / 1024}MB.`);
+      }
+      const { body } = await getObject(row.r2Key);
+      const picked = await pickPluginZip(Buffer.from(body));
+      const parent = ssh.path.replace(/\/[^/]+$/, '') || '/';
+      const dir = `${parent}/artivio-uploads`;
+      const remote = `${dir}/${(picked.dir || row.name.replace(/\.zip$/i, '')).replace(/[^\w.-]+/g, '-').slice(0, 60) || 'plugin'}-${Date.now()}.zip`;
+      await cliRaw(site, `mkdir -p ${shellQuote(dir)} && chmod 700 ${shellQuote(dir)}`).then(r => renderCli(r, 'mkdir'));
+      await cliUpload(site, remote, picked.bytes);
+      try {
+        const installArgs = ['plugin', 'install', remote, '--force', ...(args.activate === false ? [] : ['--activate'])];
+        const out = renderCli(await cliExec(site, installArgs), 'wp plugin install');
+        const flushed = await cliExec(site, ['cache', 'flush']).then(r => r.code === 0).catch(() => false);
+        return `${out}\n\n[artivio] installed "${picked.pluginName}"${picked.nestedFrom ? ` (unwrapped from ${picked.nestedFrom} inside the package zip)` : ''}${args.activate === false ? '' : ', activated'}; object cache ${flushed ? 'flushed' : 'flush FAILED'}. Licence keys, if the plugin needs one, are entered by the human in wp-admin.`;
+      } finally {
+        await cliRaw(site, `rm -f ${shellQuote(remote)}`).catch(() => {});
+      }
+    }
     case 'wp_seo_get':
       return JSON.stringify(await rest(site, 'GET', `/artivio/v1/documents/${Number(args.id)}/seo`));
     case 'wp_seo_update': {
@@ -621,7 +735,11 @@ export const wpSitesProvider: BuiltinProvider = {
 - Before bulk or destructive changes (live search-replace, plugin updates, builder-wide edits) call wp_snapshot on that site. Builder tree edits are not transactional.
 - When a channel fails, call wp_site_status on that site: it says which of credential / plugin / SSH key / path is wrong and how to fix it. Relay that; do not invent steps.
 - Posts and pages are SEPARATE collections. wp_content_create requires type. Drafts by default; publish only when a human said so in this conversation.
-- Never ask the human for a token, header, application password or SSH key — secrets live in Tools → WordPress Sites and you never see them.`,
+- Never ask the human for a token, header, application password or SSH key — secrets live in Tools → WordPress Sites and you never see them.
+- MCP ability names are EXACT and come from wp_mcp_tools — never guess or shorten one (there is no "html-to-page" or "oxygen-add-css"; the Oxygen ones are "oxygen-html-to-page", "oxygen-insert-stylesheet", "oxygen-insert-css-variables"…). Pass wp_mcp args as a JSON object, never as a string.
+- Oxygen: "oxygen-html-to-page" APPENDS to the page tree — every call adds sections. Use its position argument to insert where you mean, and to redo a section read the tree with "oxygen-get-post-tree" {post_id} first and remove the old elements with "oxygen-edit-post" delete ops (one op per top-level element) BEFORE writing. Never call html-to-page twice on the same page expecting a replace. "oxygen-get-post-tree" takes only post_id (no context).
+- Page ids in your notes GO STALE (pages get recreated with new ids). Before a builder write, confirm the id with wp_content_get and check the TITLE is the page you mean; every wp_mcp write reports "[artivio] wrote to #id "Title"" — read it. After building a page, fetch_url its live URL: a page that shows only header and footer is BLANK and the work is not done.
+- Premium plugin zips: wp_install_plugin with the library file id. Do NOT try wp plugin install with a library URL (private, 404) or via the Media Library (.zip is rejected).`,
 
   guidanceFor: async ({ tenantId }) => {
     const sites = await listSites(tenantId);

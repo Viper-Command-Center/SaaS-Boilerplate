@@ -7,7 +7,7 @@
 import type { ExecResult } from '@/libs/plugins/wpcli';
 import type { ResolvedSite } from '@/libs/wpsites/types';
 import { McpHttpClient } from '@/libs/mcp/client';
-import { assertArgsSafe, shellQuote, sshExec } from '@/libs/plugins/wpcli';
+import { assertArgsSafe, shellQuote, sshExec, sshUpload } from '@/libs/plugins/wpcli';
 import { buildAuthHeader } from '@/libs/wpsites/auth';
 import { redactError, redactSecrets } from '@/libs/wpsites/redact';
 
@@ -165,8 +165,28 @@ export async function mcpCall(site: ResolvedSite, tool: string, args: Record<str
     }
     return out;
   } catch (err) {
-    throw redactError(err, siteSecrets(site));
+    const clean = redactError(err, siteSecrets(site));
+    // A guessed ability name ("html-to-page", "oxygen-post-tree") comes back
+    // as a bare JSON-RPC 404. Seen 2026-09-07: the agent burned four turns
+    // guessing before calling wp_mcp_tools. Name the closest real abilities.
+    if (/Tool not found/i.test(clean.message)) {
+      const hint = await suggestMcpNames(site, tool).catch(() => '');
+      throw new Error(`WordPress MCP (${site.label}): no ability named "${tool}" on this site.${hint} Names are exact — read them from wp_mcp_tools.`);
+    }
+    throw clean;
   }
+}
+
+async function suggestMcpNames(site: ResolvedSite, wanted: string): Promise<string> {
+  const names = (await mcpListTools(site)).map(t => t.name);
+  const tokens = wanted.toLowerCase().split(/[^a-z0-9]+/).filter(t => t.length > 2 && t !== 'oxygen');
+  const scored = names
+    .map(n => ({ n, score: tokens.filter(t => n.toLowerCase().includes(t)).length }))
+    .filter(x => x.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 6)
+    .map(x => x.n);
+  return scored.length ? ` Closest: ${scored.join(', ')}.` : ` It exposes ${names.length} abilities.`;
 }
 
 // ─── CLI ─────────────────────────────────────────────────────────────────────
@@ -184,6 +204,16 @@ export async function cliExec(site: ResolvedSite, args: string[]): Promise<ExecR
   assertArgsSafe(args);
   const argv = ['wp', `--path=${ssh.path}`, '--no-color', ...args].map(shellQuote).join(' ');
   return cliRaw(site, argv);
+}
+
+/** Push bytes to a path on the host over SFTP (redacted errors). */
+export async function cliUpload(site: ResolvedSite, remotePath: string, bytes: Buffer): Promise<void> {
+  const ssh = requireSsh(site);
+  try {
+    await sshUpload({ host: ssh.host, port: ssh.port, user: ssh.user, path: ssh.path }, ssh.privateKey, remotePath, bytes);
+  } catch (err) {
+    throw redactError(err, siteSecrets(site));
+  }
 }
 
 /** The one caller that deliberately skips assertArgsSafe (typed live search-replace). */

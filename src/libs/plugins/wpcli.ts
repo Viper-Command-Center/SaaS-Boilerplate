@@ -208,6 +208,54 @@ export function sshExec(target: Target, privateKey: string, command: string): Pr
   });
 }
 
+/**
+ * Write bytes to a file on the host over SFTP (same ssh2 connection type, no
+ * scp binary). Used by wp_install_plugin: a workspace-library zip cannot be
+ * fetched BY the host (knowledge files are private, and the media library
+ * strips .zip), so the app pushes the bytes itself. Caller picks a path
+ * outside the web root and removes it afterwards.
+ */
+export function sshUpload(target: Target, privateKey: string, remotePath: string, bytes: Buffer): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const conn = new SshClient();
+    let settled = false;
+    let killer: NodeJS.Timeout | undefined;
+    const finish = (fn: () => void) => {
+      if (!settled) {
+        settled = true;
+        clearTimeout(killer);
+        fn();
+        conn.end();
+      }
+    };
+    killer = setTimeout(() => finish(() => reject(new Error(`SFTP: upload timed out after ${EXEC_TIMEOUT_MS / 1000}s.`))), EXEC_TIMEOUT_MS + CONNECT_TIMEOUT_MS);
+    killer.unref();
+    conn.on('ready', () => {
+      conn.sftp((err, sftp) => {
+        if (err) {
+          finish(() => reject(new Error(`SFTP: could not open a session (${err.message}). The host may allow shell but not SFTP for this user.`)));
+          return;
+        }
+        const ws = sftp.createWriteStream(remotePath, { mode: 0o600 });
+        ws.on('error', (e: Error) => finish(() => reject(new Error(`SFTP: write to ${remotePath} failed (${e.message}).`))));
+        ws.on('close', () => finish(resolve));
+        ws.end(bytes);
+      });
+    });
+    conn.on('error', (err: Error & { level?: string }) => {
+      finish(() => reject(new Error(`SFTP: ${err.level === 'client-authentication' ? 'SSH authentication failed' : err.message}`)));
+    });
+    conn.connect({
+      host: target.host,
+      port: target.port,
+      username: target.user,
+      privateKey,
+      readyTimeout: CONNECT_TIMEOUT_MS,
+      hostVerifier: () => true,
+    });
+  });
+}
+
 export async function wpExec(target: Target, privateKey: string, args: string[]): Promise<ExecResult> {
   assertArgsSafe(args);
   const argv = ['wp', `--path=${target.path}`, '--no-color', ...args].map(shellQuote).join(' ');

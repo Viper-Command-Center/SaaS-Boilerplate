@@ -9,6 +9,13 @@ import * as schema from '@/models/Schema';
 export const createDbConnection = () => {
   const pool = new Pool({
     connectionString: Env.DATABASE_URL,
+    // Long tool calls (a 40 s book render, a 4-min mission step) leave the
+    // pool idle; without keepalive a proxy can drop the TCP session and the
+    // next query fails with "Connection terminated unexpectedly".
+    keepAlive: true,
+    keepAliveInitialDelayMillis: 10_000,
+    idleTimeoutMillis: 30_000,
+    connectionTimeoutMillis: 15_000,
   });
 
   pool.on('error', (error) => {

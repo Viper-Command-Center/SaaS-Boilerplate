@@ -25,6 +25,7 @@ import type { TenantToolset, ToolResultRich } from '@/libs/mcp/registry';
 import { callClaudeWithTools } from '@/libs/agent/anthropic';
 import { checkSpend, meterLlm } from '@/libs/billing/meter';
 import { db } from '@/libs/DB';
+import { saveFile } from '@/libs/storage/files';
 import { captureIssue, redact } from '@/libs/support/issues';
 import { approvals, auditLog } from '@/models/Schema';
 
@@ -390,10 +391,34 @@ export async function runToolLoop(a: {
           detail: a.conversationId ? 'chat' : 'scheduled',
         });
       }
+      let wrapText = '';
       for (const block of wrap.content.filter(b => b.type === 'text')) {
         if (block.text) {
           finalText += (finalText ? '\n' : '') + block.text;
           a.onDelta(block.text);
+          wrapText += `${block.text}\n`;
+        }
+      }
+      // Mia's workspace (2026-09-07, Aria): the wrap-up went into the chat
+      // reply and the NEXT session had to reconstruct what was done from
+      // scratch. Persist it as a library note as well, so the standing
+      // "check the library first" doctrine finds it. Best-effort.
+      if (wrapText.trim()) {
+        const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
+        const body = `# Handoff — turn ended on tool budget (${stamp} UTC)\n\n${wrapText.trim()}\n`;
+        const saved = await saveFile({
+          tenantId: a.tenantId,
+          name: `handoff-${stamp.replace(/[ :]/g, '-')}.md`,
+          bytes: Buffer.from(body, 'utf8'),
+          mime: 'text/markdown',
+          kind: 'note',
+          source: 'agent',
+          meta: { role: 'handoff', conversationId: a.conversationId ?? null },
+        }).catch(() => null);
+        if (saved) {
+          const line = `\n[budget] Handoff note saved to the library as ${saved.name}.\n`;
+          a.onDelta(line);
+          finalText += line;
         }
       }
     } catch {

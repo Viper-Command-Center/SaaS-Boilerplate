@@ -3,12 +3,14 @@
  * Pure-function checks plus fetch-stubbed discovery and rotation ordering.
  */
 
+import JSZip from 'jszip';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { normaliseArgv, wpSitesProvider } from '@/libs/plugins/wpSites';
+import { mcpArgs, normaliseArgv, wpSitesProvider } from '@/libs/plugins/wpSites';
 import { buildAuthHeader, LABEL_RE, maskSecret, normaliseLabel, normaliseSecret, normaliseSiteUrl } from '@/libs/wpsites/auth';
 import { MAX_REST_BODY, resolveRoute, restRequest } from '@/libs/wpsites/channels';
 import { compareVersions, detectBuilder, findMcpRoute } from '@/libs/wpsites/discovery';
 import { parseProvisioningPayload } from '@/libs/wpsites/legacy';
+import { pickPluginZip } from '@/libs/wpsites/pluginZip';
 import { cliIsWrite, restIsWrite, serialisedForSite, toToolPolicy } from '@/libs/wpsites/policy';
 import { redactSecrets } from '@/libs/wpsites/redact';
 
@@ -289,5 +291,60 @@ describe('acceptance: no "Bearer" in the Sites UI', () => {
     // the capitalised prefix is what a user would see.
     expect(src).not.toMatch(/Bearer/);
     expect(src).not.toMatch(/Authorization/);
+  });
+});
+
+describe('Noah 2026-09-07 report — argument shapes the model actually sends', () => {
+  it('normaliseArgv accepts the single-quoted / trailing-comma bracket form (Bug 4)', () => {
+    expect(normaliseArgv(`['plugin', 'get', '--field=version']`)).toEqual(['plugin', 'get', '--field=version']);
+    expect(normaliseArgv(`["plugin", "get", "--field=version",]`)).toEqual(['plugin', 'get', '--field=version']);
+    expect(normaliseArgv('["plugin","get","--field=version"]')).toEqual(['plugin', 'get', '--field=version']);
+  });
+
+  it('mcpArgs parses a JSON-string object and rejects garbage (Bug 2 "post_id is required")', () => {
+    expect(mcpArgs('{"post_id": 43}')).toEqual({ post_id: 43 });
+    expect(mcpArgs({ post_id: 43 })).toEqual({ post_id: 43 });
+    expect(mcpArgs(undefined)).toEqual({});
+    expect(() => mcpArgs('{post_id: 43')).toThrow(/JSON object/);
+  });
+
+  it('wp_install_plugin is a CLI write that follows the site CLI policy', async () => {
+    expect(wpSitesProvider.tools.some(t => t.name === 'wp_install_plugin')).toBe(true);
+  });
+});
+
+describe('pickPluginZip', () => {
+  async function zipOf(entries: Record<string, string | Buffer>): Promise<Buffer> {
+    const z = new JSZip();
+    for (const [k, v] of Object.entries(entries)) {
+      z.file(k, v);
+    }
+    return z.generateAsync({ type: 'nodebuffer' });
+  }
+
+  it('finds a plain plugin zip', async () => {
+    const bytes = await zipOf({ 'my-plugin/my-plugin.php': '<?php\n/*\nPlugin Name: My Plugin\n*/', 'my-plugin/readme.txt': 'x' });
+    const r = await pickPluginZip(bytes);
+
+    expect(r.pluginName).toBe('My Plugin');
+    expect(r.dir).toBe('my-plugin');
+    expect(r.nestedFrom).toBeUndefined();
+  });
+
+  it('unwraps an Envato-style package zip that carries the real plugin zip inside (Bug 7)', async () => {
+    const inner = await zipOf({ 'revslider/revslider.php': '<?php\n/**\n * Plugin Name: Slider Revolution\n */' });
+    const pkg = await zipOf({ 'Documentation/index.html': '<html>', 'licence.txt': 'x', 'revslider.zip': inner });
+    const r = await pickPluginZip(pkg);
+
+    expect(r.pluginName).toBe('Slider Revolution');
+    expect(r.nestedFrom).toBe('revslider.zip');
+    expect(r.bytes.equals(inner)).toBe(true);
+  });
+
+  it('names the gap when nothing installable is inside', async () => {
+    const bytes = await zipOf({ 'docs/readme.html': '<html>' });
+
+    await expect(pickPluginZip(bytes)).rejects.toThrow(/No WordPress plugin found/);
+    await expect(pickPluginZip(Buffer.from('not a zip'))).rejects.toThrow(/not a zip/);
   });
 });

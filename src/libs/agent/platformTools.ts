@@ -7,6 +7,7 @@
 
 import type { AnthropicTool, ToolResult, ToolResultRich } from '@/libs/mcp/registry';
 import { and, asc, desc, eq } from 'drizzle-orm';
+import JSZip from 'jszip';
 import sharp from 'sharp';
 import { buildBookTools } from '@/libs/agent/bookTools';
 import { assertPublicUrl, buildWebTools } from '@/libs/agent/webTools';
@@ -17,13 +18,43 @@ import { renderDocument } from '@/libs/docs/pdf';
 import { extractPdfImages, MAX_PDF_IMAGES } from '@/libs/docs/pdfImages';
 import { extractPdfText, isPdf } from '@/libs/docs/pdfText';
 import { renderDeck } from '@/libs/docs/pptx';
-import { getFile, listFiles, saveFile, saveRemoteFile, setFileText } from '@/libs/storage/files';
+import { getFile, listFiles, removeFile, saveFile, saveRemoteFile, setFileText } from '@/libs/storage/files';
 import { getObject } from '@/libs/storage/r2';
 import { captureIssue } from '@/libs/support/issues';
 import { dashboardPanels, dashboardViews, datasets, scheduledTasks, tenants } from '@/models/Schema';
 
+const MAX_ARCHIVE_BYTES = 500 * 1024 * 1024;
+const MAX_ARCHIVE_ENTRY_BYTES = 100 * 1024 * 1024;
+const MAX_ARCHIVE_ENTRIES = 300;
+const ARCHIVE_MIMES: Record<string, string> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  webp: 'image/webp',
+  gif: 'image/gif',
+  svg: 'image/svg+xml',
+  tif: 'image/tiff',
+  tiff: 'image/tiff',
+  bmp: 'image/bmp',
+  pdf: 'application/pdf',
+  mp4: 'video/mp4',
+  mov: 'video/quicktime',
+  mp3: 'audio/mpeg',
+  wav: 'audio/wav',
+  txt: 'text/plain',
+  md: 'text/markdown',
+  csv: 'text/csv',
+  json: 'application/json',
+  html: 'text/html',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  zip: 'application/zip',
+};
+
 export type PlatformExecutor = {
-  policy: 'auto';
+  /** 'auto' for everything that only touches this workspace's own state; 'approval' for the irreversible (delete_files). */
+  policy: 'auto' | 'approval';
   call: (args: Record<string, unknown>) => Promise<ToolResult>;
 };
 
@@ -269,12 +300,37 @@ export function buildPlatformTools(tenantId: string): {
     },
     {
       name: 'list_files',
-      description: 'List this workspace\'s file library: documents the client uploaded (briefs, brand guides, requirement lists) and media you generated. ALWAYS check this before starting a substantial piece of work — the instructions you need are often already here rather than in the chat.',
+      description: 'List this workspace\'s file library: documents the client uploaded (briefs, brand guides, requirement lists) and media you generated. ALWAYS check this before starting a substantial piece of work — the instructions you need are often already here rather than in the chat. Newest first, 200 per call; a library with hundreds of files (a book import) needs `search` to find the ones you mean — the result says when it is truncated.',
       input_schema: {
         type: 'object',
         properties: {
           kind: { type: 'string', description: 'Filter: knowledge | asset | note' },
+          search: { type: 'string', description: 'Case-insensitive substring of the file name, e.g. "cover" or "page-18".' },
+          limit: { type: 'number', description: 'Up to 1000 (default 200).' },
         },
+      },
+    },
+    {
+      name: 'unpack_archive',
+      description: 'Unpack a .zip from the library into individual library files (each image/PDF/document becomes its own file with its own id and, for images, a public URL). Use this when a user uploaded a zip of page images, photos or documents — nothing else can read inside a zip. Skips folders, hidden/system entries and anything over 100 MB; stops at 300 entries. Returns the new file ids. The zip itself stays in the library.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          fileId: { type: 'string', description: 'Library id of the .zip (from list_files).' },
+          namePrefix: { type: 'string', description: 'Optional stem prepended to each extracted file name.' },
+        },
+        required: ['fileId'],
+      },
+    },
+    {
+      name: 'delete_files',
+      description: 'Permanently delete files from the workspace library by id (up to 200 per call) — e.g. hundreds of fragment images from a failed import. NOT reversible: the bytes are removed from storage. Only files that are not referenced by a book page should be deleted; list what you intend to delete to the user first. Requires approval.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          fileIds: { type: 'array', items: { type: 'string' }, description: 'Full UUIDs from list_files.' },
+        },
+        required: ['fileIds'],
       },
     },
     {
@@ -863,13 +919,22 @@ export function buildPlatformTools(tenantId: string): {
   executors.set('list_files', {
     policy: 'auto',
     call: async (args) => {
-      const rows = await listFiles(tenantId, 200);
+      const limit = Math.min(Math.max(Number(args.limit) || 200, 1), 1000);
+      const search = String(args.search ?? '').trim().toLowerCase();
+      // Filter server-side-ish: fetch a wide window when searching so a
+      // 400-file library (a book import) can still find "cover".
+      const rows = await listFiles(tenantId, search ? 5000 : limit);
       const kind = args.kind ? String(args.kind) : null;
-      const filtered = kind ? rows.filter(r => r.kind === kind) : rows;
+      const all = rows.filter(r => (!kind || r.kind === kind) && (!search || r.name.toLowerCase().includes(search)));
+      const filtered = all.slice(0, limit);
       if (filtered.length === 0) {
-        return 'The workspace file library is empty. The client can upload briefs and documents on the Files page.';
+        return search || kind
+          ? `No files match${search ? ` "${search}"` : ''}${kind ? ` of kind ${kind}` : ''}. The library has ${rows.length}${rows.length >= 5000 ? '+' : ''} files in total.`
+          : 'The workspace file library is empty. The client can upload briefs and documents on the Files page.';
       }
-      return JSON.stringify(filtered.map(f => ({
+      const truncated = all.length > filtered.length || (!search && rows.length >= limit);
+      const head = truncated ? `[showing ${filtered.length} of ${all.length}${!search && rows.length >= limit ? '+' : ''} — pass search:"<part of the name>" or a higher limit to see the rest]\n` : '';
+      return head + JSON.stringify(filtered.map(f => ({
         id: f.id,
         name: f.name,
         kind: f.kind,
@@ -1144,6 +1209,87 @@ export function buildPlatformTools(tenantId: string): {
         renderer: result.engine,
         note: `${result.note ? `${result.note} ` : ''}It is in the workspace library — pass this file id as attachFileIds to email it. It is private: use save_file_from_url if the client needs a public link.`,
       });
+    },
+  });
+
+  executors.set('unpack_archive', {
+    policy: 'auto', // writes only into this workspace's own storage
+    call: async (args) => {
+      const fileId = String(args.fileId ?? '').trim();
+      const row = await getFile(tenantId, fileId);
+      if (!row) {
+        throw new Error(`No file with id "${fileId}" in this workspace — call list_files for current ids.`);
+      }
+      if (row.sizeBytes > MAX_ARCHIVE_BYTES) {
+        throw new Error(`${row.name} is ${Math.round(row.sizeBytes / 1024 / 1024)} MB; archives are capped at ${MAX_ARCHIVE_BYTES / 1024 / 1024} MB. Ask the user to split it or upload the files individually.`);
+      }
+      const { body } = await getObject(row.r2Key);
+      let zip: JSZip;
+      try {
+        zip = await JSZip.loadAsync(body);
+      } catch {
+        throw new Error(`${row.name} is not a zip archive (only .zip is supported — not .rar/.7z/.tar.gz).`);
+      }
+      const prefix = String(args.namePrefix ?? '').trim().replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '');
+      const entries = Object.values(zip.files)
+        .filter(f => !f.dir)
+        .filter(f => !/(?:^|\/)(?:__MACOSX|\.DS_Store|Thumbs\.db|\.)/.test(f.name))
+        .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+      const saved: Array<{ id: string; name: string; url: string | null; sizeKb: number }> = [];
+      const skipped: string[] = [];
+      for (const entry of entries) {
+        if (saved.length >= MAX_ARCHIVE_ENTRIES) {
+          skipped.push(`… stopped at ${MAX_ARCHIVE_ENTRIES} entries`);
+          break;
+        }
+        const bytes = await entry.async('nodebuffer');
+        if (bytes.length === 0 || bytes.length > MAX_ARCHIVE_ENTRY_BYTES) {
+          skipped.push(`${entry.name} (${bytes.length === 0 ? 'empty' : 'over 100 MB'})`);
+          continue;
+        }
+        const base = entry.name.split('/').pop() ?? entry.name;
+        const name = (prefix ? `${prefix}-${base}` : base).replace(/[^\w.() -]+/g, '-').slice(0, 200);
+        const ext = (name.split('.').pop() ?? '').toLowerCase();
+        const mime = ARCHIVE_MIMES[ext] ?? 'application/octet-stream';
+        const isMedia = mime.startsWith('image/') || mime.startsWith('video/') || mime.startsWith('audio/');
+        const out = await saveFile({
+          tenantId,
+          name,
+          bytes,
+          mime,
+          kind: isMedia ? 'asset' : 'knowledge',
+          source: 'agent',
+          meta: { from: row.id, archive: row.name, path: entry.name },
+        });
+        if (out) {
+          saved.push({ id: out.id, name: out.name, url: out.publicUrl, sizeKb: Math.round(out.sizeBytes / 1024) });
+        }
+      }
+      return JSON.stringify({
+        archive: row.name,
+        extracted: saved.length,
+        files: saved,
+        skipped,
+        note: 'Each entry is now its own library file. Images have public URLs and appear under Generated media; use the ids with set_book_pages / wp_upload_media / view_image.',
+      }).slice(0, 60_000);
+    },
+  });
+
+  executors.set('delete_files', {
+    // Irreversible: R2 bytes go too. A human approves the list.
+    policy: 'approval',
+    call: async (args) => {
+      const ids = Array.isArray(args.fileIds) ? args.fileIds.map(String).map(s => s.trim()).filter(Boolean).slice(0, 200) : [];
+      if (ids.length === 0) {
+        throw new Error('delete_files: pass fileIds (full UUIDs from list_files).');
+      }
+      const deleted: string[] = [];
+      const missing: string[] = [];
+      for (const id of ids) {
+        const ok = await removeFile(tenantId, id).catch(() => false);
+        (ok ? deleted : missing).push(id);
+      }
+      return JSON.stringify({ deleted: deleted.length, missing, note: 'Deleted files are gone from storage. Book pages that pointed at them will show as missing in preflight.' });
     },
   });
 

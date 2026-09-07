@@ -261,6 +261,21 @@ expect('src/app/api/plugins/ssh-key/route.ts', 'sealSecret(pair.privateKeyPem)',
 expect('src/app/api/plugins/route.ts', 'eq(credentials.provider, plugin.slug)', 'a supplied credentialId must be re-scoped to this tenant AND this plugin');
 expect('next.config.ts', '\'ssh2\'', 'ssh2 must stay a server-external package like ws');
 
+// ── Phase 36 (2026-09-07 — Noah's + Aria's bug reports). Four "platform lied,
+// agent took the blame" cases: wp_mcp args arriving as a JSON string; guessed
+// ability names returning a bare 404 (read as "the MCP is offline"); builder
+// writes landing on stale page ids with no way to see it; drizzle hiding the
+// Postgres cause of a failed files insert so the diagnostic itself vanished.
+expect('src/libs/plugins/wpSites.ts', 'export function mcpArgs', 'wp_mcp must accept args sent as a JSON string');
+expect('src/libs/wpsites/channels.ts', 'suggestMcpNames', 'an unknown ability name must come back with the closest real names, never a bare 404');
+expect('src/libs/plugins/wpSites.ts', '[artivio] wrote to #', 'every builder write must name the page it actually touched');
+expect('src/libs/plugins/wpSites.ts', 'wp_install_plugin', 'premium plugin zips install via SFTP + wp plugin install, not via library URLs');
+expect('src/libs/storage/files.ts', 'pgSafeText(text)', 'extracted text must be NUL-stripped before the files insert');
+expect('src/libs/storage/files.ts', 'dbErrorText(', 'a failed files insert must surface the Postgres cause, not only "Failed query"');
+expect('src/libs/support/issues.ts', 'pgClean(', 'captureIssue must not fail for the same bad byte as the error it records');
+expect('src/libs/books/cover.ts', 'frontArtIsFinal', 'a finished front cover must be usable without text drawn over it');
+expect('src/libs/agent/loop.ts', 'handoff-', 'the exhaustion wrap-up must also be saved as a library note');
+
 // ── Report ──────────────────────────────────────────────────────────────────
 if (failures.length > 0) {
   console.error(`\n✗ agent-evals: ${failures.length} of ${checks} tripwires FAILED\n`);

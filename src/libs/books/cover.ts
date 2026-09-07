@@ -44,6 +44,15 @@ export type CoverSpec = {
   titlePosition?: 'top' | 'bottom';
   /** Small line printed on the back, e.g. "artivio.ai" or an ISBN-free note. */
   backFooter?: string;
+  /**
+   * The supplied front art is a FINISHED cover (title, author, tagline already
+   * typeset in the image). Draw nothing on the front — no title, no band, no
+   * author. Mia's workspace, 2026-09-07: the renderer doubled the title over a
+   * Canva cover and every workaround (titleBand:false, matching text colour,
+   * empty strings) still left ghost text, because the front text block was
+   * unconditional.
+   */
+  frontArtIsFinal?: boolean;
 };
 
 export type CoverResult = {
@@ -155,6 +164,9 @@ export async function renderCover(spec: CoverSpec): Promise<CoverResult> {
 
   // ── front text ──
   const fs = g.frontSafe;
+  if (spec.frontArtIsFinal && spec.frontArt) {
+    notes.push('Front text skipped (frontArtIsFinal): the front art is used as the finished cover — no title, subtitle or author was drawn over it.');
+  }
   const title = clean(spec.title);
   const subtitle = clean(spec.subtitle ?? '');
   const author = clean(spec.author ?? '');
@@ -173,8 +185,9 @@ export async function renderCover(spec: CoverSpec): Promise<CoverResult> {
   const topY = fsTop + px(0.35);
   const bottomY = fsBottom - blockH - (author ? authorSize * 2.2 : px(0.35));
   const blockTop = (spec.titlePosition ?? 'top') === 'bottom' ? bottomY : topY;
+  const drawFrontText = !(spec.frontArtIsFinal && spec.frontArt);
 
-  if (spec.titleBand ?? Boolean(spec.frontArt)) {
+  if (drawFrontText && (spec.titleBand ?? Boolean(spec.frontArt))) {
     ctx.fillStyle = withAlpha(bg, 0.82);
     roundRect(ctx, cx - colW / 2 - px(0.2), blockTop - px(0.15), colW + px(0.4), blockH + px(0.3), px(0.15));
     ctx.fill();
@@ -185,11 +198,11 @@ export async function renderCover(spec: CoverSpec): Promise<CoverResult> {
   ctx.textBaseline = 'top';
   let y = blockTop;
   ctx.font = `bold ${titleSize}px ${display}`;
-  for (const line of titleLines) {
+  for (const line of drawFrontText ? titleLines : []) {
     ctx.fillText(line, cx, y);
     y += titleSize * lineGap;
   }
-  if (subLines.length) {
+  if (drawFrontText && subLines.length) {
     y += titleSize * 0.3;
     ctx.font = `${subSize}px ${display}`;
     for (const line of subLines) {
@@ -197,7 +210,7 @@ export async function renderCover(spec: CoverSpec): Promise<CoverResult> {
       y += subSize * lineGap;
     }
   }
-  if (author) {
+  if (drawFrontText && author) {
     ctx.font = `bold ${authorSize}px ${body}`;
     ctx.textBaseline = 'bottom';
     const ay = fsBottom - px(0.35);

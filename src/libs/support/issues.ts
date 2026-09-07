@@ -183,8 +183,11 @@ export async function captureIssue(input: CaptureInput): Promise<Classified> {
       tenantId: input.tenantId ?? null,
       kind: classified.kind,
       source: input.source.slice(0, 160),
-      message: message.slice(0, 2000),
-      detail,
+      // Strip NUL / lone surrogates: an insert that failed on a bad byte in
+      // its params must not make THIS insert fail on the same byte (the
+      // message quotes the params). Then the issue vanishes with no trace.
+      message: pgClean(message.slice(0, 2000)),
+      detail: JSON.parse(pgClean(JSON.stringify(detail))),
       reportedByAgent: Boolean(input.reportedByAgent),
     });
 
@@ -200,11 +203,17 @@ export async function captureIssue(input: CaptureInput): Promise<Classified> {
         full: bundle,
       }).catch(() => {});
     }
-  } catch {
-    // swallow — reporting a failure must never cause one
+  } catch (err) {
+    // swallow — reporting a failure must never cause one. But say so on the
+    // server log: a silent triage failure hides the original bug twice over.
+    console.error(`[issues] could not record issue from ${input.source}: ${err instanceof Error ? err.message.split('\n')[0] : String(err)} — original: ${message.slice(0, 300)}`);
   }
 
   return classified;
+}
+
+function pgClean(s: string): string {
+  return s.replace(/\0/g, '').replace(/\\u0000/g, '').replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '');
 }
 
 /** A copy-pasteable diagnostic an engineer can act on without interviewing anyone. */

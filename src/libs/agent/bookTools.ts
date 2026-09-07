@@ -131,6 +131,7 @@ export function buildBookTools(tenantId: string): {
               titlePosition: { type: 'string', enum: ['top', 'bottom'] },
               titleBand: { type: 'boolean' },
               backFooter: { type: 'string' },
+              frontArtIsFinal: { type: 'boolean' },
             },
           },
         },
@@ -222,15 +223,16 @@ export function buildBookTools(tenantId: string): {
         type: 'object',
         properties: {
           book: { type: 'string' },
-          frontArtFileId: { type: 'string', description: 'Library id of the front cover art.' },
-          backArtFileId: { type: 'string', description: 'Optional back cover art (a pattern or a sample page works well).' },
+          frontArtFileId: { type: 'string', description: 'Library id of the front cover art (full UUID from list_files — never a shortened id).' },
+          backArtFileId: { type: 'string', description: 'Optional back cover art (a pattern or a sample page works well). Pass "" to remove a previously stored one.' },
+          frontArtIsFinal: { type: 'boolean', description: 'TRUE when the front art is already a finished cover with the title/author typeset in the image (e.g. a Canva export): nothing is drawn over it — no title, no band, no author. Default false = the platform typesets title/subtitle/author over the art.' },
           blurb: { type: 'string', description: 'Back-cover text, 2–5 short sentences.' },
           background: { type: 'string', description: 'Hex, e.g. "#FFD447". Fills everything the art does not.' },
           spineColor: { type: 'string', description: 'Hex; defaults to background.' },
           textColor: { type: 'string', description: 'Hex; default near-black.' },
           spineText: { type: 'boolean', description: 'Title + author on the spine (needs 79+ pages).' },
           titlePosition: { type: 'string', enum: ['top', 'bottom'] },
-          titleBand: { type: 'boolean', description: 'Translucent band behind the title for legibility over busy art. Default on when art is present.' },
+          titleBand: { type: 'boolean', description: 'Translucent band behind the title for legibility over busy art. Default on when art is present. Irrelevant when frontArtIsFinal.' },
           backFooter: { type: 'string', description: 'Small line bottom-left of the back, e.g. a website.' },
         },
         required: ['book'],
@@ -431,8 +433,10 @@ export function buildBookTools(tenantId: string): {
     if (!c.frontArtFileId) {
       throw new Error('No front cover art. Generate one (generate_image) or pick an upload, then pass its id as frontArtFileId.');
     }
-    const front = (await loadBytes(c.frontArtFileId)).bytes;
-    const back = c.backArtFileId ? (await loadBytes(c.backArtFileId)).bytes : null;
+    const frontFile = await loadBytes(c.frontArtFileId);
+    const front = frontFile.bytes;
+    const backFile = c.backArtFileId ? await loadBytes(c.backArtFileId) : null;
+    const back = backFile?.bytes ?? null;
     const r = await renderCover({
       trim: book.trim,
       pageCount,
@@ -451,7 +455,14 @@ export function buildBookTools(tenantId: string): {
       titleBand: c.titleBand,
       titlePosition: c.titlePosition,
       backFooter: c.backFooter,
+      frontArtIsFinal: c.frontArtIsFinal,
     });
+    // Say which files were drawn. "The back showed a different page than I
+    // passed" (Mia, 2026-09-07) is unanswerable without this line.
+    r.notes.unshift(
+      `Front art: ${frontFile.row.name} (${frontFile.row.id}).`,
+      backFile ? `Back art: ${backFile.row.name} (${backFile.row.id}).` : 'Back: no art (flat background).',
+    );
     const pdf = await saveFile({
       tenantId,
       name: `${slug(book.title)}-cover.pdf`,
@@ -980,7 +991,9 @@ function mergeCover(current: BookCover, incoming: Record<string, unknown>): Book
   const c: BookCover = { ...current };
   const str = (k: keyof BookCover, max = 2000) => {
     if (incoming[k] !== undefined) {
-      const v = String(incoming[k]).trim().slice(0, max);
+      // null / "" clears the stored value (before this, null became the
+      // literal string "null" and the next build failed with "No file with id null").
+      const v = incoming[k] === null ? '' : String(incoming[k]).trim().slice(0, max);
       (c as Record<string, unknown>)[k] = v || undefined;
     }
   };
@@ -996,6 +1009,9 @@ function mergeCover(current: BookCover, incoming: Record<string, unknown>): Book
   }
   if (typeof incoming.titleBand === 'boolean') {
     c.titleBand = incoming.titleBand;
+  }
+  if (typeof incoming.frontArtIsFinal === 'boolean') {
+    c.frontArtIsFinal = incoming.frontArtIsFinal;
   }
   if (incoming.titlePosition === 'top' || incoming.titlePosition === 'bottom') {
     c.titlePosition = incoming.titlePosition;

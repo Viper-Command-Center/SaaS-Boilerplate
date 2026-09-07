@@ -26,6 +26,8 @@ export type BookCover = {
   titlePosition?: 'top' | 'bottom';
   titleBand?: boolean;
   backFooter?: string;
+  /** The front art already carries title/author (a finished Canva cover): draw NO text on the front. */
+  frontArtIsFinal?: boolean;
 };
 
 export type BookListing = {

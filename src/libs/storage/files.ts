@@ -204,6 +204,35 @@ export type SaveInput = {
   createdBy?: string;
 };
 
+/**
+ * Postgres rejects a NUL byte in text and jsonb ("invalid byte sequence for
+ * encoding UTF8: 0x00") and a lone surrogate. Extracted PDF/Office text can
+ * carry both. One bad character must not lose a 60-page print file.
+ */
+export function pgSafeText(s: string | null | undefined): string | null {
+  if (s == null) {
+    return null;
+  }
+
+  return s.replace(/\0/g, '').replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '');
+}
+
+/** The Postgres reason drizzle hides behind "Failed query: …" — the part a human can act on. */
+export function dbErrorText(err: unknown): string {
+  const cause = (err as { cause?: unknown })?.cause;
+  const inner = cause instanceof Error ? cause.message : typeof cause === 'string' ? cause : '';
+  const outer = err instanceof Error ? err.message : String(err);
+  // Drizzle's message embeds the full SQL + params (can be tens of KB). Keep
+  // the first line only, plus the cause.
+  const head = outer.split('\n')[0]?.slice(0, 200) ?? '';
+  return inner ? `${inner} (${head})` : head;
+}
+
+function isTransientDbError(err: unknown): boolean {
+  const text = `${dbErrorText(err)} ${(err as { cause?: { code?: string } })?.cause?.code ?? ''}`;
+  return /terminated|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|timeout|Connection ended|not queryable|57P01|08006|08003/i.test(text);
+}
+
 /** Store bytes in R2 + index them. Returns the row. */
 export async function saveFile(input: SaveInput) {
   if (!storageConfigured()) {
@@ -234,23 +263,39 @@ export async function saveFile(input: SaveInput) {
   // which checks workspace membership on every request.
   const publicUrl = kind === 'asset' ? publicUrlFor(key) : null;
 
-  const [row] = await db
-    .insert(files)
-    .values({
-      tenantId: input.tenantId,
-      name: input.name.slice(0, 300),
-      kind,
-      mime: mime.slice(0, 120),
-      sizeBytes: input.bytes.length,
-      r2Key: key,
-      publicUrl,
-      source: (input.source ?? 'upload').slice(0, 40),
-      textContent: text,
-      meta: input.meta ?? {},
-      createdBy: input.createdBy,
-    })
-    .returning();
-  return row;
+  const values = {
+    tenantId: input.tenantId,
+    name: pgSafeText(input.name.slice(0, 300)) ?? 'file',
+    kind,
+    mime: mime.slice(0, 120),
+    sizeBytes: input.bytes.length,
+    r2Key: key,
+    publicUrl,
+    source: (input.source ?? 'upload').slice(0, 40),
+    textContent: pgSafeText(text),
+    meta: input.meta ?? {},
+    createdBy: input.createdBy,
+  };
+  try {
+    const [row] = await db.insert(files).values(values).returning();
+    return row;
+  } catch (err) {
+    // Mia's workspace, 2026-09-07: build_book_interior rendered 62 pages,
+    // uploaded 3.6 MB to R2, then "Failed query: insert into files" — and the
+    // agent could only relay that string, because drizzle keeps the Postgres
+    // reason in err.cause. A pool connection that died during a 40 s render
+    // is the likeliest cause; retry once on a fresh connection.
+    if (isTransientDbError(err)) {
+      await new Promise(r => setTimeout(r, 750));
+      try {
+        const [row] = await db.insert(files).values(values).returning();
+        return row;
+      } catch (again) {
+        throw new Error(`The file was stored (key ${key}) but could not be indexed in the library: ${dbErrorText(again)}. Retried once. This is a platform/database fault, not a problem with the file.`);
+      }
+    }
+    throw new Error(`The file was stored (key ${key}) but could not be indexed in the library: ${dbErrorText(err)}. This is a platform/database fault, not a problem with the file.`);
+  }
 }
 
 /**
