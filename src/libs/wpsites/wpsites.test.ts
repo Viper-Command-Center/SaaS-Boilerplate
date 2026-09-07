@@ -4,6 +4,7 @@
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { normaliseArgv, wpSitesProvider } from '@/libs/plugins/wpSites';
 import { buildAuthHeader, LABEL_RE, maskSecret, normaliseLabel, normaliseSecret, normaliseSiteUrl } from '@/libs/wpsites/auth';
 import { MAX_REST_BODY, resolveRoute, restRequest } from '@/libs/wpsites/channels';
 import { compareVersions, detectBuilder, findMcpRoute } from '@/libs/wpsites/discovery';
@@ -187,6 +188,25 @@ describe('compareVersions', () => {
     expect(compareVersions('6.2.0-beta.8', '6.1.3')).toBeGreaterThan(0);
     expect(compareVersions('0.0.9', '0.1.0')).toBeLessThan(0);
     expect(compareVersions('1.0', '1.0.0')).toBe(0);
+  });
+});
+
+describe('wp_cli argument handling (Noah capability test findings F4/F5)', () => {
+  it('accepts a command string or scalars in the array (F5)', () => {
+    expect(normaliseArgv('cron event list --format=json')).toEqual(['cron', 'event', 'list', '--format=json']);
+    expect(normaliseArgv('wp rewrite list')).toEqual(['rewrite', 'list']);
+    expect(normaliseArgv(['post', 'get', 27, '--field=post_title'])).toEqual(['post', 'get', '27', '--field=post_title']);
+    expect(normaliseArgv(undefined)).toEqual([]);
+  });
+
+  it('never queues a hard-denied command for approval (F4): policy is auto so the deny fires immediately', async () => {
+    const policy = await wpSitesProvider.policyFor!('wp_cli', { site: 'x', args: ['db', 'drop', '--yes'] }, { tenantId: '00000000-0000-0000-0000-000000000000' } as never);
+
+    expect(policy).toBe('auto');
+
+    const evalPolicy = await wpSitesProvider.policyFor!('wp_cli', { args: ['eval', 'system("ls");'] }, { tenantId: '00000000-0000-0000-0000-000000000000' } as never);
+
+    expect(evalPolicy).toBe('auto');
   });
 });
 

@@ -3,7 +3,7 @@
  * Plugin Name:  Artivio WP Agent (base)
  * Plugin URI:   https://artivio.io
  * Description:  Builder-agnostic base plugin for Artivio. Repairs WordPress Application Passwords on CGI/FastCGI hosts, exposes a self-diagnosing auth check, reports what a site actually runs, and reads/writes SEO fields for Rank Math or Yoast. Install on every client WordPress site regardless of page builder.
- * Version:      1.1.0
+ * Version:      1.1.1
  * Requires PHP: 7.4
  * Author:       Artivio
  * License:      GPL-2.0-or-later
@@ -37,7 +37,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'ARTIVIO_WP_VERSION', '1.1.0' );
+define( 'ARTIVIO_WP_VERSION', '1.1.1' );
 define( 'ARTIVIO_WP_NS', 'artivio/v1' );
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -190,6 +190,49 @@ function artivio_wp_seo_plugin(): string {
 	return 'none';
 }
 
+/**
+ * Why "none" — so the agent (and the human) get a cause, not a shrug.
+ * Seen live 2026-09-06: Rank Math was installed and activated over WP-CLI,
+ * `wp plugin list` said active, but web requests still loaded without it
+ * because `active_plugins` was served from the persistent object cache.
+ * A bare 409 sent the agent hunting for a version-compatibility bug that did
+ * not exist. This tells it which of the three states the site is in.
+ */
+function artivio_wp_seo_none_error(): WP_Error {
+	$candidates = array(
+		'Rank Math' => 'seo-by-rank-math/rank-math.php',
+		'Yoast SEO' => 'wordpress-seo/wp-seo.php',
+	);
+	$active_db  = (array) get_option( 'active_plugins', array() );
+	$installed  = array();
+	$listed     = array();
+	foreach ( $candidates as $label => $file ) {
+		if ( file_exists( WP_PLUGIN_DIR . '/' . $file ) ) {
+			$installed[] = $label;
+			if ( in_array( $file, $active_db, true ) ) {
+				$listed[] = $label;
+			}
+		}
+	}
+	if ( $listed ) {
+		$hint = implode( ', ', $listed ) . ' is in active_plugins but did not load in this request — the option is probably stale in the object cache. Run wp_cache_flush (or `wp cache flush`) and retry; if it persists, deactivate and reactivate the plugin.';
+	} elseif ( $installed ) {
+		$hint = implode( ', ', $installed ) . ' is installed but NOT active. Activate it (wp_cli ["plugin","activate","' . ( in_array( 'Rank Math', $installed, true ) ? 'seo-by-rank-math' : 'wordpress-seo' ) . '"]) and retry.';
+	} else {
+		$hint = 'Neither Rank Math nor Yoast is installed. Install one (wp_cli ["plugin","install","seo-by-rank-math","--activate"]) and retry.';
+	}
+	return new WP_Error(
+		'artivio_wp_no_seo_plugin',
+		'No supported SEO plugin is loaded in this request. This route supports Rank Math and Yoast. ' . $hint,
+		array(
+			'status'      => 409,
+			'installed'   => $installed,
+			'activeInDb'  => $listed,
+			'objectCache' => (bool) wp_using_ext_object_cache(),
+		)
+	);
+}
+
 function artivio_wp_seo_map( string $which ): array {
 	if ( 'rankmath' === $which ) {
 		return array(
@@ -262,7 +305,7 @@ function artivio_wp_get_seo( WP_REST_Request $r ) {
 	}
 	$which = artivio_wp_seo_plugin();
 	if ( 'none' === $which ) {
-		return new WP_Error( 'artivio_wp_no_seo_plugin', 'No supported SEO plugin is active. This route supports Rank Math and Yoast.', array( 'status' => 409 ) );
+		return artivio_wp_seo_none_error();
 	}
 	$values = artivio_wp_seo_read( $post_id, $which );
 	return array(
@@ -288,7 +331,7 @@ function artivio_wp_patch_seo( WP_REST_Request $r ) {
 	}
 	$which = artivio_wp_seo_plugin();
 	if ( 'none' === $which ) {
-		return new WP_Error( 'artivio_wp_no_seo_plugin', 'No supported SEO plugin is active. This route supports Rank Math and Yoast.', array( 'status' => 409 ) );
+		return artivio_wp_seo_none_error();
 	}
 
 	$map     = artivio_wp_seo_map( $which );

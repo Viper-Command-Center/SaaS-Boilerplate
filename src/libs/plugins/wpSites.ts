@@ -25,7 +25,7 @@
 import type { ToolPolicy } from '@/libs/mcp/registry';
 import type { BuiltinProvider, BuiltinTool } from '@/libs/plugins/types';
 import type { Channel, ResolvedSite } from '@/libs/wpsites/types';
-import { shellQuote } from '@/libs/plugins/wpcli';
+import { assertArgsSafe, shellQuote } from '@/libs/plugins/wpcli';
 import { getFile } from '@/libs/storage/files';
 import { getObject } from '@/libs/storage/r2';
 import { logSiteCall } from '@/libs/wpsites/audit';
@@ -35,6 +35,28 @@ import { cliIsWrite, restIsWrite, serialisedForSite, toToolPolicy } from '@/libs
 import { listSites, resolveSiteByLabel } from '@/libs/wpsites/store';
 
 const MAX_BODY = 200_000;
+
+/**
+ * F5 (Noah's capability test, 2026-09-06): the model sometimes sends `args`
+ * as one string ("cron event list --format=json") or with numbers in the
+ * array (["post","get",27]). Both are unambiguous; refusing them read as an
+ * intermittent platform bug. Strings split on whitespace (no quoting — a
+ * value with spaces must be an array element); scalars are stringified.
+ */
+export function normaliseArgv(raw: unknown): string[] {
+  if (typeof raw === 'string') {
+    return raw.trim().replace(/^wp\s+/, '').split(/\s+/).filter(Boolean);
+  }
+  if (Array.isArray(raw)) {
+    return raw
+      .filter(a => a !== null && a !== undefined)
+      .map(a => (typeof a === 'string' ? a : typeof a === 'number' || typeof a === 'boolean' ? String(a) : JSON.stringify(a)));
+  }
+  return [];
+}
+
+/** CLI commands after which web requests must see fresh state (F2 root cause). */
+const CLI_FLUSH_AFTER_RE = /^(?:plugin|theme|core|option|rewrite|language|site)\s+(?:install|activate|deactivate|toggle|update|delete|uninstall|add|patch|set|flush|switch)/;
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 
 const SITE_ARG = {
@@ -238,7 +260,7 @@ function classify(tool: string, args: Record<string, unknown>): { channel: Chann
     case 'wp_rest':
       return { channel: 'rest', write: restIsWrite(String(args.method ?? 'GET')) };
     case 'wp_cli':
-      return { channel: 'cli', write: cliIsWrite(Array.isArray(args.args) ? (args.args as string[]) : []) };
+      return { channel: 'cli', write: cliIsWrite(normaliseArgv(args.args)) };
     case 'wp_mcp_tools':
       return { channel: 'mcp', write: false };
     case 'wp_mcp':
@@ -330,11 +352,22 @@ async function execute(tool: string, args: Record<string, unknown>, tenantId: st
       return text.length > MAX_BODY ? `${text.slice(0, MAX_BODY)}\n…[truncated at ${MAX_BODY} chars — narrow the query with per_page/_fields]` : text;
     }
     case 'wp_cli': {
-      const argv = args.args;
-      if (!Array.isArray(argv) || argv.some(a => typeof a !== 'string')) {
-        throw new Error('WordPress Sites: args must be an array of strings.');
+      const argv = normaliseArgv(args.args);
+      if (argv.length === 0) {
+        throw new Error('WordPress Sites: args must be a non-empty array of strings, e.g. ["plugin","list","--format=json"].');
       }
-      return renderCli(await cliExec(site, argv as string[]), `wp ${(argv as string[]).slice(0, 2).join(' ')}`);
+      const out = renderCli(await cliExec(site, argv), `wp ${argv.slice(0, 2).join(' ')}`);
+      // F2 root cause: a plugin activated over WP-CLI was invisible to web
+      // requests because `active_plugins` (alloptions) sat in the persistent
+      // object cache (LiteSpeed). REST then reported "no SEO plugin" while
+      // `wp plugin list` said active. Flush the object cache after any command
+      // that changes what loads, so the next REST call sees it.
+      const words = argv.filter(a => !a.startsWith('-')).slice(0, 2).join(' ');
+      if (CLI_FLUSH_AFTER_RE.test(words)) {
+        const flushed = await cliExec(site, ['cache', 'flush']).then(r => r.code === 0).catch(() => false);
+        return `${out}\n\n[artivio] object cache ${flushed ? 'flushed' : 'flush FAILED'} so web requests (REST, MCP, visitors) see this change immediately.`;
+      }
+      return out;
     }
     case 'wp_mcp_tools': {
       const list = await mcpListTools(site);
@@ -370,12 +403,25 @@ async function execute(tool: string, args: Record<string, unknown>, tenantId: st
       const cmd = [
         `mkdir -p ${shellQuote(dir)}`,
         `chmod 700 ${shellQuote(dir)}`,
-        ['wp', `--path=${ssh.path}`, '--no-color', 'db', 'export', file, '--add-drop-table'].map(shellQuote).join(' '),
+        // --skip-plugins/--skip-themes: a dump needs no plugin code, and a
+        // plugin that fatals under CLI (exit 255, no message) must not block a
+        // backup. --no-tablespaces: MySQL 8 hosts (Hostinger) deny PROCESS to
+        // site users and mysqldump fails without it. (F1, 2026-09-06)
+        ['wp', `--path=${ssh.path}`, '--no-color', '--skip-plugins', '--skip-themes', 'db', 'export', file, '--add-drop-table', '--no-tablespaces'].map(shellQuote).join(' '),
         // Keep the newest 5 for this label.
         `ls -1t ${shellQuote(dir)}/${shellQuote(site.label)}-*.sql 2>/dev/null | tail -n +6 | xargs -r rm -f`,
         `ls -la ${shellQuote(file)}`,
       ].join(' && ');
-      const out = renderCli(await cliRaw(site, cmd), 'wp db export');
+      let out: string;
+      try {
+        out = renderCli(await cliRaw(site, cmd), 'wp db export');
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        throw new Error(
+          `${msg}\nDiagnose with wp_cli ["db","check"] and wp_cli ["db","export","-","--skip-plugins","--skip-themes","--no-tablespaces","--tables=wp_options"] (dumps one table to stdout). `
+          + 'If that works the folder is the problem; if it fails the message names the mysqldump error. Report it to the human; do not skip the snapshot silently.',
+        );
+      }
       return `Snapshot written: ${file}\n${out}\nRestore (human, over SSH): wp --path=${ssh.path} db import ${file}`;
     }
     case 'wp_content_list': {
@@ -561,6 +607,17 @@ export const wpSitesProvider: BuiltinProvider = {
     const { channel, write } = classify(tool, args);
     if (channel === 'meta') {
       return 'auto';
+    }
+    // F4: a hard-denied WP-CLI command (db drop, eval…) must never sit in a
+    // human's approval inbox waiting for a mis-click. Let it run — cliExec's
+    // assertArgsSafe refuses it before SSH with the platform-rule message, so
+    // "auto" here means "fail immediately with the reason", not "execute".
+    if (tool === 'wp_cli') {
+      try {
+        assertArgsSafe(normaliseArgv(args.args));
+      } catch {
+        return 'auto';
+      }
     }
     const site = await resolveSiteByLabel(tenantId, typeof args.site === 'string' ? args.site : undefined)
       // Unresolvable site → let the call run so the agent gets the helpful
