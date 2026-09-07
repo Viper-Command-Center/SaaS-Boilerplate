@@ -545,6 +545,30 @@ export const files = pgTable(
   t => [index('files_tenant_at_idx').on(t.tenantId, t.createdAt)],
 );
 
+// ─── Phase 37: operator playbooks ───────────────────────────────────────────
+// Platform-wide operating notes the OPERATOR edits without a deploy. Scope is
+// a built-in provider slug ("wp-sites"), a stdio catalog key ("stdio:diviops")
+// or "*" for every agent. Injected into the system prompt of every workspace
+// that has that provider enabled, right after the code-shipped guidance — the
+// code guidance is the tested floor, the playbook is the operator's layer.
+export const playbooks = pgTable(
+  'playbooks',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    scope: varchar('scope', { length: 80 }).notNull().default('*'),
+    title: text('title').notNull(),
+    body: text('body').notNull(),
+    enabled: boolean('enabled').notNull().default(true),
+    version: integer('version').notNull().default(1),
+    // Previous bodies, newest first, capped: [{ version, body, changedBy, changedAt }]
+    history: jsonb('history').notNull().default([]),
+    updatedBy: uuid('updated_by').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  t => [index('playbooks_scope_idx').on(t.scope, t.enabled)],
+);
+
 // ─── Phase 14: issue triage + escalation ────────────────────────────────────
 // When something breaks mid-conversation, three things must happen: the client
 // gets an honest message, the platform captures WHY (not a guess), and anything

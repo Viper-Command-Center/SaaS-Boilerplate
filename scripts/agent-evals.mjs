@@ -276,6 +276,11 @@ expect('src/libs/support/issues.ts', 'pgClean(', 'captureIssue must not fail for
 expect('src/libs/books/cover.ts', 'frontArtIsFinal', 'a finished front cover must be usable without text drawn over it');
 expect('src/libs/agent/loop.ts', 'handoff-', 'the exhaustion wrap-up must also be saved as a library note');
 
+// ── Phase 37 — operator playbooks: the operator's own guidance layer, no deploy.
+expect('src/libs/mcp/registry.ts', 'loadPlaybooksFor(guidanceByProvider.keys())', 'playbooks must be scoped by the same provider keys as the code guidance');
+expect('src/libs/agent/playbooks.ts', "console.error(`[playbooks] load failed", 'a playbook outage must never take chat down');
+expect('src/app/api/admin/playbooks/route.ts', "user?.isAdmin", 'playbooks are platform-admin only');
+
 // ── Report ──────────────────────────────────────────────────────────────────
 if (failures.length > 0) {
   console.error(`\n✗ agent-evals: ${failures.length} of ${checks} tripwires FAILED\n`);

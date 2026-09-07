@@ -6,6 +6,7 @@
 
 import type { PriceRule } from '@/libs/billing/meter';
 import { and, eq, inArray } from 'drizzle-orm';
+import { loadPlaybooksFor } from '@/libs/agent/playbooks';
 import { meterPlugin } from '@/libs/billing/meter';
 import { db } from '@/libs/DB';
 import { McpHttpClient } from '@/libs/mcp/client';
@@ -899,10 +900,15 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
     });
   }
 
+  // Phase 37: operator playbooks ride the same slot as the code guidance,
+  // scoped by the same provider keys, so a rule written in Admin → Playbooks
+  // reaches every workspace with that provider — no deploy.
+  const playbookText = await loadPlaybooksFor(guidanceByProvider.keys());
+
   return {
     anthropicTools,
     failedConnections,
-    connectionGuidance: [...guidanceByProvider.values()].join('\n\n'),
+    connectionGuidance: [...guidanceByProvider.values(), ...(playbookText ? [playbookText] : [])].join('\n\n'),
     deferredSummary,
     attachToolSink: (sink) => {
       toolSinks.push(sink);
