@@ -6,10 +6,11 @@
  * KDP rejects, not a thrown error.
  */
 
-import { PDFDocument } from 'pdf-lib';
+import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
 import sharp from 'sharp';
 import { describe, expect, it } from 'vitest';
 import { extractPdfImages } from '@/libs/docs/pdfImages';
+import { renderPdfPages } from '@/libs/docs/pdfRender';
 import { renderCover } from './cover';
 import { expandPages, renderInterior } from './interior';
 import { coverGeometry, parseTrim } from './kdp';
@@ -158,5 +159,52 @@ describe('extractPdfImages', () => {
     const meta = await sharp(r.images[0]!.bytes).metadata();
 
     expect(meta.width).toBe(300);
+  });
+});
+
+describe('renderPdfPages', () => {
+  it('keeps live text that image extraction would drop (a Canva-style page)', async () => {
+    const art = await fakeDrawing(300);
+    const doc = await PDFDocument.create();
+    const font = await doc.embedFont(StandardFonts.HelveticaBold);
+    const p = doc.addPage([400, 400]);
+    p.drawRectangle({ x: 0, y: 0, width: 400, height: 400, color: rgb(1, 1, 1) });
+    p.drawImage(await doc.embedPng(art), { x: 50, y: 20, width: 300, height: 300 });
+    // a caption as LIVE TEXT, in the top band where the image is not
+    p.drawText('GOOD MORNING', { x: 60, y: 360, size: 28, font, color: rgb(0, 0, 0) });
+    const bytes = Buffer.from(await doc.save());
+
+    const r = await renderPdfPages(bytes, { targetPx: 800 });
+
+    expect(r.pageCount).toBe(1);
+    expect(r.pages[0]!.width).toBe(800);
+    expect(r.pages[0]!.height).toBe(800);
+
+    // the caption band (top 10%) must contain dark pixels — the text survived
+    const band = await sharp(r.pages[0]!.png).extract({ left: 0, top: 40, width: 800, height: 60 }).grayscale().raw().toBuffer();
+    let dark = 0;
+    for (const v of band) {
+      if (v < 100) {
+        dark++;
+      }
+    }
+
+    expect(dark).toBeGreaterThan(200);
+
+    // and the same PDF through image extraction yields only the picture
+    const ex = await extractPdfImages(bytes);
+
+    expect(ex.images).toHaveLength(1);
+    expect(ex.images[0]!.width).toBe(300);
+  }, 30_000);
+
+  it('honours a page subset', async () => {
+    const doc = await PDFDocument.create();
+    doc.addPage([100, 100]);
+    doc.addPage([100, 100]);
+    doc.addPage([100, 100]);
+    const r = await renderPdfPages(Buffer.from(await doc.save()), { targetPx: 200, pages: [3, 1] });
+
+    expect(r.pages.map(p => p.page)).toEqual([3, 1]);
   });
 });

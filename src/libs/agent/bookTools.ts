@@ -29,6 +29,7 @@ import { coverGeometry, hasErrors, interiorPageIn, inToPx, pageLimits, parseTrim
 import { imageSize, prepareLineArt } from '@/libs/books/lineArt';
 import { createBook, deleteBook, listBooks, resolveBook, updateBook } from '@/libs/books/store';
 import { extractPdfImages } from '@/libs/docs/pdfImages';
+import { renderPdfPages } from '@/libs/docs/pdfRender';
 import { isPdf } from '@/libs/docs/pdfText';
 import { getFile, saveFile } from '@/libs/storage/files';
 import { getObject } from '@/libs/storage/r2';
@@ -164,7 +165,7 @@ export function buildBookTools(tenantId: string): {
     },
     {
       name: 'import_book_pages',
-      description: 'Bring existing artwork into a book from the library: a PDF (e.g. exported from Canva/Procreate — every page image is pulled out in order), or image files. For coloring books each page is cleaned to pure black/white line art automatically (set prepare:false to keep it untouched). Appends to the book in order and returns the new page files. This is how a book started elsewhere moves into the workspace: the user uploads the PDF on the Files page, then you call this.',
+      description: 'Bring existing artwork into a book from the library: a PDF (e.g. exported from Canva/Procreate) or image files. A PDF is RENDERED page by page at 300 dpi for this book\'s trim — titles, captions, frames and decorations that were live text in the design are kept (mode "render", the default). Use mode "extract" only when you want the bare embedded images without any overlaid text. Use `pages` to import a subset (e.g. skip a cover page: pages [3,4,5,…]). For coloring books each page is cleaned to pure black/white line art automatically (set prepare:false to keep it untouched). Appends to the book in order and returns the new page files. This is how a book started elsewhere moves into the workspace: the user uploads the PDF on the Files page, then you call this.',
       input_schema: {
         type: 'object',
         properties: {
@@ -172,6 +173,8 @@ export function buildBookTools(tenantId: string): {
           fileIds: { type: 'array', items: { type: 'string' }, description: 'Library ids of PDFs and/or images, in the order they should appear.' },
           prepare: { type: 'boolean', description: 'Run line-art cleanup (default: true for coloring books, false otherwise).' },
           threshold: { type: 'number', description: 'Line-art cut 1–254 (default 160). Raise it if faint lines vanish, lower it if grey shading survives.' },
+          mode: { type: 'string', enum: ['render', 'extract'], description: 'PDFs only. render (default) = rasterise whole pages, keeping text/frames. extract = pull out embedded images only.' },
+          pages: { type: 'array', items: { type: 'number' }, description: 'PDFs only: 1-based page numbers to import, in order. Omit for all pages.' },
         },
         required: ['book', 'fileIds'],
       },
@@ -719,7 +722,25 @@ export function buildBookTools(tenantId: string): {
 
       for (const id of ids) {
         const { row, bytes } = await loadBytes(id);
-        if (isPdf(row.name, row.mime)) {
+        if (isPdf(row.name, row.mime) && args.mode !== 'extract') {
+          // Render whole pages: a designed PDF (Canva) is image + live text, and
+          // only rendering keeps the text. Target = the longer side of the page
+          // box at 300 dpi, so the result is exactly print resolution.
+          const pageIn = interiorPageIn(book.trim, book.bleed);
+          const targetPx = inToPx(Math.max(pageIn.widthIn, pageIn.heightIn));
+          const wanted = Array.isArray(args.pages) ? args.pages.map(n => Math.round(Number(n))).filter(n => Number.isFinite(n) && n > 0) : undefined;
+          const { pages: rendered, skipped: sk, pageCount } = await renderPdfPages(bytes, { targetPx, pages: wanted, max: MAX_PAGES - counter });
+          if (rendered.length === 0) {
+            skipped.push({ fileId: id, name: row.name, reason: `could not render any page of this ${pageCount}-page PDF${sk.length ? ` (${sk[0]!.reason})` : ''}` });
+            continue;
+          }
+          for (const pg of rendered) {
+            await savePage(pg.png, 'image/png', 'png', `${row.name} p${pg.page}`, { importedFrom: row.id, sourceName: row.name, sourcePage: pg.page, rendered: true });
+          }
+          for (const s of sk) {
+            skipped.push({ fileId: id, name: row.name, page: s.page, reason: s.reason });
+          }
+        } else if (isPdf(row.name, row.mime)) {
           const { images, skipped: sk, pageCount } = await extractPdfImages(bytes, { max: MAX_PAGES - counter });
           if (images.length === 0) {
             skipped.push({ fileId: id, name: row.name, reason: `no extractable page images in this ${pageCount}-page PDF${sk.length ? ` (${sk[0]!.reason})` : ''} — if it was drawn as vectors, export it as PNG pages instead` });
