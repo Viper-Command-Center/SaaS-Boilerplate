@@ -289,6 +289,14 @@ expect('src/libs/plugins/wpSites.ts', '[\'post\', \'get\', String(id)', 'target 
 expect('src/libs/plugins/wpSites.ts', '\'media\', \'import\', remote, \'--porcelain\'', 'wp_upload_media must have the SFTP + wp media import route');
 expect('src/libs/plugins/wpSites.ts', '\'wp_oxygen_replace\'', 'rewrite-a-section must be one call (delete + insert), never two the agent can half-finish');
 
+// ── Phase 38 — hosted-MCP guards. Zernio accepted text-only Instagram posts
+// and wrong profileIds at create time and failed them at publish time, daily,
+// by email to the owner. The vendor's rules are enforced before the call.
+expect('src/libs/mcp/registry.ts', 'httpGuardFor({ id: conn.id, name: conn.name, url: conn.url })', 'hosted MCP connections must pass through httpGuardFor');
+expect('src/libs/mcp/registry.ts', 'guardSpec.guard(tool.name, args, readCall)', 'the guard runs before every hosted MCP call');
+expect('src/libs/mcp/httpGuards.ts', "ZERNIO_MEDIA_REQUIRED", 'media-required platforms must be refused up front for text-only posts');
+expect('src/libs/mcp/httpGuards.ts', "call('profiles-list', {})", 'profileId must be checked against the team\'s real profiles');
+
 // ── Report ──────────────────────────────────────────────────────────────────
 if (failures.length > 0) {
   console.error(`\n✗ agent-evals: ${failures.length} of ${checks} tripwires FAILED\n`);

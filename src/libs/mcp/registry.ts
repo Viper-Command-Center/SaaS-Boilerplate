@@ -10,6 +10,7 @@ import { loadPlaybooksFor } from '@/libs/agent/playbooks';
 import { meterPlugin } from '@/libs/billing/meter';
 import { db } from '@/libs/DB';
 import { McpHttpClient } from '@/libs/mcp/client';
+import { httpGuardFor } from '@/libs/mcp/httpGuards';
 import { getStdioServer } from '@/libs/mcp/stdioCatalog';
 import { acquireStdioClient } from '@/libs/mcp/stdioClient';
 import { getBuiltinProvider } from '@/libs/plugins';
@@ -762,6 +763,13 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
       const client = new McpHttpClient(url, safeHeaders);
       const tools = await client.listTools();
       const policyMap = (conn.toolPolicy ?? {}) as Record<string, ToolPolicy>;
+      // Phase 38: vendor-specific pre-flight for hosted servers (Zernio: media
+      // and profile checks a post would otherwise fail at publish time).
+      const guardSpec = httpGuardFor({ id: conn.id, name: conn.name, url: conn.url });
+      if (guardSpec) {
+        guidanceByProvider.set(guardSpec.guidanceKey, guardSpec.guidance);
+      }
+      const readCall = async (t: string, a: Record<string, unknown>) => flattenMcpContent((await client.callTool(t, a)).content);
 
       // A tier-1 HTTP plugin (our key, resold with markup) can carry priceRules
       // on its catalog entry. Load them so paid HTTP tools meter exactly like
@@ -810,12 +818,13 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
             // switches to say "I trust this vendor".
             policy: policyMap[tool.name] ?? policyMap['*'] ?? 'approval',
             call: async (args) => {
-              const result = await client.callTool(tool.name, args);
+              const guarded = guardSpec ? await guardSpec.guard(tool.name, args, readCall) : { args };
+              const result = await client.callTool(tool.name, guarded.args);
               const raw = flattenMcpContent(result.content);
               if (result.isError) {
                 // Errors stay verbatim and short — never spill one to a file the
                 // agent then has to go and open — but do say whose fault it is.
-                throw new Error(explainToolError(raw, tool.inputSchema, args));
+                throw new Error(explainToolError(raw, tool.inputSchema, guarded.args));
               }
               const text = await capToolOutput({
                 text: raw,
