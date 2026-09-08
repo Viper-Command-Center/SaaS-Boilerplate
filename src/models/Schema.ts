@@ -539,10 +539,13 @@ export const files = pgTable(
     textContent: text('text_content'),
     // Free-form: model, prompt, taskId, tags…
     meta: jsonb('meta'),
+    // Phase 40: one level of folders ("Halloween book"). NULL = root. A folder
+    // exists exactly when a file is in it — no folder table to keep in sync.
+    folder: text('folder'),
     createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  t => [index('files_tenant_at_idx').on(t.tenantId, t.createdAt)],
+  t => [index('files_tenant_at_idx').on(t.tenantId, t.createdAt), index('files_tenant_folder_idx').on(t.tenantId, t.folder)],
 );
 
 // ─── Phase 37: operator playbooks ───────────────────────────────────────────

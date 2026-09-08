@@ -18,7 +18,7 @@ import { renderDocument } from '@/libs/docs/pdf';
 import { extractPdfImages, MAX_PDF_IMAGES } from '@/libs/docs/pdfImages';
 import { extractPdfText, isPdf } from '@/libs/docs/pdfText';
 import { renderDeck } from '@/libs/docs/pptx';
-import { getFile, listFiles, removeFile, saveFile, saveRemoteFile, setFileText } from '@/libs/storage/files';
+import { getFile, listFiles, listFolders, moveFiles, removeFile, saveFile, saveRemoteFile, setFileText } from '@/libs/storage/files';
 import { getObject } from '@/libs/storage/r2';
 import { captureIssue } from '@/libs/support/issues';
 import { dashboardPanels, dashboardViews, datasets, scheduledTasks, tenants } from '@/models/Schema';
@@ -306,8 +306,21 @@ export function buildPlatformTools(tenantId: string): {
         properties: {
           kind: { type: 'string', description: 'Filter: knowledge | asset | note' },
           search: { type: 'string', description: 'Case-insensitive substring of the file name, e.g. "cover" or "page-18".' },
+          folder: { type: 'string', description: 'Only files in this folder (exact name, from the folders list). "/" = root only. Users organise their uploads into folders and will refer to them by name — "the upscaled images are in the Halloween book folder".' },
           limit: { type: 'number', description: 'Up to 1000 (default 200).' },
         },
+      },
+    },
+    {
+      name: 'move_files',
+      description: 'Move library files into a folder (created if new) or back to the root. Use it to organise what you produced — "put all 30 pages in the Halloween book folder" — or when the user asks you to tidy up. Pass full file ids from list_files.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          fileIds: { type: 'array', items: { type: 'string' } },
+          folder: { type: 'string', description: 'Target folder name; "" or "/" moves to the root.' },
+        },
+        required: ['fileIds', 'folder'],
       },
     },
     {
@@ -318,6 +331,7 @@ export function buildPlatformTools(tenantId: string): {
         properties: {
           fileId: { type: 'string', description: 'Library id of the .zip (from list_files).' },
           namePrefix: { type: 'string', description: 'Optional stem prepended to each extracted file name.' },
+          folder: { type: 'string', description: 'Folder to unpack into (default: a folder named after the zip).' },
         },
         required: ['fileId'],
       },
@@ -355,6 +369,7 @@ export function buildPlatformTools(tenantId: string): {
         properties: {
           name: { type: 'string', description: 'Filename, e.g. "wordpress-migration-plan.md"' },
           content: { type: 'string' },
+          folder: { type: 'string', description: 'Library folder to save into (e.g. "Halloween book"). Created if it does not exist; omit for the root.' },
         },
         required: ['name', 'content'],
       },
@@ -458,6 +473,7 @@ export function buildPlatformTools(tenantId: string): {
         properties: {
           url: { type: 'string', description: 'Public http(s) URL of the file to fetch.' },
           name: { type: 'string', description: 'Filename to save it as, with extension, e.g. "budgetsmart-qr-emerald.png".' },
+          folder: { type: 'string', description: 'Library folder to save into (e.g. "Halloween book"). Created if it does not exist; omit for the root.' },
         },
         required: ['url', 'name'],
       },
@@ -921,11 +937,21 @@ export function buildPlatformTools(tenantId: string): {
     call: async (args) => {
       const limit = Math.min(Math.max(Number(args.limit) || 200, 1), 1000);
       const search = String(args.search ?? '').trim().toLowerCase();
+      const folderArg = args.folder === undefined ? null : String(args.folder).trim();
+      const folders = await listFolders(tenantId);
       // Filter server-side-ish: fetch a wide window when searching so a
       // 400-file library (a book import) can still find "cover".
       const rows = await listFiles(tenantId, search ? 5000 : limit);
       const kind = args.kind ? String(args.kind) : null;
-      const all = rows.filter(r => (!kind || r.kind === kind) && (!search || r.name.toLowerCase().includes(search)));
+      const inFolder = (r: { folder: string | null }) => folderArg === null
+        ? true
+        : folderArg === '/' || folderArg === ''
+          ? r.folder === null
+          : (r.folder ?? '').toLowerCase() === folderArg.toLowerCase();
+      if (folderArg && folderArg !== '/' && !folders.some(f => f.toLowerCase() === folderArg.toLowerCase())) {
+        return `No folder named "${folderArg}". Folders in this workspace: ${folders.length ? folders.join(', ') : '(none)'}.`;
+      }
+      const all = rows.filter(r => (!kind || r.kind === kind) && (!search || r.name.toLowerCase().includes(search)) && inFolder(r));
       const filtered = all.slice(0, limit);
       if (filtered.length === 0) {
         return search || kind
@@ -933,10 +959,12 @@ export function buildPlatformTools(tenantId: string): {
           : 'The workspace file library is empty. The client can upload briefs and documents on the Files page.';
       }
       const truncated = all.length > filtered.length || (!search && rows.length >= limit);
-      const head = truncated ? `[showing ${filtered.length} of ${all.length}${!search && rows.length >= limit ? '+' : ''} — pass search:"<part of the name>" or a higher limit to see the rest]\n` : '';
+      const head = (folders.length && folderArg === null ? `[folders: ${folders.join(', ')} — pass folder:"<name>" to list one]\n` : '')
+        + (truncated ? `[showing ${filtered.length} of ${all.length}${!search && rows.length >= limit ? '+' : ''} — pass search:"<part of the name>" or a higher limit to see the rest]\n` : '');
       return head + JSON.stringify(filtered.map(f => ({
         id: f.id,
         name: f.name,
+        folder: f.folder ?? undefined,
         kind: f.kind,
         mime: f.mime,
         sizeKb: Math.round(f.sizeBytes / 1024),
@@ -1118,8 +1146,23 @@ export function buildPlatformTools(tenantId: string): {
         mime: 'text/markdown',
         kind: 'note',
         source: 'agent',
+        folder: args.folder ? String(args.folder) : null,
       });
-      return `Saved "${row?.name}" to the workspace library (id ${row?.id}).`;
+      return `Saved "${row?.name}" to the workspace library (id ${row?.id}${row?.folder ? `, folder "${row.folder}"` : ''}).`;
+    },
+  });
+
+  executors.set('move_files', {
+    policy: 'auto',
+    call: async (args) => {
+      const ids = Array.isArray(args.fileIds) ? args.fileIds.map(String).map(s => s.trim()).filter(Boolean).slice(0, 500) : [];
+      if (ids.length === 0) {
+        throw new Error('move_files: pass fileIds (full UUIDs from list_files).');
+      }
+      const raw = String(args.folder ?? '').trim();
+      const folder = raw === '' || raw === '/' ? null : raw;
+      const moved = await moveFiles(tenantId, ids, folder);
+      return JSON.stringify({ moved, notFound: ids.length - moved, folder: folder ?? '(root)', folders: await listFolders(tenantId) });
     },
   });
 
@@ -1259,6 +1302,7 @@ export function buildPlatformTools(tenantId: string): {
           mime,
           kind: isMedia ? 'asset' : 'knowledge',
           source: 'agent',
+          folder: args.folder ? String(args.folder) : row.name.replace(/\.zip$/i, ''),
           meta: { from: row.id, archive: row.name, path: entry.name },
         });
         if (out) {
@@ -1306,6 +1350,7 @@ export function buildPlatformTools(tenantId: string): {
         url: url.toString(),
         name,
         source: 'agent',
+        folder: args.folder ? String(args.folder) : null,
       });
 
       return JSON.stringify({

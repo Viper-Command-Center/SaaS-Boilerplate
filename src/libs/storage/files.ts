@@ -11,7 +11,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull } from 'drizzle-orm';
 import { db } from '@/libs/DB';
 import { extractOfficeText, isOfficeDoc } from '@/libs/docs/officeText';
 import { extractPdfText, isPdf } from '@/libs/docs/pdfText';
@@ -120,6 +120,7 @@ export async function confirmUpload(a: {
   name: string;
   mime?: string;
   createdBy?: string;
+  folder?: string | null;
 }) {
   // The key must be inside this tenant's prefix — never trust the client's.
   if (!a.key.startsWith(`tenants/${a.tenantId}/`)) {
@@ -187,6 +188,7 @@ export async function confirmUpload(a: {
       source: 'upload',
       textContent: text,
       meta: {},
+      folder: normaliseFolder(a.folder),
       createdBy: a.createdBy,
     })
     .returning();
@@ -202,7 +204,18 @@ export type SaveInput = {
   source?: string;
   meta?: Record<string, unknown>;
   createdBy?: string;
+  /** Library folder (one level). Omit/null = root. */
+  folder?: string | null;
 };
+
+/** Folder names: trimmed, no slashes, ≤ 80 chars; '' → null (root). */
+export function normaliseFolder(raw: unknown): string | null {
+  if (raw === undefined || raw === null) {
+    return null;
+  }
+  const s = String(raw).replace(/[\\/]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80);
+  return s || null;
+}
 
 /**
  * Postgres rejects a NUL byte in text and jsonb ("invalid byte sequence for
@@ -274,6 +287,7 @@ export async function saveFile(input: SaveInput) {
     source: (input.source ?? 'upload').slice(0, 40),
     textContent: pgSafeText(text),
     meta: input.meta ?? {},
+    folder: normaliseFolder(input.folder),
     createdBy: input.createdBy,
   };
   try {
@@ -365,6 +379,7 @@ export async function saveRemoteFile(a: {
   source?: string;
   createdBy?: string;
   meta?: Record<string, unknown>;
+  folder?: string | null;
 }) {
   if (!storageConfigured()) {
     throw new Error('File storage is not configured (R2_* variables missing).');
@@ -396,6 +411,7 @@ export async function saveRemoteFile(a: {
       publicUrl: publicUrlFor(key),
       source: (a.source ?? 'agent').slice(0, 40),
       meta: { ...(a.meta ?? {}), sourceUrl: a.url },
+      folder: normaliseFolder(a.folder),
       createdBy: a.createdBy,
     })
     .returning();
@@ -413,6 +429,7 @@ export async function listFiles(tenantId: string, limit = 100) {
       publicUrl: files.publicUrl,
       source: files.source,
       meta: files.meta,
+      folder: files.folder,
       createdAt: files.createdAt,
       hasText: files.textContent,
     })
@@ -420,6 +437,29 @@ export async function listFiles(tenantId: string, limit = 100) {
     .where(eq(files.tenantId, tenantId))
     .orderBy(desc(files.createdAt))
     .limit(limit);
+}
+
+/** Distinct folder names in a workspace (a folder exists when a file is in it). */
+export async function listFolders(tenantId: string): Promise<string[]> {
+  const rows = await db
+    .selectDistinct({ folder: files.folder })
+    .from(files)
+    .where(and(eq(files.tenantId, tenantId), isNotNull(files.folder)));
+  return rows.map(r => r.folder!).filter(Boolean).sort((a, b) => a.localeCompare(b));
+}
+
+/** Move files into a folder (null = root). Tenant-scoped; ids from other workspaces are ignored. Returns the count moved. */
+export async function moveFiles(tenantId: string, ids: string[], folder: string | null): Promise<number> {
+  const valid = ids.filter(id => isUuid(id));
+  if (valid.length === 0) {
+    return 0;
+  }
+  const moved = await db
+    .update(files)
+    .set({ folder: normaliseFolder(folder) })
+    .where(and(eq(files.tenantId, tenantId), inArray(files.id, valid)))
+    .returning({ id: files.id });
+  return moved.length;
 }
 
 /**

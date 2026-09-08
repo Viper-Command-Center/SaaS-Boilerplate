@@ -13,7 +13,10 @@ type Item = {
   source: string;
   hasText: boolean;
   createdAt: string;
+  folder: string | null;
 };
+
+const ROOT = '';
 
 const KB = 1024;
 const GB = KB * KB * KB;
@@ -46,6 +49,13 @@ export const FileLibrary = (props: { tenantSlug: string; canWrite: boolean }) =>
   // 30 on disk. Selection → one zip, or one bulk delete.
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [zipping, setZipping] = useState(false);
+  // Folders (Phase 40): one level, a folder exists when a file is in it. The
+  // current folder scopes the list, the upload and "select all"; a folder the
+  // user just created (still empty) lives in `draftFolders` until a file lands.
+  const [folders, setFolders] = useState<string[]>([]);
+  const [draftFolders, setDraftFolders] = useState<string[]>([]);
+  const [folder, setFolder] = useState<string | null>(null); // null = everything, ROOT = unfiled only
+  const [moving, setMoving] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const reload = useCallback(() => {
@@ -53,6 +63,7 @@ export const FileLibrary = (props: { tenantSlug: string; canWrite: boolean }) =>
       .then(r => (r.ok ? r.json() : { files: [] }))
       .then((d) => {
         setItems(d.files ?? []);
+        setFolders(d.folders ?? []);
         setConfigured(d.storageConfigured !== false);
       })
       .catch(() => {});
@@ -102,7 +113,8 @@ export const FileLibrary = (props: { tenantSlug: string; canWrite: boolean }) =>
 
         // 1. reserve a key + presigned URL
 
-        const startRes = await fetch(`/api/files/upload?tenant=${tenant}`, {
+        const folderQs = folder ? `&folder=${encodeURIComponent(folder)}` : '';
+        const startRes = await fetch(`/api/files/upload?tenant=${tenant}${folderQs}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ name: file.name, sizeBytes: file.size }),
@@ -119,7 +131,7 @@ export const FileLibrary = (props: { tenantSlug: string; canWrite: boolean }) =>
 
         // 3. index it (HEAD proves it landed)
 
-        const doneRes = await fetch(`/api/files/upload?tenant=${tenant}`, {
+        const doneRes = await fetch(`/api/files/upload?tenant=${tenant}${folderQs}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ key: start.key, name: file.name, mime: file.type }),
@@ -154,7 +166,11 @@ export const FileLibrary = (props: { tenantSlug: string; canWrite: boolean }) =>
     reload();
   };
 
-  const shown = items.filter(i => (tab === 'all' ? true : tab === 'asset' ? i.kind === 'asset' : i.kind !== 'asset'));
+  const shown = items
+    .filter(i => (tab === 'all' ? true : tab === 'asset' ? i.kind === 'asset' : i.kind !== 'asset'))
+    .filter(i => (folder === null ? true : folder === ROOT ? i.folder === null : i.folder === folder));
+  const allFolders = [...new Set([...folders, ...draftFolders])].sort((a, b) => a.localeCompare(b));
+  const countIn = (f: string | null) => items.filter(i => (f === ROOT ? i.folder === null : i.folder === f)).length;
   const tenant = encodeURIComponent(props.tenantSlug);
   const contentUrl = (f: Item, download = false) => `/api/files/${f.id}/content?tenant=${tenant}${download ? '&download=1' : ''}`;
   const shownSelected = shown.filter(f => selected.has(f.id));
@@ -219,6 +235,41 @@ export const FileLibrary = (props: { tenantSlug: string; canWrite: boolean }) =>
     } finally {
       setZipping(false);
     }
+  };
+
+  const createFolder = () => {
+    // eslint-disable-next-line no-alert
+    const name = window.prompt('Folder name (e.g. "Halloween book"):')?.replace(/[\\/]+/g, ' ').trim().slice(0, 80);
+    if (!name) {
+      return;
+    }
+    const existing = allFolders.find(f => f.toLowerCase() === name.toLowerCase());
+    if (!existing) {
+      setDraftFolders(prev => [...prev, name]);
+    }
+    setFolder(existing ?? name);
+    setSelected(new Set());
+  };
+
+  const moveSelected = async (target: string | null) => {
+    const ids = shownSelected.map(f => f.id);
+    if (ids.length === 0) {
+      return;
+    }
+    setMoving(true);
+    setError(null);
+    const res = await fetch(`/api/files?tenant=${tenant}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids, folder: target }),
+    }).catch(() => null);
+    setMoving(false);
+    if (!res?.ok) {
+      setError('Could not move the files.');
+      return;
+    }
+    setSelected(new Set());
+    reload();
   };
 
   const removeSelected = async () => {
@@ -321,6 +372,54 @@ export const FileLibrary = (props: { tenantSlug: string; canWrite: boolean }) =>
 
       {error && <p className="text-sm text-rose-400" role="alert">{error}</p>}
 
+      <div className="flex flex-wrap items-center gap-1.5 text-xs">
+        {([
+          { key: null, label: `All files (${items.length})` },
+          { key: ROOT, label: `Unfiled (${countIn(ROOT)})` },
+          ...allFolders.map(f => ({ key: f, label: `📁 ${f} (${countIn(f)})` })),
+        ] as Array<{ key: string | null; label: string }>).map(x => (
+          <button
+            key={x.key ?? '__all'}
+            type="button"
+            onClick={() => {
+              setFolder(x.key);
+              setSelected(new Set());
+            }}
+            className={`
+              rounded-lg px-2.5 py-1
+              ${folder === x.key
+            ? `bg-white/12 text-white`
+            : `
+              text-white/55
+              hover:bg-white/5
+            `}
+            `}
+          >
+            {x.label}
+          </button>
+        ))}
+        {props.canWrite && (
+          <button
+            type="button"
+            onClick={createFolder}
+            className="
+              rounded-lg border border-dashed border-white/15 px-2.5 py-1
+              text-white/55
+              hover:bg-white/5
+            "
+          >
+            + New folder
+          </button>
+        )}
+        {folder && (
+          <span className="ml-auto text-white/35">
+            Uploads go into “
+            {folder}
+            ”
+          </span>
+        )}
+      </div>
+
       {shown.length > 0 && (
         <div className="
           flex flex-wrap items-center gap-3 px-1 text-xs text-white/60
@@ -343,9 +442,39 @@ export const FileLibrary = (props: { tenantSlug: string; canWrite: boolean }) =>
                 {zipping ? 'Preparing zip…' : shownSelected.length === 1 ? 'Download' : `Download ${shownSelected.length} as zip`}
               </Button>
               {props.canWrite && (
-                <Button size="sm" variant="outline" disabled={busy} onClick={removeSelected}>
-                  Delete selected
-                </Button>
+                <>
+                  <select
+                    aria-label="Move selected files to folder"
+                    className="
+                      rounded-md border border-white/12 bg-white/5 px-2 py-1
+                      text-xs text-white/80
+                    "
+                    value=""
+                    disabled={moving}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      if (v === '__root') {
+                        moveSelected(null);
+                      } else if (v === '__new') {
+                        // eslint-disable-next-line no-alert
+                        const name = window.prompt('New folder name:')?.trim().slice(0, 80);
+                        if (name) {
+                          moveSelected(name);
+                        }
+                      } else if (v) {
+                        moveSelected(v);
+                      }
+                    }}
+                  >
+                    <option value="">{moving ? 'Moving…' : 'Move to…'}</option>
+                    <option value="__root">Unfiled (root)</option>
+                    {allFolders.map(f => <option key={f} value={f}>{f}</option>)}
+                    <option value="__new">+ New folder…</option>
+                  </select>
+                  <Button size="sm" variant="outline" disabled={busy} onClick={removeSelected}>
+                    Delete selected
+                  </Button>
+                </>
               )}
             </>
           )}
@@ -408,6 +537,17 @@ export const FileLibrary = (props: { tenantSlug: string; canWrite: boolean }) =>
                       "
                       >
                         {f.source}
+                      </span>
+                    )}
+                    {folder === null && f.folder && (
+                      <span className="
+                        rounded-sm bg-white/8 px-1.5 py-0.5 text-[10px]
+                        text-white/55
+                      "
+                      >
+                        📁
+                        {' '}
+                        {f.folder}
                       </span>
                     )}
                     {f.hasText && (

@@ -670,6 +670,14 @@ Ryan: "the agent creates 30 pages and I need all of them; the only options are O
 - Route files must export only Next handler names — helpers live in `src/libs/storage/zip.ts`; `PlaybookInput` in the playbooks route was un-exported for the same reason (build passed either way; hygiene). `next build` run in the cloud clone: clean.
 - 2 unit tests (name dedupe; promise-backed streaming round-trip). UNTESTED in a browser: the selection bar layout and the blob download in Chrome/Edge.
 
+## Phase 40 — Library folders, for people AND agents (2026-09-08, migration 0023, no new deps)
+Ryan: "I want to tell the agent all the upscaled images are in the Halloween book folder." Both halves ship together — a folder the agent cannot address is decoration.
+- Model: `files.folder text NULL` (one level, ≤80 chars, no slashes — `normaliseFolder`), index (tenant, folder). **A folder exists exactly when a file is in it**; no folder table to keep in sync. An empty folder the user just created lives only in the page's `draftFolders` until an upload lands in it.
+- API: `GET /api/files` returns `folders[]` + `folder` per file; `PATCH /api/files?tenant= { ids, folder|null }` moves (editors); both upload routes accept `?folder=`.
+- UI (`FileLibrary.tsx`): folder bar (All / Unfiled / 📁 each folder, with counts) + "New folder"; the current folder scopes the list, Select-all, and uploads ("Uploads go into …"); selection bar gains "Move to…" (existing folder, root, or new). Folder chip on rows in the All view.
+- Agent: `list_files` gets `folder` (exact name; `/` = root) and, with no folder given, prefixes the result with `[folders: …]`; an unknown folder name answers with the real list instead of an empty result. New `move_files {fileIds, folder}`. `folder` on `save_note`, `save_file_from_url`; `unpack_archive` defaults to a folder named after the zip. `prompt.ts` explains the convention (list by folder; save a project's output into its folder).
+- Verified: 23→24 migrations apply on blank Postgres 16 and re-run as a no-op; DB-backed test proved `moveFiles` is tenant-scoped (a foreign file id is ignored) and `listFolders` is distinct+sorted. Unit 325/325, tripwires 112. UNTESTED in a browser: the folder bar and the Move-to select.
+
 ## Gotchas
 - **Migration 0010 was hand-written** (SQL + `_journal.json`), because bash reads of the mounted repo are stale/truncated so drizzle-kit can't see the real `Schema.ts`. The SQL is idempotent (`IF NOT EXISTS` + `DO $$ … EXCEPTION WHEN duplicate_object`). If drizzle-kit ever regenerates from the last snapshot it may re-emit `files` — harmless, but delete the dupe.
 - **Bash cannot read mounted files reliably** (virtiofs returns NUL-padded or truncated content — `Schema.ts` read as 1KB when it's 15KB). Never typecheck/build/patch from bash on the mount; use Read/Grep/Edit/Write tools.

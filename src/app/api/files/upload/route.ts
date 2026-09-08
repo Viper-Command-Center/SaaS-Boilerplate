@@ -110,6 +110,7 @@ export async function PUT(request: Request) {
       name: body.name,
       mime: body.mime,
       createdBy: ctx.user.id,
+      folder: new URL(request.url).searchParams.get('folder'),
     });
     return NextResponse.json({ ok: true, file: { id: row?.id, name: row?.name } });
   } catch (err) {

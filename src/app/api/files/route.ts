@@ -11,7 +11,7 @@
 
 import { NextResponse } from 'next/server';
 import { getCurrentUser } from '@/libs/auth/session';
-import { listFiles, removeFile, saveFile } from '@/libs/storage/files';
+import { listFiles, listFolders, moveFiles, removeFile, saveFile } from '@/libs/storage/files';
 import { storageConfigured } from '@/libs/storage/r2';
 import { getUserTenants } from '@/libs/tenants';
 
@@ -46,8 +46,33 @@ export async function GET(request: Request) {
   const rows = await listFiles(tenant.id);
   return NextResponse.json({
     storageConfigured: storageConfigured(),
+    folders: await listFolders(tenant.id),
     files: rows.map(f => ({ ...f, hasText: Boolean(f.hasText) })),
   });
+}
+
+/**
+ * PATCH /api/files?tenant=<slug>  { ids: string[], folder: string | null }
+ * Move files into a folder (null → root). Editors only.
+ */
+export async function PATCH(request: Request) {
+  const user = await getCurrentUser();
+  if (!user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+  const slug = new URL(request.url).searchParams.get('tenant') ?? '';
+  const tenant = await resolveTenant(user.id, user.isAdmin, slug, true);
+  if (!tenant) {
+    return NextResponse.json({ error: 'You need editor access to move files.' }, { status: 403 });
+  }
+  const body = await request.json().catch(() => null) as { ids?: unknown; folder?: unknown } | null;
+  const ids = Array.isArray(body?.ids) ? body!.ids.map(String).slice(0, 500) : [];
+  if (ids.length === 0) {
+    return NextResponse.json({ error: 'Pass ids.' }, { status: 400 });
+  }
+  const folder = body?.folder === null || body?.folder === undefined ? null : String(body.folder);
+  const moved = await moveFiles(tenant.id, ids, folder);
+  return NextResponse.json({ ok: true, moved, folders: await listFolders(tenant.id) });
 }
 
 export async function POST(request: Request) {
@@ -109,6 +134,7 @@ export async function POST(request: Request) {
       // private (served through /api/files/<id>/content with a membership check).
       kind: /^(?:image|video|audio)\//.test(file.type) ? 'asset' : 'knowledge',
       source: 'upload',
+      folder: new URL(request.url).searchParams.get('folder'),
       createdBy: user.id,
     });
     return NextResponse.json({ ok: true, file: { id: row?.id, name: row?.name } });
