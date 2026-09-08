@@ -23,6 +23,7 @@
 import type { BlockMessage } from '@/libs/agent/anthropic';
 import type { TenantToolset, ToolResultRich } from '@/libs/mcp/registry';
 import { callClaudeWithTools } from '@/libs/agent/anthropic';
+import { detectFabricatedCalls, fabricationNudge } from '@/libs/agent/fabricatedCalls';
 import { checkSpend, meterLlm } from '@/libs/billing/meter';
 import { db } from '@/libs/DB';
 import { saveFile } from '@/libs/storage/files';
@@ -126,6 +127,8 @@ export async function runToolLoop(a: {
   let exhausted = false;
   // Consecutive max_tokens truncations — see the recovery block below.
   let truncations = 0;
+  // Consecutive replies that narrated tool calls instead of making them.
+  let fabrications = 0;
   // The tool executed on the PREVIOUS iteration (null on the first). Surfaced
   // to the activeTurns registry via onProgress so a refreshed page can show
   // what the agent is doing right now.
@@ -188,11 +191,31 @@ export async function runToolLoop(a: {
     }
 
     const textBlocks = response.content.filter(b => b.type === 'text');
-    for (const block of textBlocks) {
-      if (block.text) {
-        finalText += (finalText ? '\n' : '') + block.text;
-        a.onDelta(block.text);
+    const realCallNames = response.content.filter(b => b.type === 'tool_use').map(b => b.name ?? '');
+    // ── Fabricated tool calls (Phase 42) ─────────────────────────────────────
+    // "[tool] calling X…" is OUR annotation for a real call. A model that
+    // writes it in its own text ran nothing (Theo, BBI, 2026-09-08: two turns,
+    // ~25 narrated calls, zero executed). Strip the lines, and when no real
+    // tool_use came with them, send the model back to make the call.
+    const rawText = textBlocks.map(b => b.text ?? '').filter(Boolean).join('\n');
+    const fab = rawText ? detectFabricatedCalls(rawText, realCallNames) : null;
+    const shownText = fab ? fab.cleaned : rawText;
+    if (shownText) {
+      finalText += (finalText ? '\n' : '') + shownText;
+      a.onDelta(shownText);
+    }
+    if (fab && fab.names.length > 0 && realCallNames.length === 0 && response.stop_reason !== 'max_tokens') {
+      fabrications += 1;
+      await audit(a.tenantId, 'loop.fabricated_calls', 'runToolLoop', { iteration: i, names: fab.names.slice(0, 12) });
+      if (fabrications >= 3) {
+        const msg = '\n\n[platform] The agent described tool calls as text three times without actually calling any tool. Nothing it described in those replies was executed. Ask it to do the work again, one step at a time.';
+        a.onDelta(msg);
+        finalText += msg;
+        break;
       }
+      messages.push({ role: 'assistant', content: [{ type: 'text', text: shownText || '(no text)' }] });
+      messages.push({ role: 'user', content: fabricationNudge(fab.names) });
+      continue;
     }
 
     // ── Output-limit truncation (the "announced a mission, never created it"

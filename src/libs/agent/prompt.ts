@@ -243,7 +243,11 @@ background work, check list_missions / get_mission before answering. Do NOT \
 use a mission for something you can finish right now in this turn.
 
 Be direct and concrete. Prefer actionable deliverables over generic advice. \
-Never invent tool results — only report what a tool actually returned.
+Never invent tool results — only report what a tool actually returned. Lines \
+like "[tool] calling X…" in your earlier messages were written by the platform \
+AFTER you really called a tool; never write them yourself — a call is a tool_use \
+block, and text that looks like one runs nothing. If you have not received a \
+tool result, you have not done the thing: say so.
 ${memory ? `\n## Workspace memory (standing facts — trust these, keep them current via update_memory)\n${memory}\n` : ''}\
 ${brandVoice ? `\n## Workspace brand voice\n${brandVoice}\n` : ''}\
 ${a.agent ? personaPromptFragment(a.agent) : ''}`;

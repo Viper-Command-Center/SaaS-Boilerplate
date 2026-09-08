@@ -313,6 +313,15 @@ expect('src/libs/plugins/wpSites.ts', '[\'option\', \'get\', \'blogname\']).catc
 
 forbid('src/libs/plugins/wpSites.ts', 'wp-content/uploads/', 'uploads is never a write target for code (binary assets go through wp_upload_media)');
 
+// ── Phase 42 — fabricated tool calls. "[tool] calling X…" is the platform's
+// annotation for a REAL call; a model that writes it ran nothing (Theo, BBI,
+// 2026-09-08: ~25 narrated calls across two turns, zero executed, "verified
+// in the database" included).
+expect('src/libs/agent/loop.ts', 'detectFabricatedCalls(rawText, realCallNames)', 'every reply is checked for written-as-text tool calls before it reaches the user');
+expect('src/libs/agent/loop.ts', '\'loop.fabricated_calls\'', 'a fabrication is audited, not silently cleaned');
+expect('src/libs/agent/loop.ts', 'fabricationNudge(fab.names)', 'the model is sent back to make the real call');
+expect('src/libs/agent/prompt.ts', 'never write them yourself', 'the system prompt names the marker as platform-written');
+
 // ── Report ──────────────────────────────────────────────────────────────────
 if (failures.length > 0) {
   console.error(`\n✗ agent-evals: ${failures.length} of ${checks} tripwires FAILED\n`);
