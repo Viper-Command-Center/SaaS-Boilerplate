@@ -329,6 +329,8 @@ export async function replaceSiteSecret(tenantId: string, id: string, secret: st
 }
 
 export type Discovered = {
+  /** Set when the test found the site redirects http→https on the same host: the URL to store from now on. */
+  siteUrl?: string;
   mcpEndpointUrl?: string | null;
   wpVersion?: string | null;
   phpVersion?: string | null;
@@ -341,6 +343,7 @@ export type Discovered = {
 
 export async function storeTestResult(tenantId: string, id: string, discovered: Discovered, report: TestReport): Promise<void> {
   await db.update(wpSites).set({
+    ...(discovered.siteUrl !== undefined ? { siteUrl: discovered.siteUrl } : {}),
     ...(discovered.mcpEndpointUrl !== undefined ? { mcpEndpointUrl: discovered.mcpEndpointUrl } : {}),
     ...(discovered.wpVersion !== undefined ? { wpVersion: discovered.wpVersion } : {}),
     ...(discovered.phpVersion !== undefined ? { phpVersion: discovered.phpVersion } : {}),

@@ -659,6 +659,9 @@ Ryan gets a Zernio failure email every day: "Instagram posts require media" / Pr
 - Not fixed by code: posts ALREADY queued in Zernio with the bad shape keep failing until Max deletes/recreates them (posts-update does not attach media), and any scheduled task prompt that creates posts needs the rule in its own text. Ops note sent to Ryan.
 - 4 tripwires (108). 6 unit tests. UNTESTED live: the guard against the real Zernio server (profiles-list output shape is scraped for 24-hex ids, so any shape works; a listing failure never blocks).
 
+## Phase 38.1 — Site test upgrades http→https itself (2026-09-08)
+BBI: site entered as `http://bbi-argentina.artivio.ai`, `/wp-json/` answered 301 → https, and the report said "check DNS, TLS, maintenance mode" — a wrong diagnosis for a right refusal (requests never follow redirects, so an Authorization header cannot travel to a host the owner did not name). `httpsUpgradeOf` (discovery.ts, exported, tested): a 3xx to the SAME host over https is a scheme upgrade — the test re-runs against https, stores the https URL (`Discovered.siteUrl` → `storeTestResult`), and adds a "Site URL" row saying so. A redirect anywhere else stays a failure, now with the Location shown and the hint "enter the URL exactly as Settings → General shows it".
+
 ## Gotchas
 - **Migration 0010 was hand-written** (SQL + `_journal.json`), because bash reads of the mounted repo are stale/truncated so drizzle-kit can't see the real `Schema.ts`. The SQL is idempotent (`IF NOT EXISTS` + `DO $$ … EXCEPTION WHEN duplicate_object`). If drizzle-kit ever regenerates from the last snapshot it may re-emit `files` — harmless, but delete the dupe.
 - **Bash cannot read mounted files reliably** (virtiofs returns NUL-padded or truncated content — `Schema.ts` read as 1KB when it's 15KB). Never typecheck/build/patch from bash on the mount; use Read/Grep/Edit/Write tools.

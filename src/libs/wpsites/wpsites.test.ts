@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mcpArgs, normaliseArgv, wpSitesProvider } from '@/libs/plugins/wpSites';
 import { buildAuthHeader, LABEL_RE, maskSecret, normaliseLabel, normaliseSecret, normaliseSiteUrl } from '@/libs/wpsites/auth';
 import { MAX_REST_BODY, resolveRoute, restRequest } from '@/libs/wpsites/channels';
-import { compareVersions, detectBuilder, findMcpRoute } from '@/libs/wpsites/discovery';
+import { compareVersions, detectBuilder, findMcpRoute, httpsUpgradeOf } from '@/libs/wpsites/discovery';
 import { parseProvisioningPayload } from '@/libs/wpsites/legacy';
 import { pickPluginZip } from '@/libs/wpsites/pluginZip';
 import { cliIsWrite, restIsWrite, serialisedForSite, toToolPolicy } from '@/libs/wpsites/policy';
@@ -360,5 +360,14 @@ describe('Noah v2 report (2026-09-08)', () => {
   it('guidance no longer tells the agent a header template is "not a page or post" — CPTs are edited like pages', () => {
     expect(wpSitesProvider.guidance).toMatch(/oxygen_header, oxygen_footer, oxygen_template/);
     expect(wpSitesProvider.guidance).toMatch(/wp_oxygen_replace/);
+  });
+});
+
+describe('http→https upgrade (BBI, 2026-09-08)', () => {
+  it('upgrades a same-host https redirect and nothing else', () => {
+    expect(httpsUpgradeOf('http://bbi-argentina.artivio.ai', 301, 'https://bbi-argentina.artivio.ai/wp-json/')).toBe('https://bbi-argentina.artivio.ai');
+    expect(httpsUpgradeOf('http://a.example', 301, 'https://b.example/wp-json/')).toBeNull();
+    expect(httpsUpgradeOf('https://a.example', 301, 'https://a.example/x')).toBeNull();
+    expect(httpsUpgradeOf('http://a.example', 200, undefined)).toBeNull();
   });
 });

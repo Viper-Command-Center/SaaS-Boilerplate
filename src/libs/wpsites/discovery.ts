@@ -155,11 +155,47 @@ export function compareVersions(a: string, b: string): number {
 
 // ─── The checks ──────────────────────────────────────────────────────────────
 
+/**
+ * http → https on the SAME host is a scheme upgrade, not a failure. Requests
+ * never follow redirects (an Authorization header must not travel to a host
+ * the owner did not name), so the test upgrades the stored URL itself and
+ * says so. BBI (2026-09-08): site entered as http://, /wp-json/ answered 301,
+ * report said "check DNS, TLS, maintenance mode" — none of which was wrong.
+ */
+export function httpsUpgradeOf(siteUrl: string, status: number, location: string | undefined): string | null {
+  if (![301, 302, 307, 308].includes(status) || !location) {
+    return null;
+  }
+  try {
+    const from = new URL(siteUrl);
+    const to = new URL(location, siteUrl);
+    if (from.protocol === 'http:' && to.protocol === 'https:' && to.hostname === from.hostname) {
+      return `https://${to.host}`;
+    }
+  } catch { /* not a URL */ }
+  return null;
+}
+
 async function checkReachability(ctx: Ctx): Promise<{ namespaces: string[]; routes: Record<string, unknown> } | null> {
   try {
-    const r = await restRequest(ctx.site, 'GET', '/');
+    let r = await restRequest(ctx.site, 'GET', '/');
+    const upgraded = httpsUpgradeOf(ctx.site.siteUrl, r.status, r.headers.location ?? r.headers.Location);
+    if (upgraded) {
+      ctx.site = { ...ctx.site, siteUrl: upgraded };
+      ctx.discovered.siteUrl = upgraded;
+      row(ctx, { check: 'Site URL', status: 'ok', detail: `${upgraded} — the site redirects http→https; the stored URL was upgraded.` });
+      r = await restRequest(ctx.site, 'GET', '/');
+    }
     if (!r.ok || typeof r.body !== 'object' || !r.body) {
-      row(ctx, { check: 'Reachability', status: 'fail', detail: `/wp-json/ answered HTTP ${r.status}`, hint: 'Check DNS, TLS, maintenance mode, or a security plugin blocking the REST API.' });
+      const loc = r.headers.location ?? r.headers.Location;
+      row(ctx, {
+        check: 'Reachability',
+        status: 'fail',
+        detail: `/wp-json/ answered HTTP ${r.status}${loc ? ` → ${loc}` : ''}`,
+        hint: loc
+          ? 'The site redirects to a different host or path. Enter the site URL exactly as WordPress → Settings → General shows it (scheme and host).'
+          : 'Check DNS, TLS, maintenance mode, or a security plugin blocking the REST API.',
+      });
       return null;
     }
     const idx = r.body as { namespaces?: string[]; routes?: Record<string, unknown>; name?: string };
