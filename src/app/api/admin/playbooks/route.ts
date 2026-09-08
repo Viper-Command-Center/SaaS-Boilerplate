@@ -15,7 +15,7 @@ import { playbooks } from '@/models/Schema';
 
 export const dynamic = 'force-dynamic';
 
-export const PlaybookInput = z.object({
+const PlaybookInput = z.object({
   scope: z.string().trim().regex(SCOPE_RE, 'scope must be "*", a provider slug, or stdio:<key>'),
   title: z.string().trim().min(1).max(160),
   body: z.string().trim().min(1).max(MAX_PLAYBOOK_BODY),

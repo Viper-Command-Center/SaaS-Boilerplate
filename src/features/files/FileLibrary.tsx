@@ -42,6 +42,10 @@ export const FileLibrary = (props: { tenantSlug: string; canWrite: boolean }) =>
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<'all' | 'knowledge' | 'asset'>('all');
   const [progress, setProgress] = useState<{ name: string; pct: number } | null>(null);
+  // Multi-select (2026-09-08): an agent makes 30 pages; the owner needs all
+  // 30 on disk. Selection → one zip, or one bulk delete.
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const [zipping, setZipping] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const reload = useCallback(() => {
@@ -151,6 +155,93 @@ export const FileLibrary = (props: { tenantSlug: string; canWrite: boolean }) =>
   };
 
   const shown = items.filter(i => (tab === 'all' ? true : tab === 'asset' ? i.kind === 'asset' : i.kind !== 'asset'));
+  const tenant = encodeURIComponent(props.tenantSlug);
+  const contentUrl = (f: Item, download = false) => `/api/files/${f.id}/content?tenant=${tenant}${download ? '&download=1' : ''}`;
+  const shownSelected = shown.filter(f => selected.has(f.id));
+  const allShownSelected = shown.length > 0 && shownSelected.length === shown.length;
+
+  const toggle = (id: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+  const toggleAll = () => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (allShownSelected) {
+        shown.forEach(f => next.delete(f.id));
+      } else {
+        shown.forEach(f => next.add(f.id));
+      }
+      return next;
+    });
+  };
+
+  const downloadSelected = async () => {
+    const ids = shownSelected.map(f => f.id);
+    if (ids.length === 0) {
+      return;
+    }
+    if (ids.length === 1) {
+      window.location.href = contentUrl(shownSelected[0]!, true);
+      return;
+    }
+    setZipping(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/files/download?tenant=${tenant}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.error ?? `Download failed (HTTP ${res.status}).`);
+      }
+      const blob = await res.blob();
+      const name = /filename="([^"]+)"/.exec(res.headers.get('Content-Disposition') ?? '')?.[1] ?? `${props.tenantSlug}-files.zip`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Download failed.');
+    } finally {
+      setZipping(false);
+    }
+  };
+
+  const removeSelected = async () => {
+    const targets = shownSelected;
+    if (targets.length === 0) {
+      return;
+    }
+    // eslint-disable-next-line no-alert
+    if (!window.confirm(`Delete ${targets.length} file${targets.length === 1 ? '' : 's'}? This removes them from storage.`)) {
+      return;
+    }
+    setBusy(true);
+    for (const item of targets) {
+      await fetch(`/api/files?tenant=${tenant}&id=${encodeURIComponent(item.id)}`, { method: 'DELETE' }).catch(() => {});
+    }
+    setSelected((prev) => {
+      const next = new Set(prev);
+      targets.forEach(f => next.delete(f.id));
+      return next;
+    });
+    setBusy(false);
+    reload();
+  };
 
   const tabs: Array<{ id: typeof tab; label: string }> = [
     { id: 'all', label: 'All' },
@@ -230,6 +321,37 @@ export const FileLibrary = (props: { tenantSlug: string; canWrite: boolean }) =>
 
       {error && <p className="text-sm text-rose-400" role="alert">{error}</p>}
 
+      {shown.length > 0 && (
+        <div className="
+          flex flex-wrap items-center gap-3 px-1 text-xs text-white/60
+        "
+        >
+          <label className="flex cursor-pointer items-center gap-2">
+            <input type="checkbox" checked={allShownSelected} onChange={toggleAll} aria-label="Select all shown files" />
+            {allShownSelected ? 'Clear selection' : `Select all ${shown.length}`}
+          </label>
+          {shownSelected.length > 0 && (
+            <>
+              <span className="text-white/40">
+                {shownSelected.length}
+                {' '}
+                selected ·
+                {' '}
+                {size(shownSelected.reduce((n, f) => n + f.sizeBytes, 0))}
+              </span>
+              <Button size="sm" disabled={zipping} onClick={downloadSelected}>
+                {zipping ? 'Preparing zip…' : shownSelected.length === 1 ? 'Download' : `Download ${shownSelected.length} as zip`}
+              </Button>
+              {props.canWrite && (
+                <Button size="sm" variant="outline" disabled={busy} onClick={removeSelected}>
+                  Delete selected
+                </Button>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
       <div className="glass glass-topline relative divide-y divide-white/6">
         {shown.length === 0
           ? (
@@ -243,7 +365,22 @@ export const FileLibrary = (props: { tenantSlug: string; canWrite: boolean }) =>
               </div>
             )
           : shown.map(f => (
-              <div key={f.id} className="flex items-center gap-3 px-4 py-3">
+              <div
+                key={f.id}
+                className={`
+                  flex items-center gap-3 px-4 py-3
+                  ${selected.has(f.id)
+                ? `bg-white/3`
+                : ''}
+                `}
+              >
+                <input
+                  type="checkbox"
+                  className="shrink-0"
+                  checked={selected.has(f.id)}
+                  onChange={() => toggle(f.id)}
+                  aria-label={`Select ${f.name}`}
+                />
                 <div className="
                   flex size-10 shrink-0 items-center justify-center
                   overflow-hidden rounded-lg bg-white/5 text-xs text-white/40
@@ -302,6 +439,17 @@ export const FileLibrary = (props: { tenantSlug: string; canWrite: boolean }) =>
                     "
                   >
                     Open
+                  </a>
+                  <a
+                    href={contentUrl(f, true)}
+                    download={f.name}
+                    className="
+                      rounded-lg border border-white/12 px-2.5 py-1 text-xs
+                      text-white/70
+                      hover:bg-white/5
+                    "
+                  >
+                    Download
                   </a>
                   {props.canWrite && (
                     <button

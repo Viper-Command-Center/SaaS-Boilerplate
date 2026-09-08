@@ -21,7 +21,10 @@ export async function GET(
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
   const { id } = await ctx.params;
-  const slug = new URL(request.url).searchParams.get('tenant') ?? '';
+  const params = new URL(request.url).searchParams;
+  const slug = params.get('tenant') ?? '';
+  // ?download=1 → the browser saves instead of opening a tab (Files page "Download").
+  const asAttachment = params.get('download') === '1';
 
   const tenant = (await getUserTenants(user.id)).find(t => t.slug === slug);
   if (!tenant) {
@@ -38,7 +41,7 @@ export async function GET(
     return new NextResponse(new Uint8Array(body), {
       headers: {
         'Content-Type': row.mime || contentType,
-        'Content-Disposition': `inline; filename="${row.name.replace(/"/g, '')}"`,
+        'Content-Disposition': `${asAttachment ? 'attachment' : 'inline'}; filename="${row.name.replace(/"/g, '')}"`,
         'Cache-Control': 'private, max-age=300',
       },
     });

@@ -662,6 +662,14 @@ Ryan gets a Zernio failure email every day: "Instagram posts require media" / Pr
 ## Phase 38.1 — Site test upgrades http→https itself (2026-09-08)
 BBI: site entered as `http://bbi-argentina.artivio.ai`, `/wp-json/` answered 301 → https, and the report said "check DNS, TLS, maintenance mode" — a wrong diagnosis for a right refusal (requests never follow redirects, so an Authorization header cannot travel to a host the owner did not name). `httpsUpgradeOf` (discovery.ts, exported, tested): a 3xx to the SAME host over https is a scheme upgrade — the test re-runs against https, stores the https URL (`Discovered.siteUrl` → `storeTestResult`), and adds a "Site URL" row saying so. A redirect anywhere else stays a failure, now with the Location shown and the hint "enter the URL exactly as Settings → General shows it".
 
+## Phase 39 — Files page: multi-select, zip download, per-row Download, bulk delete (2026-09-08, no migration, no new deps)
+Ryan: "the agent creates 30 pages and I need all of them; the only options are Open or Delete" — open → right-click → save, thirty times.
+- `FileLibrary.tsx`: checkbox per row + "Select all N" for the shown tab; a selection bar with count + total size, **Download N as zip** (one file → direct download), and **Delete selected** (editors, one confirm). Per-row **Download** link (`?download=1`).
+- `GET /api/files/[id]/content?download=1` → `Content-Disposition: attachment`.
+- `POST /api/files/download?tenant=slug { ids[] }` → `application/zip`, streamed via `JSZip.generateNodeStream({ streamFiles: true })` with each entry a `getObject()` PROMISE, so files are pulled one at a time rather than all held in memory; STORE not DEFLATE (images/PDFs are already compressed). Caps: 300 files / 1 GB per zip (`src/libs/storage/zip.ts`, with `uniqueName` for duplicate names → "page (2).png"). Same membership check as the content route; any member can download.
+- Route files must export only Next handler names — helpers live in `src/libs/storage/zip.ts`; `PlaybookInput` in the playbooks route was un-exported for the same reason (build passed either way; hygiene). `next build` run in the cloud clone: clean.
+- 2 unit tests (name dedupe; promise-backed streaming round-trip). UNTESTED in a browser: the selection bar layout and the blob download in Chrome/Edge.
+
 ## Gotchas
 - **Migration 0010 was hand-written** (SQL + `_journal.json`), because bash reads of the mounted repo are stale/truncated so drizzle-kit can't see the real `Schema.ts`. The SQL is idempotent (`IF NOT EXISTS` + `DO $$ … EXCEPTION WHEN duplicate_object`). If drizzle-kit ever regenerates from the last snapshot it may re-emit `files` — harmless, but delete the dupe.
 - **Bash cannot read mounted files reliably** (virtiofs returns NUL-padded or truncated content — `Schema.ts` read as 1KB when it's 15KB). Never typecheck/build/patch from bash on the mount; use Read/Grep/Edit/Write tools.
