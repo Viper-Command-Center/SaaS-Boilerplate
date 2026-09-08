@@ -278,8 +278,16 @@ expect('src/libs/agent/loop.ts', 'handoff-', 'the exhaustion wrap-up must also b
 
 // ── Phase 37 — operator playbooks: the operator's own guidance layer, no deploy.
 expect('src/libs/mcp/registry.ts', 'loadPlaybooksFor(guidanceByProvider.keys())', 'playbooks must be scoped by the same provider keys as the code guidance');
-expect('src/libs/agent/playbooks.ts', "console.error(`[playbooks] load failed", 'a playbook outage must never take chat down');
-expect('src/app/api/admin/playbooks/route.ts', "user?.isAdmin", 'playbooks are platform-admin only');
+expect('src/libs/agent/playbooks.ts', 'console.error(`[playbooks] load failed', 'a playbook outage must never take chat down');
+expect('src/app/api/admin/playbooks/route.ts', 'user?.isAdmin', 'playbooks are platform-admin only');
+
+// ── Phase 36.1 — Noah v2: our own guardrail refused Oxygen header/footer
+// templates (CPTs with no REST route); REST media uploads time out on Hostinger.
+forbid('src/libs/plugins/wpSites.ts', '(REST returns 404 for both)', 'a 404 on pages+posts is "unverified", never "absent" — builder templates are CPTs');
+
+expect('src/libs/plugins/wpSites.ts', '[\'post\', \'get\', String(id)', 'target verification must fall back to WP-CLI, which sees every post type');
+expect('src/libs/plugins/wpSites.ts', '\'media\', \'import\', remote, \'--porcelain\'', 'wp_upload_media must have the SFTP + wp media import route');
+expect('src/libs/plugins/wpSites.ts', '\'wp_oxygen_replace\'', 'rewrite-a-section must be one call (delete + insert), never two the agent can half-finish');
 
 // ── Report ──────────────────────────────────────────────────────────────────
 if (failures.length > 0) {

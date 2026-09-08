@@ -103,7 +103,11 @@ export async function POST(request: Request) {
       name: file.name,
       bytes: Buffer.from(await file.arrayBuffer()),
       mime: file.type,
-      kind: 'knowledge',
+      // Images and video a client uploads exist to be USED — on a site, in a
+      // post — and every consumer needs a public URL (Noah's v2 Bug 6: a logo
+      // referenced by its private library URL never rendered). Documents stay
+      // private (served through /api/files/<id>/content with a membership check).
+      kind: /^(?:image|video|audio)\//.test(file.type) ? 'asset' : 'knowledge',
       source: 'upload',
       createdBy: user.id,
     });

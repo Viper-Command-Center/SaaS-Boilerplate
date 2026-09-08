@@ -79,6 +79,8 @@ export function normaliseArgv(raw: unknown): string[] {
 const CLI_FLUSH_AFTER_RE = /^(?:plugin|theme|core|option|rewrite|language|site)\s+(?:install|activate|deactivate|toggle|update|delete|uninstall|add|patch|set|flush|switch)/;
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 const MAX_PLUGIN_ZIP_BYTES = 80 * 1024 * 1024;
+/** Media uploads over REST get three times the ordinary budget: a multipart POST through shared-hosting PHP is slow. */
+const UPLOAD_TIMEOUT_MS = 90_000;
 
 const SITE_ARG = {
   site: { type: 'string', description: 'Site label (from wp_sites). Optional when the workspace has one site or a default site.' },
@@ -211,7 +213,7 @@ const tools: BuiltinTool[] = [
   },
   {
     name: 'wp_upload_media',
-    description: 'Upload an image/PDF/video from the workspace file library into the site\'s Media Library. Pass the LIBRARY FILE ID (from list_files, extract_document_images, save_file_from_url) — never a URL or bytes. Returns the WordPress media id (featuredMediaId) and the site-hosted source_url for <img> tags.',
+    description: 'Upload an image/PDF/video from the workspace file library into the site\'s Media Library. Pass the LIBRARY FILE ID (from list_files, extract_document_images, save_file_from_url) — never a URL or bytes. Returns the WordPress media id (featuredMediaId) and the site-hosted source_url — use THAT url in layouts and headers, never a library URL (library URLs are private to the workspace). On sites with SSH the bytes go over SFTP + wp media import (reliable on shared hosts); otherwise REST.',
     input_schema: {
       type: 'object',
       properties: { ...SITE_ARG, fileId: { type: 'string' }, title: { type: 'string' }, altText: { type: 'string' }, caption: { type: 'string' } },
@@ -225,6 +227,22 @@ const tools: BuiltinTool[] = [
       type: 'object',
       properties: { ...SITE_ARG, fileId: { type: 'string' }, activate: { type: 'boolean', description: 'Activate after install (default true).' } },
       required: ['fileId'],
+    },
+  },
+  {
+    name: 'wp_oxygen_replace',
+    description: 'Oxygen only. Rewrite part of a page in ONE call: delete the listed existing element ids (oxygen-edit-post delete ops), then insert new HTML (oxygen-html-to-page) at the given parent/position. oxygen-html-to-page itself only APPENDS, so a "fix this section" done as two separate calls has left pages with 3–4 copies of every section. Read the tree first (oxygen-get-post-tree) to get the ids; call wp_snapshot before a large rewrite. Returns both step results and the page it wrote to.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        ...SITE_ARG,
+        post_id: { type: 'number', description: 'The page/template id (verify its title first).' },
+        delete_element_ids: { type: 'array', items: { type: 'number' }, description: 'Top-level element ids to remove first (children go with them). Empty = insert only.' },
+        html: { type: 'string', description: 'The replacement HTML (same rules as oxygen-html-to-page).' },
+        parent_id: { type: 'number', description: 'Insert under this element (omit = page root).' },
+        position: { type: 'number', description: 'Index among the parent\'s children (omit = end).' },
+      },
+      required: ['post_id', 'html'],
     },
   },
   {
@@ -318,6 +336,8 @@ function classify(tool: string, args: Record<string, unknown>): { channel: Chann
       return { channel: 'mcp', write: false };
     case 'wp_mcp':
       return { channel: 'mcp', write: !MCP_READ_RE.test(String(args.tool ?? '')) };
+    case 'wp_oxygen_replace':
+      return { channel: 'mcp', write: true };
     case 'wp_snapshot':
     case 'wp_cache_flush':
       // Protective / housekeeping: they change nothing a visitor sees. Reads
@@ -351,7 +371,7 @@ function slim(items: unknown): unknown {
   }));
 }
 
-async function rest(site: ResolvedSite, method: string, route: string, body?: unknown, init?: { headers?: Record<string, string>; raw?: BodyInit }) {
+async function rest(site: ResolvedSite, method: string, route: string, body?: unknown, init?: { headers?: Record<string, string>; raw?: BodyInit; timeoutMs?: number }) {
   const r = await restRequest(site, method, route, body, init);
   if (!r.ok) {
     throw new Error(explainRestFailure(site, r, route));
@@ -360,7 +380,7 @@ async function rest(site: ResolvedSite, method: string, route: string, body?: un
 }
 
 /** Identify the page/post a builder write targets (post_id / id / postId). */
-async function describeTarget(site: ResolvedSite, a: Record<string, unknown>): Promise<{ id: number; exists: boolean; title: string; type: string; status: string; link: string } | null> {
+async function describeTarget(site: ResolvedSite, a: Record<string, unknown>): Promise<{ id: number; exists: boolean; verified: boolean; title: string; type: string; status: string; link: string } | null> {
   const raw = a.post_id ?? a.postId ?? a.id;
   const id = Number(raw);
   if (!Number.isFinite(id) || id <= 0) {
@@ -370,18 +390,30 @@ async function describeTarget(site: ResolvedSite, a: Record<string, unknown>): P
     const r = await restRequest(site, 'GET', `/wp/v2/${coll}/${id}?context=edit&_fields=id,title,status,link,type`).catch(() => null);
     if (r?.ok && r.body && typeof r.body === 'object') {
       const b = r.body as Record<string, any>;
-      return { id, exists: true, title: String(b.title?.raw ?? b.title?.rendered ?? '').slice(0, 80), type: String(b.type ?? coll), status: String(b.status ?? ''), link: String(b.link ?? '') };
+      return { id, exists: true, verified: true, title: String(b.title?.raw ?? b.title?.rendered ?? '').slice(0, 80), type: String(b.type ?? coll), status: String(b.status ?? ''), link: String(b.link ?? '') };
     }
     if (r && r.status !== 404) {
       // Auth/network trouble: don't block the write on a side lookup.
       return null;
     }
   }
-  // A builder template (oxygen_header, et_template…) is a CPT with no REST
-  // route here — unknown, not absent. Only 404-on-both with a REST-visible
-  // site is "absent", and even then only pages/posts are claimed.
-  const probe = await restRequest(site, 'GET', `/wp/v2/types/page?_fields=slug`).catch(() => null);
-  return probe?.ok ? { id, exists: false, title: '', type: '', status: '', link: '' } : null;
+  // 🔴 Phase 36 refused here on 404-for-both, which blocked every write to an
+  // Oxygen header/footer/template (CPTs with no REST route) — Noah's v2 Bug 3
+  // was OUR guardrail, not Oxygen. The only trustworthy "does post N exist"
+  // for ANY post type is WP-CLI; without CLI the answer is "unverified", and
+  // an unverified target is annotated, never refused.
+  if (site.ssh && site.policy.cli !== 'blocked') {
+    const r = await cliExec(site, ['post', 'get', String(id), '--fields=ID,post_title,post_type,post_status', '--format=json']).catch(() => null);
+    if (r && r.code === 0) {
+      try {
+        const b = JSON.parse(r.stdout.trim()) as Record<string, unknown>;
+        return { id, exists: true, verified: true, title: String(b.post_title ?? '').slice(0, 80), type: String(b.post_type ?? ''), status: String(b.post_status ?? ''), link: '' };
+      } catch { /* fall through to unverified */ }
+    } else if (r && /Could not find the post/i.test(`${r.stderr}${r.stdout}`)) {
+      return { id, exists: false, verified: true, title: '', type: '', status: '', link: '' };
+    }
+  }
+  return { id, exists: true, verified: false, title: '', type: '', status: '', link: '' };
 }
 
 function collection(args: Record<string, unknown>): 'posts' | 'pages' {
@@ -474,14 +506,18 @@ async function execute(tool: string, args: Record<string, unknown>, tenantId: st
       const isWrite = !MCP_READ_RE.test(name);
       const target = isWrite ? await describeTarget(site, a) : null;
       if (target && !target.exists) {
-        throw new Error(`wp_mcp ${name}: post_id ${target.id} is not a page or post on ${site.label} (REST returns 404 for both). Page ids in notes go stale when pages are recreated — call wp_content_list type:page and use the id whose TITLE is the page you mean.`);
+        throw new Error(`wp_mcp ${name}: post ${target.id} does not exist on ${site.label} (WP-CLI: "Could not find the post"). Page ids in notes go stale when pages are recreated — call wp_content_list type:page (or oxygen-search-posts for templates) and use the id whose TITLE is the one you mean.`);
       }
       const out = await mcpCall(site, name, a);
       // build.churchwebglobal.com, 2026-09-07: the Sermons layout was written
       // to the Events page and the Events layout to Contact, because the ids
       // in the agent's notes were from a previous build. The write "succeeded".
       // Name the page every write actually touched so the agent can see it.
-      return target ? `${out}\n\n[artivio] wrote to #${target.id} "${target.title}" (${target.type}, ${target.status}) ${target.link}` : out;
+      return target
+        ? target.verified
+          ? `${out}\n\n[artivio] wrote to #${target.id} "${target.title}" (${target.type}, ${target.status})${target.link ? ` ${target.link}` : ''}`
+          : `${out}\n\n[artivio] wrote to #${target.id} — not a page or post (a builder template or other custom post type); title not verifiable without the CLI channel. Confirm with oxygen-search-posts if unsure.`
+        : out;
     }
     case 'wp_snapshot': {
       const ssh = requireSsh(site);
@@ -615,19 +651,98 @@ async function execute(tool: string, args: Record<string, unknown>, tenantId: st
       const { body: bytes, contentType } = await getObject(row.r2Key);
       const mime = row.mime && row.mime !== 'application/octet-stream' ? row.mime : contentType;
       const filename = row.name.replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '') || 'upload';
-      const created = await rest(site, 'POST', '/wp/v2/media', undefined, {
-        headers: { 'Content-Type': mime, 'Content-Disposition': `attachment; filename="${filename}"` },
-        raw: new Uint8Array(bytes),
-      }) as Record<string, any>;
       const meta = {
         ...(args.title ? { title: String(args.title) } : {}),
         ...(args.altText ? { alt_text: String(args.altText) } : {}),
         ...(args.caption ? { caption: String(args.caption) } : {}),
       };
-      if (Object.keys(meta).length && created?.id) {
-        await rest(site, 'POST', `/wp/v2/media/${created.id}`, meta).catch(() => {});
+      const errors: string[] = [];
+
+      // Route 1 — SFTP + `wp media import` when the CLI channel is usable.
+      // Noah's v2 Bug 1 (2026-09-07): every REST upload to Hostinger timed out
+      // ("could not reach … aborted due to timeout") while WP-CLI on the same
+      // host imported a public URL fine. A multipart POST through the host's
+      // PHP/WAF stack is the fragile part; bytes over SFTP + a local import is
+      // the same route wp_install_plugin uses and skips all of it.
+      if (site.ssh && site.policy.cli !== 'blocked') {
+        const ssh = site.ssh;
+        const parent = ssh.path.replace(/\/[^/]+$/, '') || '/';
+        const dir = `${parent}/artivio-uploads`;
+        const remote = `${dir}/${Date.now()}-${filename.slice(0, 80)}`;
+        try {
+          renderCli(await cliRaw(site, `mkdir -p ${shellQuote(dir)} && chmod 700 ${shellQuote(dir)}`), 'mkdir');
+          await cliUpload(site, remote, Buffer.from(bytes));
+          try {
+            const importArgs = ['media', 'import', remote, '--porcelain', ...(args.title ? [`--title=${String(args.title)}`] : []), ...(args.altText ? [`--alt=${String(args.altText)}`] : []), ...(args.caption ? [`--caption=${String(args.caption)}`] : [])];
+            const out = renderCli(await cliExec(site, importArgs), 'wp media import');
+            const mediaId = Number(out.trim().split(/\s+/).pop());
+            if (!Number.isFinite(mediaId) || mediaId <= 0) {
+              throw new Error(`wp media import returned no attachment id: ${out.slice(0, 300)}`);
+            }
+            const detail = await rest(site, 'GET', `/wp/v2/media/${mediaId}?_fields=id,source_url,mime_type`).catch(() => null) as Record<string, any> | null;
+            const sourceUrl = detail?.source_url
+              ?? renderCli(await cliExec(site, ['post', 'get', String(mediaId), '--field=guid']), 'wp post get').trim();
+            return JSON.stringify({ mediaId, sourceUrl, mime: detail?.mime_type ?? mime, uploaded: true, via: 'cli' });
+          } finally {
+            await cliRaw(site, `rm -f ${shellQuote(remote)}`).catch(() => {});
+          }
+        } catch (err) {
+          errors.push(`CLI route: ${err instanceof Error ? err.message : String(err)}`);
+        }
       }
-      return JSON.stringify({ mediaId: created.id, sourceUrl: created.source_url, mime: created.mime_type ?? mime, uploaded: true });
+
+      // Route 2 — REST multipart (the only route without SSH). Uploads get a
+      // longer budget than an ordinary REST call.
+      try {
+        const created = await rest(site, 'POST', '/wp/v2/media', undefined, {
+          headers: { 'Content-Type': mime, 'Content-Disposition': `attachment; filename="${filename}"` },
+          raw: new Uint8Array(bytes),
+          timeoutMs: UPLOAD_TIMEOUT_MS,
+        }) as Record<string, any>;
+        if (Object.keys(meta).length && created?.id) {
+          await rest(site, 'POST', `/wp/v2/media/${created.id}`, meta).catch(() => {});
+        }
+        return JSON.stringify({ mediaId: created.id, sourceUrl: created.source_url, mime: created.mime_type ?? mime, uploaded: true, via: 'rest' });
+      } catch (err) {
+        errors.push(`REST route: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      throw new Error(
+        `wp_upload_media failed on ${site.label}. ${errors.join(' | ')}. ${
+          site.ssh ? 'Both routes failed — relay both errors to the human.' : 'This host times out on REST uploads; the reliable route is WP-CLI over SSH (SFTP push + wp media import). Ask the owner to enable SSH for this site in Tools → WordPress Sites.'}`,
+      );
+    }
+    case 'wp_oxygen_replace': {
+      const postId = Number(args.post_id);
+      const html = String(args.html ?? '');
+      if (!Number.isFinite(postId) || postId <= 0 || !html.trim()) {
+        throw new Error('wp_oxygen_replace needs post_id and html.');
+      }
+      const ids = Array.isArray(args.delete_element_ids) ? args.delete_element_ids.map(Number).filter(n => Number.isFinite(n) && n > 0) : [];
+      const target = await describeTarget(site, { post_id: postId });
+      if (target && !target.exists) {
+        throw new Error(`wp_oxygen_replace: post ${postId} does not exist on ${site.label}. Verify the id with wp_content_list / oxygen-search-posts.`);
+      }
+      const steps: string[] = [];
+      if (ids.length) {
+        const del = await mcpCall(site, 'oxygen-edit-post', { post_id: postId, operations: ids.map(element_id => ({ op: 'delete', payload: { element_id } })) });
+        steps.push(`delete ${ids.length} element(s): ${del.slice(0, 600)}`);
+      }
+      const insertArgs: Record<string, unknown> = { post_id: postId, html };
+      if (args.parent_id !== undefined) {
+        insertArgs.parent_id = Number(args.parent_id);
+      }
+      if (args.position !== undefined) {
+        insertArgs.position = Number(args.position);
+      }
+      let ins: string;
+      try {
+        ins = await mcpCall(site, 'oxygen-html-to-page', insertArgs);
+      } catch (err) {
+        throw new Error(`${steps.length ? `${steps.join('\n')}\n` : ''}INSERT FAILED after the delete step — the page is now missing that section. Fix by calling oxygen-html-to-page directly. ${err instanceof Error ? err.message : String(err)}`);
+      }
+      steps.push(`insert: ${ins.slice(0, 1200)}`);
+      const where = target?.verified ? `#${postId} "${target.title}" (${target.type}, ${target.status})` : `#${postId}`;
+      return `${steps.join('\n')}\n\n[artivio] wrote to ${where}. Fetch the live URL to confirm the section renders once.`;
     }
     case 'wp_install_plugin': {
       const ssh = requireSsh(site);
@@ -737,8 +852,11 @@ export const wpSitesProvider: BuiltinProvider = {
 - Posts and pages are SEPARATE collections. wp_content_create requires type. Drafts by default; publish only when a human said so in this conversation.
 - Never ask the human for a token, header, application password or SSH key — secrets live in Tools → WordPress Sites and you never see them.
 - MCP ability names are EXACT and come from wp_mcp_tools — never guess or shorten one (there is no "html-to-page" or "oxygen-add-css"; the Oxygen ones are "oxygen-html-to-page", "oxygen-insert-stylesheet", "oxygen-insert-css-variables"…). Pass wp_mcp args as a JSON object, never as a string.
-- Oxygen: "oxygen-html-to-page" APPENDS to the page tree — every call adds sections. Use its position argument to insert where you mean, and to redo a section read the tree with "oxygen-get-post-tree" {post_id} first and remove the old elements with "oxygen-edit-post" delete ops (one op per top-level element) BEFORE writing. Never call html-to-page twice on the same page expecting a replace. "oxygen-get-post-tree" takes only post_id (no context).
+- Oxygen: to REWRITE a section use wp_oxygen_replace (delete ids + insert HTML in one call). "oxygen-html-to-page" APPENDS to the page tree — every call adds sections. Use its position argument to insert where you mean, and to redo a section read the tree with "oxygen-get-post-tree" {post_id} first and remove the old elements with "oxygen-edit-post" delete ops (one op per top-level element) BEFORE writing. Never call html-to-page twice on the same page expecting a replace. "oxygen-get-post-tree" takes only post_id (no context).
 - Page ids in your notes GO STALE (pages get recreated with new ids). Before a builder write, confirm the id with wp_content_get and check the TITLE is the page you mean; every wp_mcp write reports "[artivio] wrote to #id "Title"" — read it. After building a page, fetch_url its live URL: a page that shows only header and footer is BLANK and the work is not done.
+- Oxygen headers/footers/templates (oxygen_header, oxygen_footer, oxygen_template) are edited with the SAME abilities as pages (oxygen-edit-post, oxygen-html-to-page, wp_oxygen_replace) using the template's post id from oxygen-search-posts. Never edit _oxygen_data postmeta by hand through wp_cli — one malformed write corrupts the whole template.
+- Oxygen layout (height, position, background) is set through the element's DESIGN properties with an oxygen-edit-post update op — read oxygen-get-element-schemas for the property path first. Injected CSS and <style> blocks lose to Oxygen's own rules; do not fight specificity with more CSS.
+- Images on a site must be site-hosted: wp_upload_media (returns source_url) — never a workspace library URL in a layout.
 - Premium plugin zips: wp_install_plugin with the library file id. Do NOT try wp plugin install with a library URL (private, 404) or via the Media Library (.zip is rejected).`,
 
   guidanceFor: async ({ tenantId }) => {

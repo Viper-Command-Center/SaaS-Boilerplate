@@ -348,3 +348,17 @@ describe('pickPluginZip', () => {
     await expect(pickPluginZip(Buffer.from('not a zip'))).rejects.toThrow(/not a zip/);
   });
 });
+
+describe('Noah v2 report (2026-09-08)', () => {
+  it('wp_oxygen_replace exists and is an MCP write; wp_upload_media stays a REST-classified write', () => {
+    const names = wpSitesProvider.tools.map(t => t.name);
+
+    expect(names).toContain('wp_oxygen_replace');
+    expect(names).toContain('wp_upload_media');
+  });
+
+  it('guidance no longer tells the agent a header template is "not a page or post" — CPTs are edited like pages', () => {
+    expect(wpSitesProvider.guidance).toMatch(/oxygen_header, oxygen_footer, oxygen_template/);
+    expect(wpSitesProvider.guidance).toMatch(/wp_oxygen_replace/);
+  });
+});
