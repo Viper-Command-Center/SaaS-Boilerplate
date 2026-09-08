@@ -33,6 +33,7 @@ import { cliExec, cliRaw, cliUpload, explainRestFailure, mcpCall, mcpListTools, 
 import { formatReport, runSiteTest } from '@/libs/wpsites/discovery';
 import { pickPluginZip } from '@/libs/wpsites/pluginZip';
 import { cliIsWrite, restIsWrite, serialisedForSite, toToolPolicy } from '@/libs/wpsites/policy';
+import { MAX_SITE_FILE_BYTES, resolveSitePath } from '@/libs/wpsites/sitePath';
 import { listSites, resolveSiteByLabel } from '@/libs/wpsites/store';
 
 const MAX_BODY = 200_000;
@@ -221,6 +222,25 @@ const tools: BuiltinTool[] = [
     },
   },
   {
+    name: 'wp_read_file',
+    description: 'Read a text file from the site (relative to the site root, under wp-content/ only) — a plugin\'s main file, an mu-plugin, a theme\'s functions.php — before editing it. Needs the CLI channel. Capped at 512 KB.',
+    input_schema: { type: 'object', properties: { ...SITE_ARG, path: { type: 'string', description: 'e.g. "wp-content/mu-plugins/site-fixes.php"' } }, required: ['path'] },
+  },
+  {
+    name: 'wp_write_file',
+    description: 'Write a text file on the site, under wp-content/{mu-plugins,plugins,themes,languages}/ only. This is how site-level PHP is added: an mu-plugin (wp-content/mu-plugins/<name>.php — auto-loads, survives updates; PREFER this), a plugin body after wp scaffold, or a theme file. Safety rails the platform applies: a .php file is syntax-checked (php -l) on the host BEFORE it goes live; after writing, WordPress is bootstrapped once and if it fatals the new file is renamed to .disabled and the previous version restored — a broken mu-plugin would otherwise white-screen the whole site. Existing files are backed up (<name>.bak-<stamp>) and need overwrite:true. wp eval / eval-file stay refused — write a file instead. Needs the CLI channel; follows the site\'s CLI policy.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        ...SITE_ARG,
+        path: { type: 'string', description: 'Relative to the site root, e.g. "wp-content/mu-plugins/bbi-shortcodes.php".' },
+        content: { type: 'string', description: 'The full file content (≤ 512 KB). For PHP start with "<?php" and a plugin header comment.' },
+        overwrite: { type: 'boolean', description: 'Required to replace a file that already exists (a backup is kept).' },
+      },
+      required: ['path', 'content'],
+    },
+  },
+  {
     name: 'wp_install_plugin',
     description: 'Install a plugin from a .zip in the workspace file library (premium plugins: Slider Revolution, ACF Pro, WP Rocket…). Pass the LIBRARY FILE ID. The platform pushes the zip to the host over SFTP, unwraps a package zip that contains the real plugin zip, runs `wp plugin install --force`, optionally activates, flushes caches and removes the temp file. This is the ONLY working route: library URLs are private (the host cannot download them) and the Media Library rejects .zip. Needs the CLI channel. For wordpress.org plugins use wp_cli ["plugin","install","<slug>","--activate"].',
     input_schema: {
@@ -346,7 +366,10 @@ function classify(tool: string, args: Record<string, unknown>): { channel: Chann
     case 'wp_search_replace':
       return { channel: 'cli', write: args.dry_run === false };
     case 'wp_install_plugin':
+    case 'wp_write_file':
       return { channel: 'cli', write: true };
+    case 'wp_read_file':
+      return { channel: 'cli', write: false };
     case 'wp_content_list':
     case 'wp_content_get':
     case 'wp_seo_get':
@@ -744,6 +767,82 @@ async function execute(tool: string, args: Record<string, unknown>, tenantId: st
       const where = target?.verified ? `#${postId} "${target.title}" (${target.type}, ${target.status})` : `#${postId}`;
       return `${steps.join('\n')}\n\n[artivio] wrote to ${where}. Fetch the live URL to confirm the section renders once.`;
     }
+    case 'wp_read_file': {
+      const ssh = requireSsh(site);
+      const target = resolveSitePath(ssh.path, args.path);
+      const r = await cliRaw(site, `if [ -f ${shellQuote(target.abs)} ]; then head -c ${MAX_SITE_FILE_BYTES} ${shellQuote(target.abs)}; else echo "__ARTIVIO_MISSING__"; fi`);
+      if (r.code !== 0) {
+        throw new Error(`wp_read_file ${target.rel}: ${r.stderr.trim() || 'read failed'}`);
+      }
+      if (r.stdout.trim() === '__ARTIVIO_MISSING__') {
+        return `No file at ${target.rel} on ${site.label}. (A new file can be created with wp_write_file.)`;
+      }
+      return r.stdout;
+    }
+    case 'wp_write_file': {
+      const ssh = requireSsh(site);
+      const target = resolveSitePath(ssh.path, args.path);
+      const content = String(args.content ?? '');
+      if (!content.trim()) {
+        throw new Error('wp_write_file: content is empty.');
+      }
+      const bytes = Buffer.from(content, 'utf8');
+      if (bytes.length > MAX_SITE_FILE_BYTES) {
+        throw new Error(`wp_write_file: ${Math.round(bytes.length / 1024)} KB exceeds the ${MAX_SITE_FILE_BYTES / 1024} KB cap.`);
+      }
+      if (target.isPhp && !/^\s*<\?php/.test(content)) {
+        throw new Error('wp_write_file: a .php file must start with "<?php".');
+      }
+      const parent = ssh.path.replace(/\/[^/]+$/, '') || '/';
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      const tmp = `${parent}/artivio-uploads/write-${stamp}-${target.rel.split('/').pop()}`;
+      const bak = `${target.abs}.bak-${stamp}`;
+      const dir = target.abs.replace(/\/[^/]+$/, '');
+      const q = shellQuote;
+
+      // 1. Existence + overwrite gate.
+      const exists = (await cliRaw(site, `[ -e ${q(target.abs)} ] && echo yes || echo no`)).stdout.trim() === 'yes';
+      if (exists && args.overwrite !== true) {
+        throw new Error(`${target.rel} already exists on ${site.label}. Read it first (wp_read_file) and pass overwrite:true to replace it — a backup is kept.`);
+      }
+
+      // 2. Push bytes to a temp path outside the web root, syntax-check PHP there.
+      renderCli(await cliRaw(site, `mkdir -p ${q(`${parent}/artivio-uploads`)} && chmod 700 ${q(`${parent}/artivio-uploads`)}`), 'mkdir');
+      await cliUpload(site, tmp, bytes);
+      try {
+        if (target.isPhp) {
+          const lint = await cliRaw(site, `php -l ${q(tmp)} 2>&1`);
+          if (lint.code !== 0 || /Parse error|Fatal error/i.test(lint.stdout + lint.stderr)) {
+            throw new Error(`PHP syntax error — nothing was written. php -l says:\n${(lint.stdout + lint.stderr).trim().slice(0, 1500)}`);
+          }
+        }
+        // 3. Back up, move into place.
+        const place = [
+          `mkdir -p ${q(dir)}`,
+          exists ? `cp -p ${q(target.abs)} ${q(bak)}` : 'true',
+          `mv ${q(tmp)} ${q(target.abs)}`,
+          `chmod 644 ${q(target.abs)}`,
+        ].join(' && ');
+        renderCli(await cliRaw(site, place), 'write');
+      } catch (err) {
+        await cliRaw(site, `rm -f ${q(tmp)}`).catch(() => {});
+        throw err;
+      }
+
+      // 4. Bootstrap WordPress once WITH plugins (an mu-plugin loads
+      //    unconditionally). A fatal here means the file must not stay live.
+      const boot = await cliExec(site, ['option', 'get', 'blogname']).catch(e => ({ stdout: '', stderr: e instanceof Error ? e.message : String(e), code: 255 }));
+      if (boot.code !== 0) {
+        const disabled = `${target.abs}.disabled-${stamp}`;
+        const undo = exists
+          ? `mv ${q(target.abs)} ${q(disabled)} && mv ${q(bak)} ${q(target.abs)}`
+          : `mv ${q(target.abs)} ${q(disabled)}`;
+        await cliRaw(site, undo).catch(() => {});
+        throw new Error(`${target.rel} was written but WordPress FAILED to load with it (exit ${boot.code}: ${(boot.stderr || boot.stdout).trim().slice(0, 800)}). The platform moved it to ${disabled.replace(ssh.path, '')}${exists ? ' and restored the previous version' : ''} so the site stays up. Fix the code and write again.`);
+      }
+      const flushed = await cliExec(site, ['cache', 'flush']).then(r => r.code === 0).catch(() => false);
+      return `Wrote ${target.rel} (${bytes.length} bytes) on ${site.label}${exists ? `; previous version kept at ${bak.replace(ssh.path, '')}` : ''}. ${target.isPhp ? 'php -l passed; WordPress bootstrapped cleanly with it loaded.' : ''} Object cache ${flushed ? 'flushed' : 'flush FAILED'}.${target.rel.startsWith('wp-content/plugins/') ? ' If this is a new plugin, activate it: wp_cli ["plugin","activate","<slug>"].' : ''} Fetch the live page to confirm the effect.`;
+    }
     case 'wp_install_plugin': {
       const ssh = requireSsh(site);
       const fileId = String(args.fileId ?? '').trim();
@@ -857,6 +956,7 @@ export const wpSitesProvider: BuiltinProvider = {
 - Oxygen headers/footers/templates (oxygen_header, oxygen_footer, oxygen_template) are edited with the SAME abilities as pages (oxygen-edit-post, oxygen-html-to-page, wp_oxygen_replace) using the template's post id from oxygen-search-posts. Never edit _oxygen_data postmeta by hand through wp_cli — one malformed write corrupts the whole template.
 - Oxygen layout (height, position, background) is set through the element's DESIGN properties with an oxygen-edit-post update op — read oxygen-get-element-schemas for the property path first. Injected CSS and <style> blocks lose to Oxygen's own rules; do not fight specificity with more CSS.
 - Images on a site must be site-hosted: wp_upload_media (returns source_url) — never a workspace library URL in a layout.
+- Site-level PHP (a filter, a CPT registration, a compatibility fix): wp_write_file to wp-content/mu-plugins/<name>.php — never wp eval / eval-file (refused, by design). Read an existing file with wp_read_file before overwriting it. The platform syntax-checks PHP and disables the file automatically if WordPress fails to load with it.
 - Premium plugin zips: wp_install_plugin with the library file id. Do NOT try wp plugin install with a library URL (private, 404) or via the Media Library (.zip is rejected).`,
 
   guidanceFor: async ({ tenantId }) => {

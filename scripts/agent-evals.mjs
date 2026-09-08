@@ -294,15 +294,24 @@ expect('src/libs/plugins/wpSites.ts', '\'wp_oxygen_replace\'', 'rewrite-a-sectio
 // by email to the owner. The vendor's rules are enforced before the call.
 expect('src/libs/mcp/registry.ts', 'httpGuardFor({ id: conn.id, name: conn.name, url: conn.url })', 'hosted MCP connections must pass through httpGuardFor');
 expect('src/libs/mcp/registry.ts', 'guardSpec.guard(tool.name, args, readCall)', 'the guard runs before every hosted MCP call');
-expect('src/libs/mcp/httpGuards.ts', "ZERNIO_MEDIA_REQUIRED", 'media-required platforms must be refused up front for text-only posts');
-expect('src/libs/mcp/httpGuards.ts', "call('profiles-list', {})", 'profileId must be checked against the team\'s real profiles');
+expect('src/libs/mcp/httpGuards.ts', 'ZERNIO_MEDIA_REQUIRED', 'media-required platforms must be refused up front for text-only posts');
+expect('src/libs/mcp/httpGuards.ts', 'call(\'profiles-list\', {})', 'profileId must be checked against the team\'s real profiles');
 
 // ── Phase 40 — library folders. The agent half is the point: "the images are
 // in the Halloween book folder" must resolve to a list_files call.
-expect('src/libs/agent/platformTools.ts', "'move_files'", 'the agent must be able to file what it produced');
-expect('src/libs/agent/platformTools.ts', "No folder named", 'list_files must name the real folders when the asked-for one does not exist');
+expect('src/libs/agent/platformTools.ts', '\'move_files\'', 'the agent must be able to file what it produced');
+expect('src/libs/agent/platformTools.ts', 'No folder named', 'list_files must name the real folders when the asked-for one does not exist');
 expect('src/libs/agent/prompt.ts', 'The library has FOLDERS', 'the system prompt must explain folders, or the tool arg goes unused');
 expect('src/libs/storage/files.ts', 'inArray(files.id, valid)', 'moveFiles stays tenant-scoped (and-eq tenant + inArray ids)');
+
+// ── Phase 41 — wp_write_file. Theo (BBI) needed an mu-plugin; the answer is a
+// scoped file write with rails, not un-denying eval.
+expect('src/libs/plugins/wpcli.ts', '\'eval\'', 'wp eval stays denied even with wp_write_file present');
+expect('src/libs/wpsites/sitePath.ts', 'ALLOWED_ROOTS = [\'mu-plugins\', \'plugins\', \'themes\', \'languages\']', 'writes are confined to the four wp-content subtrees');
+expect('src/libs/plugins/wpSites.ts', 'php -l ', 'PHP is syntax-checked on the host before it goes live');
+expect('src/libs/plugins/wpSites.ts', '[\'option\', \'get\', \'blogname\']).catch', 'WordPress is bootstrapped after the write and the file disabled on a fatal');
+
+forbid('src/libs/plugins/wpSites.ts', 'wp-content/uploads/', 'uploads is never a write target for code (binary assets go through wp_upload_media)');
 
 // ── Report ──────────────────────────────────────────────────────────────────
 if (failures.length > 0) {
