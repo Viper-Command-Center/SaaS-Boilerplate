@@ -3,7 +3,7 @@
  * Plugin Name:  Artivio Abilities Bridge
  * Plugin URI:   https://artivio.io
  * Description:  Registers WordPress Abilities API abilities for the plugins on the Gutenberg/Kadence build line that don't ship their own agent abilities — SEOPress content fields, Contact Form 7 form creation, The Events Calendar one-off events, and a LiteSpeed cache purge — so the WordPress MCP Adapter (or any other Abilities-API consumer) can expose them to Noah. Deliberately does NOT register ACF abilities (ACF ≥ 6.8 ships its own via the Abilities API — a second registration under a different plugin would just create two competing sources of truth). This plugin only REGISTERS abilities; it does not speak MCP itself and does nothing without the MCP Adapter (or equivalent) active.
- * Version:      1.1.0
+ * Version:      1.2.0
  * Requires PHP: 7.4
  * Requires at least: 6.9
  * Author:       Artivio
@@ -36,6 +36,27 @@
  * dedicated MCP server/create_server() call is needed — the Adapter's default
  * server already discovers any ability marked meta.mcp.public => true.
  *
+ * v1.2.0 — the real root cause, found after v1.1.0 still didn't work: every
+ * wp_register_ability() call here used 'category' => 'content' / 'infrastructure',
+ * neither of which was ever registered anywhere on the site. WordPress core's
+ * own WP_Abilities_Registry::register() (confirmed by reading its actual
+ * source, includes/abilities-api/class-wp-abilities-registry.php) requires an
+ * ability's category to already exist via wp_has_ability_category() — if it
+ * doesn't, register() fires _doing_it_wrong() and returns null WITHOUT adding
+ * the ability to the registry at all. This has nothing to do with MCP, the
+ * Adapter, opcache, or hook timing: it happens at the WordPress Abilities API
+ * layer, before the MCP Adapter ever sees these abilities. WordPress core only
+ * pre-registers 'site' and 'user' as categories (includes/abilities/
+ * wp-core-abilities.php); 'content' and 'infrastructure' were never valid.
+ * The v1.1.0 status endpoint's "abilities registered" claim was also wrong —
+ * it never actually queried the registry (see the wp_get_ability() fix on
+ * artivio_ab_status() below), it just echoed back the plugin's own intended
+ * ability list, which is why it looked like registration had succeeded when
+ * it hadn't. Fixed by registering this plugin's own categories
+ * ('artivio-content', 'artivio-infrastructure') on wp_abilities_api_categories_init
+ * — which must fire, and does, before wp_abilities_api_init — before any
+ * ability references them.
+ *
  * WHY THIS REUSES artivio-wp-agent FOR SEO INSTEAD OF DUPLICATING IT
  *
  * artivio-wp-agent (base) already owns the Rank Math / Yoast / SEOPress field
@@ -53,10 +74,37 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'ARTIVIO_AB_VERSION', '1.1.0' );
+define( 'ARTIVIO_AB_VERSION', '1.2.0' );
 define( 'ARTIVIO_AB_NS', 'artivio-abilities/v1' );
 
+add_action( 'wp_abilities_api_categories_init', 'artivio_ab_register_categories' );
 add_action( 'wp_abilities_api_init', 'artivio_ab_register_abilities' );
+
+/**
+ * Categories must exist before any ability can reference one — see the
+ * v1.2.0 note in the file header. If this fires before the categories
+ * registry is ready (WP < 6.9), wp_register_ability_category() will not
+ * exist; skip quietly, same inert-not-fatal rule as the abilities hook below.
+ */
+function artivio_ab_register_categories() {
+	if ( ! function_exists( 'wp_register_ability_category' ) ) {
+		return;
+	}
+	wp_register_ability_category(
+		'artivio-content',
+		array(
+			'label'       => 'Artivio — Content',
+			'description' => 'Content-editing abilities from the Artivio Abilities Bridge plugin (SEO, forms, events).',
+		)
+	);
+	wp_register_ability_category(
+		'artivio-infrastructure',
+		array(
+			'label'       => 'Artivio — Infrastructure',
+			'description' => 'Infrastructure abilities from the Artivio Abilities Bridge plugin (cache purge).',
+		)
+	);
+}
 
 /**
  * If this fires on a WordPress older than 6.9 (no Abilities API) or before
@@ -102,7 +150,7 @@ function artivio_ab_register_seo_abilities() {
 		array(
 			'label'               => 'Get SEO fields for a post',
 			'description'         => 'Reads title, description, focus keyword and related fields for a post/page from whichever supported SEO plugin the site runs (Rank Math, Yoast, or SEOPress). Requires artivio-wp-agent (base) to also be active.',
-			'category'            => 'content',
+			'category'            => 'artivio-content',
 			'input_schema'        => array(
 				'type'                 => 'object',
 				'properties'           => array(
@@ -134,7 +182,7 @@ function artivio_ab_register_seo_abilities() {
 		array(
 			'label'               => 'Set SEO fields for a post',
 			'description'         => 'Writes title, description, focus keyword and related fields for a post/page to whichever supported SEO plugin the site runs. On SEOPress sites, noindex/nofollow are refused rather than written (unconfirmed value semantics — see plugin source comments) — everything else writes normally. Requires artivio-wp-agent (base) to also be active.',
-			'category'            => 'content',
+			'category'            => 'artivio-content',
 			'input_schema'        => array(
 				'type'                 => 'object',
 				'properties'           => array(
@@ -240,7 +288,7 @@ function artivio_ab_register_cf7_abilities() {
 		array(
 			'label'               => 'Create a Contact Form 7 form',
 			'description'         => 'Creates a new Contact Form 7 form from field-tag markup and mail settings, via WPCF7_ContactForm (the same class CF7\'s own "Add New" screen uses) — not raw postmeta.',
-			'category'            => 'content',
+			'category'            => 'artivio-content',
 			'input_schema'        => array(
 				'type'                 => 'object',
 				'properties'           => array(
@@ -357,7 +405,7 @@ function artivio_ab_register_events_abilities() {
 		array(
 			'label'               => 'Create a one-off Events Calendar event',
 			'description'         => 'Creates a single, non-recurring Event in The Events Calendar. Recurring events are not supported by this ability — set up a recurring pattern once via wp-admin instead.',
-			'category'            => 'content',
+			'category'            => 'artivio-content',
 			'input_schema'        => array(
 				'type'                 => 'object',
 				'properties'           => array(
@@ -466,7 +514,7 @@ function artivio_ab_register_cache_abilities() {
 		array(
 			'label'               => 'Purge LiteSpeed cache',
 			'description'         => 'Purges the LiteSpeed page cache for one post (default) or the whole site, after a bulk content write. Returns litespeedActive: false harmlessly if LiteSpeed Cache is not active — nothing else in this ability requires it.',
-			'category'            => 'infrastructure',
+			'category'            => 'artivio-infrastructure',
 			'input_schema'        => array(
 				'type'                 => 'object',
 				'properties'           => array(
