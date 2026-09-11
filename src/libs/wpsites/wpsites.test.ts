@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mcpArgs, normaliseArgv, wpSitesProvider } from '@/libs/plugins/wpSites';
 import { buildAuthHeader, LABEL_RE, maskSecret, normaliseLabel, normaliseSecret, normaliseSiteUrl } from '@/libs/wpsites/auth';
 import { MAX_REST_BODY, resolveRoute, restRequest } from '@/libs/wpsites/channels';
-import { compareVersions, detectBuilder, findMcpRoute, httpsUpgradeOf } from '@/libs/wpsites/discovery';
+import { compareVersions, detectBuilder, findMcpRoute, httpsUpgradeOf, mcpMissingHint } from '@/libs/wpsites/discovery';
 import { parseProvisioningPayload } from '@/libs/wpsites/legacy';
 import { pickPluginZip } from '@/libs/wpsites/pluginZip';
 import { cliIsWrite, restIsWrite, serialisedForSite, toToolPolicy } from '@/libs/wpsites/policy';
@@ -181,6 +181,16 @@ describe('discovery', () => {
     expect(c.version).toBe('1.9');
     expect(detectBuilder({ themes: [{ name: 'Divi', status: 'active' }] }).builder).toBe('divi');
     expect(detectBuilder({}).builder).toBe('gutenberg');
+  });
+
+  it('gives a builder-specific MCP-missing hint, and a generic Adapter hint when no builder is detected (Ryan, 2026-09-11: build-6 is Gutenberg + ACF, not Oxygen)', () => {
+    expect(mcpMissingHint('oxygen')).toMatch(/Oxygen.*Agent Connector/);
+    expect(mcpMissingHint('elementor')).toMatch(/Angie/);
+    expect(mcpMissingHint('bricks')).toMatch(/2\.4/);
+    expect(mcpMissingHint('divi')).toMatch(/DiviOps/);
+    expect(mcpMissingHint(null)).not.toMatch(/Oxygen/);
+    expect(mcpMissingHint(null)).toMatch(/WordPress MCP Adapter/);
+    expect(mcpMissingHint(undefined)).toBe(mcpMissingHint(null));
   });
 });
 

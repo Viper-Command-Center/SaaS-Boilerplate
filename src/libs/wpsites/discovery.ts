@@ -276,12 +276,39 @@ async function checkBasePlugin(ctx: Ctx): Promise<{ builder?: string | null; bui
   }
 }
 
-async function checkMcp(ctx: Ctx, index: { namespaces: string[]; routes: Record<string, unknown> } | null): Promise<string[]> {
+/**
+ * Per-builder MCP remediation. Falls back to the builder-agnostic Adapter
+ * when no known builder is detected — e.g. Gutenberg + ACF 6.8's Abilities
+ * API, which needs the Adapter plugin to expose an actual MCP route. Ryan
+ * (2026-09-11): the old hint hardcoded "install Oxygen's Agent Connector"
+ * even on a plain block-editor site with no Oxygen involved.
+ */
+export function mcpMissingHint(builder: string | null | undefined): string {
+  switch (builder) {
+    case 'oxygen': {
+      return 'Install Oxygen\'s Agent Connector (Oxygen → Settings → Agents & MCP), then Test again.';
+    }
+    case 'elementor': {
+      return 'Install Elementor\'s Angie plugin (wordpress.org/plugins/angie), then Test again.';
+    }
+    case 'divi': {
+      return 'Divi layouts are edited through the DiviOps connection, not MCP — no adapter plugin needed for Divi itself.';
+    }
+    case 'bricks': {
+      return 'Enable Bricks\' built-in AI/MCP integration (Bricks ≥ 2.4, Settings → AI Permissions), then Test again.';
+    }
+    default: {
+      return 'No builder-specific MCP plugin detected. Install the official WordPress MCP Adapter plugin (wordpress/mcp-adapter) — it exposes any Abilities-API-registered plugin (e.g. ACF ≥ 6.8) as an MCP endpoint — then Test again.';
+    }
+  }
+}
+
+async function checkMcp(ctx: Ctx, index: { namespaces: string[]; routes: Record<string, unknown> } | null, builderHint?: string | null): Promise<string[]> {
   const route = index ? findMcpRoute(index) : null;
   if (!route) {
     ctx.discovered.mcpEndpointUrl = null;
     ctx.caps.mcp = false;
-    row(ctx, { check: 'MCP endpoint', status: 'fail', detail: 'No mcp/* route in /wp-json/', hint: 'Install Oxygen\'s Agent Connector (Oxygen → Settings → Agents & MCP) or the WordPress MCP Adapter plugin, then Test again.' });
+    row(ctx, { check: 'MCP endpoint', status: 'fail', detail: 'No mcp/* route in /wp-json/', hint: mcpMissingHint(builderHint) });
     return [];
   }
   const endpoint = `${ctx.site.siteUrl}/wp-json${route}`;
@@ -429,7 +456,7 @@ export async function discoverAndTest(site: ResolvedSite, opts: TestOptions = {}
   if (authed) {
     await readAppPasswordUuid(ctx);
     base = await checkBasePlugin(ctx);
-    mcpTools = await checkMcp(ctx, index);
+    mcpTools = await checkMcp(ctx, index, base.builder ?? null);
     await checkCache(ctx);
   }
   // CLI is independent of REST — a wrong app password must not hide an SSH fault.
