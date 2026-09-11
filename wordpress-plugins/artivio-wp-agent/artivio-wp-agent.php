@@ -2,8 +2,8 @@
 /**
  * Plugin Name:  Artivio WP Agent (base)
  * Plugin URI:   https://artivio.io
- * Description:  Builder-agnostic base plugin for Artivio. Repairs WordPress Application Passwords on CGI/FastCGI hosts, exposes a self-diagnosing auth check, reports what a site actually runs, and reads/writes SEO fields for Rank Math or Yoast. Install on every client WordPress site regardless of page builder.
- * Version:      1.1.1
+ * Description:  Builder-agnostic base plugin for Artivio. Repairs WordPress Application Passwords on CGI/FastCGI hosts, exposes a self-diagnosing auth check, reports what a site actually runs, and reads/writes SEO fields for Rank Math, Yoast, or SEOPress. Install on every client WordPress site regardless of page builder.
+ * Version:      1.2.0
  * Requires PHP: 7.4
  * Author:       Artivio
  * License:      GPL-2.0-or-later
@@ -37,7 +37,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'ARTIVIO_WP_VERSION', '1.1.1' );
+define( 'ARTIVIO_WP_VERSION', '1.2.0' );
 define( 'ARTIVIO_WP_NS', 'artivio/v1' );
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -170,14 +170,28 @@ function artivio_wp_guard_post( int $post_id ) {
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
- * SEO (Rank Math / Yoast)
+ * SEO (Rank Math / Yoast / SEOPress)
  *
- * Builder-agnostic by nature — both store their fields in postmeta, and core
- * WP REST does not reliably expose those keys. The API here is deliberately
- * plugin-NEUTRAL: callers send `title`, `description`, `focusKeyword`… and this
- * maps them onto whichever plugin the site runs. An agent should not have to
- * know that Rank Math spells it `rank_math_description` and Yoast spells it
- * `_yoast_wpseo_metadesc`; that is exactly the per-site detail it gets wrong.
+ * Builder-agnostic by nature — all three store their fields in postmeta, and
+ * core WP REST does not reliably expose those keys. The API here is
+ * deliberately plugin-NEUTRAL: callers send `title`, `description`,
+ * `focusKeyword`… and this maps them onto whichever plugin the site runs. An
+ * agent should not have to know that Rank Math spells it
+ * `rank_math_description`, Yoast spells it `_yoast_wpseo_metadesc`, and
+ * SEOPress spells it `_seopress_titles_desc`; that is exactly the per-site
+ * detail it gets wrong.
+ *
+ * SEOPress added 2026-09-11 (Ryan replaced Rank Math with SEOPress on the
+ * Gutenberg/Kadence build line — this plugin previously reported "no SEO
+ * plugin" on those sites even though SEOPress was active and configured).
+ *
+ * 🔶 noindex/nofollow are deliberately NOT wired up for SEOPress below.
+ * `_seopress_robots_index` / `_seopress_robots_follow` are documented as
+ * "returns 'yes' when true" (seopress.org), but which state the field name
+ * means — "yes, indexing is allowed" vs "yes, noindex is set" — was not
+ * confirmed against a live post before writing this. Getting that backwards
+ * would silently deindex a live client site, so `artivio_wp_patch_seo()`
+ * below refuses the write and says why rather than guessing.
  * ══════════════════════════════════════════════════════════════════════════ */
 
 function artivio_wp_seo_plugin(): string {
@@ -186,6 +200,9 @@ function artivio_wp_seo_plugin(): string {
 	}
 	if ( defined( 'WPSEO_VERSION' ) || class_exists( 'WPSEO_Options' ) ) {
 		return 'yoast';
+	}
+	if ( defined( 'SEOPRESS_VERSION' ) ) {
+		return 'seopress';
 	}
 	return 'none';
 }
@@ -202,6 +219,7 @@ function artivio_wp_seo_none_error(): WP_Error {
 	$candidates = array(
 		'Rank Math' => 'seo-by-rank-math/rank-math.php',
 		'Yoast SEO' => 'wordpress-seo/wp-seo.php',
+		'SEOPress'  => 'wp-seopress/seopress.php',
 	);
 	$active_db  = (array) get_option( 'active_plugins', array() );
 	$installed  = array();
@@ -214,16 +232,22 @@ function artivio_wp_seo_none_error(): WP_Error {
 			}
 		}
 	}
+	$install_slug = 'seo-by-rank-math';
+	if ( in_array( 'Yoast SEO', $installed, true ) && ! in_array( 'Rank Math', $installed, true ) ) {
+		$install_slug = 'wordpress-seo';
+	} elseif ( in_array( 'SEOPress', $installed, true ) && ! in_array( 'Rank Math', $installed, true ) ) {
+		$install_slug = 'wp-seopress';
+	}
 	if ( $listed ) {
 		$hint = implode( ', ', $listed ) . ' is in active_plugins but did not load in this request — the option is probably stale in the object cache. Run wp_cache_flush (or `wp cache flush`) and retry; if it persists, deactivate and reactivate the plugin.';
 	} elseif ( $installed ) {
-		$hint = implode( ', ', $installed ) . ' is installed but NOT active. Activate it (wp_cli ["plugin","activate","' . ( in_array( 'Rank Math', $installed, true ) ? 'seo-by-rank-math' : 'wordpress-seo' ) . '"]) and retry.';
+		$hint = implode( ', ', $installed ) . ' is installed but NOT active. Activate it (wp_cli ["plugin","activate","' . $install_slug . '"]) and retry.';
 	} else {
-		$hint = 'Neither Rank Math nor Yoast is installed. Install one (wp_cli ["plugin","install","seo-by-rank-math","--activate"]) and retry.';
+		$hint = 'None of Rank Math, Yoast, or SEOPress is installed. Install one (wp_cli ["plugin","install","seo-by-rank-math","--activate"]) and retry.';
 	}
 	return new WP_Error(
 		'artivio_wp_no_seo_plugin',
-		'No supported SEO plugin is loaded in this request. This route supports Rank Math and Yoast. ' . $hint,
+		'No supported SEO plugin is loaded in this request. This route supports Rank Math, Yoast, and SEOPress. ' . $hint,
 		array(
 			'status'      => 409,
 			'installed'   => $installed,
@@ -264,6 +288,26 @@ function artivio_wp_seo_map( string $which ): array {
 			'twitterImage'       => '_yoast_wpseo_twitter-image',
 		);
 	}
+	if ( 'seopress' === $which ) {
+		// Per seopress.org's own "list of all post metas" doc (confirmed
+		// 2026-09-11). focusKeyword is comma-separated in SEOPress, unlike
+		// Rank Math/Yoast's single keyword — read/written as-is, a caller
+		// wanting multiple keywords sends them comma-separated.
+		return array(
+			'title'              => '_seopress_titles_title',
+			'description'        => '_seopress_titles_desc',
+			'focusKeyword'       => '_seopress_analysis_target_kw',
+			'canonical'          => '_seopress_robots_canonical',
+			'ogTitle'            => '_seopress_social_fb_title',
+			'ogDescription'      => '_seopress_social_fb_desc',
+			'ogImage'            => '_seopress_social_fb_img',
+			'twitterTitle'       => '_seopress_social_twitter_title',
+			'twitterDescription' => '_seopress_social_twitter_desc',
+			'twitterImage'       => '_seopress_social_twitter_img',
+			// No breadcrumbTitle equivalent confirmed for SEOPress — omitted
+			// rather than guessed.
+		);
+	}
 	return array();
 }
 
@@ -294,6 +338,9 @@ function artivio_wp_seo_read( int $post_id, string $which ): array {
 		$out['noindex']  = '1' === (string) get_post_meta( $post_id, '_yoast_wpseo_meta-robots-noindex', true );
 		$out['nofollow'] = '1' === (string) get_post_meta( $post_id, '_yoast_wpseo_meta-robots-nofollow', true );
 	}
+	// 'seopress': noindex/nofollow deliberately omitted — see the note above
+	// artivio_wp_seo_plugin(). Reading them back would need the same
+	// unconfirmed value-direction as writing them.
 	return $out;
 }
 
@@ -379,23 +426,31 @@ function artivio_wp_patch_seo( WP_REST_Request $r ) {
 	}
 
 	if ( array_key_exists( 'noindex', $params ) || array_key_exists( 'nofollow', $params ) ) {
-		$current  = artivio_wp_seo_read( $post_id, $which );
-		$noindex  = array_key_exists( 'noindex', $params )
-			? filter_var( $params['noindex'], FILTER_VALIDATE_BOOLEAN )
-			: (bool) ( $current['noindex'] ?? false );
-		$nofollow = array_key_exists( 'nofollow', $params )
-			? filter_var( $params['nofollow'], FILTER_VALIDATE_BOOLEAN )
-			: (bool) ( $current['nofollow'] ?? false );
-
-		if ( 'rankmath' === $which ) {
-			$robots = array( $noindex ? 'noindex' : 'index', $nofollow ? 'nofollow' : 'follow' );
-			update_post_meta( $post_id, 'rank_math_robots', wp_slash( $robots ) );
+		if ( 'seopress' === $which ) {
+			// Refuse rather than guess: _seopress_robots_index/_follow are
+			// documented as "returns 'yes' when true", but not which state
+			// ("indexing allowed" vs "noindex is set") that maps to. Writing
+			// the wrong direction here would silently deindex a live page.
+			$warn[] = 'noindex/nofollow are not supported for SEOPress in this plugin yet — the meta value direction needs confirming against a live post before it can write safely. No robots change was made.';
 		} else {
-			// Yoast: '1' = noindex, '2' = index.
-			update_post_meta( $post_id, '_yoast_wpseo_meta-robots-noindex', $noindex ? '1' : '2' );
-			update_post_meta( $post_id, '_yoast_wpseo_meta-robots-nofollow', $nofollow ? '1' : '0' );
+			$current  = artivio_wp_seo_read( $post_id, $which );
+			$noindex  = array_key_exists( 'noindex', $params )
+				? filter_var( $params['noindex'], FILTER_VALIDATE_BOOLEAN )
+				: (bool) ( $current['noindex'] ?? false );
+			$nofollow = array_key_exists( 'nofollow', $params )
+				? filter_var( $params['nofollow'], FILTER_VALIDATE_BOOLEAN )
+				: (bool) ( $current['nofollow'] ?? false );
+
+			if ( 'rankmath' === $which ) {
+				$robots = array( $noindex ? 'noindex' : 'index', $nofollow ? 'nofollow' : 'follow' );
+				update_post_meta( $post_id, 'rank_math_robots', wp_slash( $robots ) );
+			} else {
+				// Yoast: '1' = noindex, '2' = index.
+				update_post_meta( $post_id, '_yoast_wpseo_meta-robots-noindex', $noindex ? '1' : '2' );
+				update_post_meta( $post_id, '_yoast_wpseo_meta-robots-nofollow', $nofollow ? '1' : '0' );
+			}
+			$changed[] = 'robots';
 		}
-		$changed[] = 'robots';
 	}
 
 	clean_post_cache( $post_id );
