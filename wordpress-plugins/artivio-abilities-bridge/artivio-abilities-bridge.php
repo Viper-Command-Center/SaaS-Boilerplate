@@ -3,7 +3,7 @@
  * Plugin Name:  Artivio Abilities Bridge
  * Plugin URI:   https://artivio.io
  * Description:  Registers WordPress Abilities API abilities for the plugins on the Gutenberg/Kadence build line that don't ship their own agent abilities — SEOPress content fields, Contact Form 7 form creation, The Events Calendar one-off events, and a LiteSpeed cache purge — so the WordPress MCP Adapter (or any other Abilities-API consumer) can expose them to Noah. Deliberately does NOT register ACF abilities (ACF ≥ 6.8 ships its own via the Abilities API — a second registration under a different plugin would just create two competing sources of truth). This plugin only REGISTERS abilities; it does not speak MCP itself and does nothing without the MCP Adapter (or equivalent) active.
- * Version:      1.2.0
+ * Version:      1.3.0
  * Requires PHP: 7.4
  * Requires at least: 6.9
  * Author:       Artivio
@@ -453,6 +453,34 @@ function artivio_ab_register_events_abilities() {
 	);
 }
 
+/**
+ * Reformats a Y-m-d date into whatever date format this site's own
+ * datepicker is configured to use.
+ *
+ * tribe_create_event() looks correct-shaped from its docblock, but its
+ * actual implementation (Tribe__Events__API::prepare_event_date_meta(),
+ * confirmed 2026-09-11 by reading the-events-calendar's own source, not
+ * assumed) re-parses EventStartDate/EventEndDate through
+ * Tribe__Date_Utils::datetime_from_format() against the SITE'S CONFIGURED
+ * datepicker format (Settings → Events → General → Date Format — 12
+ * possible values, default 'Y-m-d' but never guaranteed) — not a fixed
+ * ISO/MySQL shape. A mismatched format silently fails to parse rather than
+ * erroring, and the resulting event was observed live storing epoch
+ * 1970-01-01 for both dates. Querying the site's real configured format at
+ * request time avoids assuming any particular one.
+ */
+function artivio_ab_format_for_tec_datepicker( string $y_m_d_date ): string {
+	$timestamp = strtotime( $y_m_d_date );
+	if ( ! $timestamp ) {
+		return $y_m_d_date;
+	}
+	if ( class_exists( 'Tribe__Date_Utils' ) && function_exists( 'tribe_get_option' ) ) {
+		$format = Tribe__Date_Utils::datepicker_formats( tribe_get_option( 'datepickerFormat' ) );
+		return date( $format, $timestamp );
+	}
+	return date( 'Y-m-d', $timestamp );
+}
+
 function artivio_ab_event_create_execute( $input ) {
 	if ( ! function_exists( 'tribe_create_event' ) ) {
 		return new WP_Error( 'artivio_ab_no_events_calendar', 'The Events Calendar is not active.', array( 'status' => 424 ) );
@@ -470,16 +498,36 @@ function artivio_ab_event_create_execute( $input ) {
 		);
 	}
 
-	$event_id = tribe_create_event(
-		array(
-			'post_title'     => $title,
-			'post_content'   => wp_kses_post( (string) ( $input['description'] ?? '' ) ),
-			'post_status'    => ( isset( $input['status'] ) && 'draft' === $input['status'] ) ? 'draft' : 'publish',
-			'EventStartDate' => $start,
-			'EventEndDate'   => $end,
-			'EventAllDay'    => ! empty( $input['allDay'] ),
-		)
+	$all_day             = ! empty( $input['allDay'] );
+	list( $start_date, $start_time ) = explode( ' ', $start, 2 );
+	list( $end_date, $end_time )     = explode( ' ', $end, 2 );
+
+	$event_args = array(
+		'post_title'     => $title,
+		'post_content'   => wp_kses_post( (string) ( $input['description'] ?? '' ) ),
+		'post_status'    => ( isset( $input['status'] ) && 'draft' === $input['status'] ) ? 'draft' : 'publish',
+		'EventStartDate' => artivio_ab_format_for_tec_datepicker( $start_date ),
+		'EventEndDate'   => artivio_ab_format_for_tec_datepicker( $end_date ),
+		'EventAllDay'    => $all_day,
 	);
+
+	// Time-of-day is a SEPARATE set of args from EventStartDate/EventEndDate
+	// in TEC's own saveEventMeta() — omitting these left every non-all-day
+	// event with no time component at all, which is the other half of the
+	// epoch-1970 bug. TEC's own code reads these as 24-hour ("EventStartTime
+	// will always be 24h Format" — its own docblock), so no meridian field
+	// is needed here.
+	if ( ! $all_day ) {
+		list( $start_hour, $start_minute ) = array_map( 'intval', explode( ':', $start_time ) );
+		list( $end_hour, $end_minute )     = array_map( 'intval', explode( ':', $end_time ) );
+
+		$event_args['EventStartHour']   = sprintf( '%02d', $start_hour );
+		$event_args['EventStartMinute'] = sprintf( '%02d', $start_minute );
+		$event_args['EventEndHour']     = sprintf( '%02d', $end_hour );
+		$event_args['EventEndMinute']   = sprintf( '%02d', $end_minute );
+	}
+
+	$event_id = tribe_create_event( $event_args );
 
 	if ( ! $event_id ) {
 		return new WP_Error( 'artivio_ab_event_create_failed', 'tribe_create_event() returned false.', array( 'status' => 500 ) );
@@ -588,12 +636,64 @@ function artivio_ab_register_routes() {
 	);
 }
 
-function artivio_ab_status() {
+/**
+ * Reports what actually happened for one ability name, by querying the live
+ * Abilities API registry — not by assuming registration succeeded because
+ * this plugin's own wp_register_ability() call was written correctly.
+ *
+ * v1.1.0's status endpoint reported a hardcoded list of intended ability
+ * names as if they were confirmed registered, with no registry lookup behind
+ * it. That masked the real v1.2.0 bug (an unregistered ability category —
+ * see the file header) for a full round of live testing: the endpoint said
+ * "registered" while wp_register_ability() had actually returned null for
+ * all five abilities. This version checks the registry directly so a false
+ * "it's registered" can't happen again.
+ *
+ * @param string $name Ability name, e.g. 'artivio/seo-get'.
+ * @return array{registered: bool, mcpPublic: bool|null}
+ */
+function artivio_ab_ability_status( string $name ): array {
+	if ( ! function_exists( 'wp_get_ability' ) ) {
+		return array( 'registered' => false, 'mcpPublic' => null );
+	}
+	$ability = wp_get_ability( $name );
+	if ( ! $ability ) {
+		return array( 'registered' => false, 'mcpPublic' => null );
+	}
+	$meta      = $ability->get_meta();
+	$mcp_meta  = is_array( $meta['mcp'] ?? null ) ? $meta['mcp'] : array();
+	$mcp_public = isset( $mcp_meta['public'] )
+		? (bool) $mcp_meta['public']
+		: ( true === ( $meta['public'] ?? false ) );
 	return array(
-		'plugin'            => 'artivio-abilities-bridge',
-		'pluginVersion'     => ARTIVIO_AB_VERSION,
-		'abilitiesApiReady' => function_exists( 'wp_register_ability' ),
-		'groups'            => array(
+		'registered' => true,
+		'mcpPublic'  => $mcp_public,
+	);
+}
+
+function artivio_ab_status() {
+	$ability_names = array(
+		'artivio/seo-get',
+		'artivio/seo-set',
+		'artivio/cf7-create-form',
+		'artivio/event-create',
+		'artivio/cache-purge',
+	);
+	$abilities = array();
+	foreach ( $ability_names as $name ) {
+		$abilities[ $name ] = artivio_ab_ability_status( $name );
+	}
+
+	return array(
+		'plugin'                  => 'artivio-abilities-bridge',
+		'pluginVersion'           => ARTIVIO_AB_VERSION,
+		'abilitiesApiReady'       => function_exists( 'wp_register_ability' ),
+		'categoriesRegistered'    => array(
+			'artivio-content'        => function_exists( 'wp_has_ability_category' ) && wp_has_ability_category( 'artivio-content' ),
+			'artivio-infrastructure' => function_exists( 'wp_has_ability_category' ) && wp_has_ability_category( 'artivio-infrastructure' ),
+		),
+		'abilities'               => $abilities,
+		'groups'                  => array(
 			'seo'    => array(
 				'abilities'       => array( 'artivio/seo-get', 'artivio/seo-set' ),
 				'baseAgentActive' => function_exists( 'artivio_wp_seo_plugin' ),
@@ -612,6 +712,6 @@ function artivio_ab_status() {
 				'active'    => has_action( 'litespeed_purge_all' ) || has_action( 'litespeed_purge_post' ),
 			),
 		),
-		'note'              => 'A group with active/baseAgentActive: false means its ability is registered but will return a 424 when called — that plugin is not active on this site.',
+		'note'                    => 'abilities{}.registered is the ground truth from wp_get_ability() — trust that over the groups{} block below, which only reports whether each dependency plugin is active, not whether the ability itself registered. A group with active/baseAgentActive: false means its ability is registered but will 424 when called — that dependency is not active on this site.',
 	);
 }
