@@ -1,0 +1,19 @@
+Subject: Refund Request — Oxygen Builder Lifetime License (Purchased September 6, 2026)
+
+Hello,
+
+I'm requesting a refund for the Oxygen Builder lifetime license I purchased on September 6, 2026, refunded to the same credit card used for that purchase. Order/reference number: [ADD ORDER NUMBER FROM YOUR RECEIPT]
+
+We bought this license specifically for Oxygen's Agent Connector — the feature that exposes a site's layout as structured data (JSON layout trees, selectors/components, and Oxygen's CSS variables) so that AI tooling can edit it programmatically. That capability was the entire reason for the purchase, and it hasn't worked out for us, for two related reasons:
+
+1. The working functionality is beta-only. The Agent Connector requires Oxygen 6.1 or later, and in our own testing the full feature set only worked reliably on 6.2.0-beta.8 — a beta pre-release. It has never been available to us in a stable, generally available release. We can't build client production sites on a beta channel; that isn't a workable foundation for an agency doing ongoing client delivery.
+
+2. A failed production migration. When we attempted to bring one of our client sites onto Oxygen, we ran into a serious content-migration failure that made the platform unworkable for that project. We ultimately had to abandon Oxygen for that build line entirely and rebuild it on Gutenberg with Kadence Blocks instead.
+
+Between the two, the license has provided no usable value to us, and we have no ongoing use for it — our WordPress build process going forward does not use Oxygen.
+
+I'd appreciate a refund to the card used for the original purchase. Happy to provide the order confirmation or any other details you need to process this quickly.
+
+Thank you,
+Ryan Mahabir
+ChurchWeb Global
