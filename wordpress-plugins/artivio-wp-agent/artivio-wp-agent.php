@@ -2,11 +2,30 @@
 /**
  * Plugin Name:  Artivio WP Agent (base)
  * Plugin URI:   https://artivio.io
- * Description:  Builder-agnostic base plugin for Artivio. Repairs WordPress Application Passwords on CGI/FastCGI hosts, exposes a self-diagnosing auth check, reports what a site actually runs, and reads/writes SEO fields for Rank Math, Yoast, or SEOPress. Install on every client WordPress site regardless of page builder.
- * Version:      1.2.0
+ * Description:  Builder-agnostic base plugin for Artivio. Repairs WordPress Application Passwords on CGI/FastCGI hosts, exposes a self-diagnosing auth check, reports what a site actually runs, and reads/writes SEO fields for Rank Math, Yoast, SEOPress, or Slim SEO. Install on every client WordPress site regardless of page builder.
+ * Version:      1.3.0
  * Requires PHP: 7.4
  * Author:       Artivio
  * License:      GPL-2.0-or-later
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CHANGELOG
+ *
+ * 1.3.0 (2026-09-11) — Slim SEO support added. Ryan replaced SEOPress with Slim
+ * SEO on the Gutenberg/Kadence build line; this route previously 409'd there
+ * ("no supported SEO plugin") because Slim SEO wasn't in the detection list.
+ * Slim SEO is architecturally different from the other three: it stores every
+ * field as ONE JSON object in a single postmeta key (`slim_seo`) instead of one
+ * meta key per field, so it can't use the flat field→meta-key map the other
+ * three share. Added a dedicated read/write path (artivio_wp_slimseo_read() /
+ * artivio_wp_slimseo_patch()) that reads/rewrites that JSON object, while
+ * keeping the same caller-facing field names (title, description, canonical,
+ * ogImage, twitterImage, noindex) so nothing else about the API changes. Slim
+ * SEO's schema has no focusKeyword/breadcrumbTitle/ogTitle/ogDescription/
+ * twitterTitle/twitterDescription/nofollow — sending those is reported back in
+ * `ignoredFields`/`warnings` exactly like an unsupported field on any other
+ * plugin, not silently dropped.
+ * ─────────────────────────────────────────────────────────────────────────────
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * WHY THIS EXISTS SEPARATELY
@@ -37,7 +56,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'ARTIVIO_WP_VERSION', '1.2.0' );
+define( 'ARTIVIO_WP_VERSION', '1.3.0' );
 define( 'ARTIVIO_WP_NS', 'artivio/v1' );
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -170,10 +189,12 @@ function artivio_wp_guard_post( int $post_id ) {
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
- * SEO (Rank Math / Yoast / SEOPress)
+ * SEO (Rank Math / Yoast / SEOPress / Slim SEO)
  *
- * Builder-agnostic by nature — all three store their fields in postmeta, and
- * core WP REST does not reliably expose those keys. The API here is
+ * Builder-agnostic by nature — all four store their fields in postmeta
+ * (Slim SEO as one JSON object under a single key, the other three as one
+ * key per field — see artivio_wp_seo_map()), and core WP REST does not
+ * reliably expose those keys by default. The API here is
  * deliberately plugin-NEUTRAL: callers send `title`, `description`,
  * `focusKeyword`… and this maps them onto whichever plugin the site runs. An
  * agent should not have to know that Rank Math spells it
@@ -204,6 +225,12 @@ function artivio_wp_seo_plugin(): string {
 	if ( defined( 'SEOPRESS_VERSION' ) ) {
 		return 'seopress';
 	}
+	// Slim SEO defines SLIM_SEO_VER (not *_VERSION, unlike the other three —
+	// confirmed against the plugin's own main file). class_exists() fallback
+	// covers a build where the constant load order changes.
+	if ( defined( 'SLIM_SEO_VER' ) || class_exists( 'SlimSEO\Container' ) ) {
+		return 'slimseo';
+	}
 	return 'none';
 }
 
@@ -220,6 +247,7 @@ function artivio_wp_seo_none_error(): WP_Error {
 		'Rank Math' => 'seo-by-rank-math/rank-math.php',
 		'Yoast SEO' => 'wordpress-seo/wp-seo.php',
 		'SEOPress'  => 'wp-seopress/seopress.php',
+		'Slim SEO'  => 'slim-seo/slim-seo.php',
 	);
 	$active_db  = (array) get_option( 'active_plugins', array() );
 	$installed  = array();
@@ -235,19 +263,21 @@ function artivio_wp_seo_none_error(): WP_Error {
 	$install_slug = 'seo-by-rank-math';
 	if ( in_array( 'Yoast SEO', $installed, true ) && ! in_array( 'Rank Math', $installed, true ) ) {
 		$install_slug = 'wordpress-seo';
-	} elseif ( in_array( 'SEOPress', $installed, true ) && ! in_array( 'Rank Math', $installed, true ) ) {
+	} elseif ( in_array( 'SEOPress', $installed, true ) && ! in_array( 'Rank Math', $installed, true ) && ! in_array( 'Yoast SEO', $installed, true ) ) {
 		$install_slug = 'wp-seopress';
+	} elseif ( in_array( 'Slim SEO', $installed, true ) && ! in_array( 'Rank Math', $installed, true ) && ! in_array( 'Yoast SEO', $installed, true ) && ! in_array( 'SEOPress', $installed, true ) ) {
+		$install_slug = 'slim-seo';
 	}
 	if ( $listed ) {
 		$hint = implode( ', ', $listed ) . ' is in active_plugins but did not load in this request — the option is probably stale in the object cache. Run wp_cache_flush (or `wp cache flush`) and retry; if it persists, deactivate and reactivate the plugin.';
 	} elseif ( $installed ) {
 		$hint = implode( ', ', $installed ) . ' is installed but NOT active. Activate it (wp_cli ["plugin","activate","' . $install_slug . '"]) and retry.';
 	} else {
-		$hint = 'None of Rank Math, Yoast, or SEOPress is installed. Install one (wp_cli ["plugin","install","seo-by-rank-math","--activate"]) and retry.';
+		$hint = 'None of Rank Math, Yoast, SEOPress, or Slim SEO is installed. Install one (wp_cli ["plugin","install","seo-by-rank-math","--activate"]) and retry.';
 	}
 	return new WP_Error(
 		'artivio_wp_no_seo_plugin',
-		'No supported SEO plugin is loaded in this request. This route supports Rank Math, Yoast, and SEOPress. ' . $hint,
+		'No supported SEO plugin is loaded in this request. This route supports Rank Math, Yoast, SEOPress, and Slim SEO. ' . $hint,
 		array(
 			'status'      => 409,
 			'installed'   => $installed,
@@ -308,6 +338,26 @@ function artivio_wp_seo_map( string $which ): array {
 			// rather than guessed.
 		);
 	}
+	if ( 'slimseo' === $which ) {
+		// Slim SEO stores its fields as ONE JSON object in a single postmeta
+		// key (`slim_seo`), confirmed against elightup/slim-seo's own
+		// src/RestApi.php schema (2026-09-11) — not one meta key per field
+		// like the other three plugins. This map is still used to decide
+		// which caller-facing field NAMES this plugin accepts and what its
+		// sub-key is called inside that JSON object; artivio_wp_slimseo_read()
+		// and artivio_wp_slimseo_patch() do the actual read/write against the
+		// single key rather than looping this map through get/update_post_meta
+		// like the other three. Slim SEO's schema has no focusKeyword,
+		// breadcrumbTitle, ogTitle, ogDescription, twitterTitle, or
+		// twitterDescription — omitted, same as SEOPress's breadcrumbTitle gap.
+		return array(
+			'title'        => 'title',
+			'description'  => 'description',
+			'canonical'    => 'canonical',
+			'ogImage'      => 'facebook_image',
+			'twitterImage' => 'twitter_image',
+		);
+	}
 	return array();
 }
 
@@ -324,7 +374,26 @@ function artivio_wp_seo_limits(): array {
 	);
 }
 
+/**
+ * Slim SEO-only read: unpacks the single `slim_seo` JSON postmeta object
+ * instead of looping artivio_wp_seo_map() through get_post_meta() per field,
+ * because there is no per-field meta key to loop over.
+ */
+function artivio_wp_slimseo_read( int $post_id ): array {
+	$raw = get_post_meta( $post_id, 'slim_seo', true );
+	$raw = is_array( $raw ) ? $raw : array();
+	$out = array();
+	foreach ( artivio_wp_seo_map( 'slimseo' ) as $field => $subkey ) {
+		$out[ $field ] = isset( $raw[ $subkey ] ) ? $raw[ $subkey ] : '';
+	}
+	$out['noindex'] = ! empty( $raw['noindex'] );
+	return $out;
+}
+
 function artivio_wp_seo_read( int $post_id, string $which ): array {
+	if ( 'slimseo' === $which ) {
+		return artivio_wp_slimseo_read( $post_id );
+	}
 	$out = array();
 	foreach ( artivio_wp_seo_map( $which ) as $field => $key ) {
 		$out[ $field ] = get_post_meta( $post_id, $key, true );
@@ -370,6 +439,86 @@ function artivio_wp_get_seo( WP_REST_Request $r ) {
 	);
 }
 
+/**
+ * Slim SEO-only write: rewrites the single `slim_seo` JSON postmeta object
+ * rather than calling update_post_meta() once per field like the other three
+ * plugins, since Slim SEO has no per-field meta key to update. Reads the
+ * existing object first so an untouched field already stored there survives
+ * a write that only sets one or two fields (a per-key update_post_meta call
+ * never had this problem because each field lived in its own key).
+ */
+function artivio_wp_slimseo_patch( int $post_id, WP_REST_Request $r ) {
+	$map     = artivio_wp_seo_map( 'slimseo' );
+	$urls    = artivio_wp_seo_url_fields();
+	$limits  = artivio_wp_seo_limits();
+	$changed = array();
+	$cleared = array();
+	$warn    = array();
+	$unknown = array();
+
+	$raw = get_post_meta( $post_id, 'slim_seo', true );
+	$raw = is_array( $raw ) ? $raw : array();
+
+	$params = $r->get_params();
+	foreach ( $params as $field => $value ) {
+		if ( 'id' === $field ) {
+			continue;
+		}
+		if ( 'noindex' === $field ) {
+			$raw['noindex'] = filter_var( $value, FILTER_VALIDATE_BOOLEAN );
+			$changed[]      = 'noindex';
+			continue;
+		}
+		if ( 'nofollow' === $field ) {
+			// Slim SEO's own schema (src/RestApi.php) has no nofollow flag —
+			// only noindex. Reported rather than silently dropped.
+			$warn[] = 'nofollow is not part of Slim SEO\'s schema (only noindex exists) — ignored.';
+			continue;
+		}
+		if ( ! isset( $map[ $field ] ) ) {
+			$unknown[] = $field;
+			continue;
+		}
+		$subkey = $map[ $field ];
+
+		if ( null === $value || '' === $value ) {
+			unset( $raw[ $subkey ] );
+			$cleared[] = $field;
+			continue;
+		}
+
+		$clean = in_array( $field, $urls, true )
+			? esc_url_raw( (string) $value )
+			: sanitize_text_field( (string) $value );
+
+		if ( isset( $limits[ $field ] ) && mb_strlen( $clean ) > $limits[ $field ] ) {
+			$warn[] = sprintf(
+				'%s is %d characters; Google typically truncates beyond about %d. Saved as supplied.',
+				$field,
+				mb_strlen( $clean ),
+				$limits[ $field ]
+			);
+		}
+
+		$raw[ $subkey ] = $clean;
+		$changed[]      = $field;
+	}
+
+	update_post_meta( $post_id, 'slim_seo', wp_slash( $raw ) );
+	clean_post_cache( $post_id );
+
+	return array(
+		'id'            => $post_id,
+		'seoPlugin'     => 'slimseo',
+		'changed'       => $changed,
+		'cleared'       => $cleared,
+		'ignoredFields' => $unknown,
+		'warnings'      => $warn,
+		'fields'        => artivio_wp_slimseo_read( $post_id ),
+		'link'          => get_permalink( $post_id ),
+	);
+}
+
 function artivio_wp_patch_seo( WP_REST_Request $r ) {
 	$post_id = (int) $r['id'];
 	$guard   = artivio_wp_guard_post( $post_id );
@@ -379,6 +528,9 @@ function artivio_wp_patch_seo( WP_REST_Request $r ) {
 	$which = artivio_wp_seo_plugin();
 	if ( 'none' === $which ) {
 		return artivio_wp_seo_none_error();
+	}
+	if ( 'slimseo' === $which ) {
+		return artivio_wp_slimseo_patch( $post_id, $r );
 	}
 
 	$map     = artivio_wp_seo_map( $which );
