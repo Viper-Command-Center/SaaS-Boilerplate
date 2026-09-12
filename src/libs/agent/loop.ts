@@ -11,13 +11,25 @@
  * BUDGET (Phase 26): the old hard cap was 8 iterations per turn, and hitting
  * it ended the turn SILENTLY — which is how a 6-week dashboard build stopped
  * at week 2 overnight with no error and no explanation. Now the cap is
- * configurable (chat default 24, scheduled missions pass more), a wall-clock
- * guard stops runaway turns, and exhaustion is HONEST: the model gets one
- * final tool-free call to summarise progress + what remains, the user sees a
- * [budget] line, and callers receive `exhausted: true` so a scheduled mission
- * can requeue itself to continue (see run-scheduled). Cost is bounded the
- * same way it always was: checkSpend() runs before EVERY iteration, so the
- * daily cap — not the iteration count — is the real spending guardrail.
+ * configurable, a wall-clock guard stops runaway turns, and exhaustion is
+ * HONEST: the model gets one final tool-free call to summarise progress +
+ * what remains, the user sees a [budget] line, and callers receive
+ * `exhausted: true` so a scheduled mission can requeue itself to continue
+ * (see run-scheduled). Cost is bounded the same way it always was:
+ * checkSpend() runs before EVERY iteration, so the daily cap — not the
+ * iteration count — is the real spending guardrail.
+ *
+ * Chat default raised 24 → 40 (2026-09-12, Ryan): now equal to
+ * MISSION_MAX_ITERATIONS (run-scheduled/route.ts), so a chat turn and one
+ * mission tick behave the same. Reason: a chat turn that does real
+ * pre-mission verification (checking a site's state, reading a migration
+ * manifest, confirming installed plugins) before ever calling start_mission
+ * was hitting the OLD 24-call chat cap before it reached that call — nothing
+ * to do with a workspace's daily dollar cap (Platform Admin → Workspaces),
+ * which is a completely separate limit checked by checkSpend() above. See
+ * mission_runner.md in project memory for the full "three different
+ * budgets" writeup — the confusion this caused is worth re-reading before
+ * touching either cap again.
  */
 
 import type { BlockMessage } from '@/libs/agent/anthropic';
@@ -30,7 +42,7 @@ import { saveFile } from '@/libs/storage/files';
 import { captureIssue, redact } from '@/libs/support/issues';
 import { approvals, auditLog } from '@/models/Schema';
 
-const DEFAULT_MAX_ITERATIONS = 24;
+const DEFAULT_MAX_ITERATIONS = 40;
 const DEFAULT_WALL_CLOCK_MS = 4 * 60_000; // stay under typical route limits
 
 // Phase 29 token diet — tool-result eviction.
