@@ -12,32 +12,71 @@
 
 import { and, eq, gte, sql } from 'drizzle-orm';
 import { db } from '@/libs/DB';
-import { tenants, usageEvents } from '@/models/Schema';
+import { modelCatalog, tenants, usageEvents } from '@/models/Schema';
 
 /** USD per 1M tokens. Keep in sync with provider pricing. */
 type ModelPrice = { input: number; output: number; cacheRead: number };
 
-const MODEL_PRICES: Record<string, ModelPrice> = {
-  // Claude Sonnet class
+/**
+ * Family-shaped fallback — used ONLY when a modelId isn't in model_catalog
+ * (a legacy Bedrock/Anthropic model id from before Phase 43, or the catalog
+ * row was deleted). Once every call goes through Bedrock Mantle with a
+ * catalog-backed modelId, this is dead code kept for safety, not the source
+ * of truth.
+ */
+const FALLBACK_PRICES: Record<string, ModelPrice> = {
   sonnet: { input: 3, output: 15, cacheRead: 0.30 },
-  // Claude Haiku class
   haiku: { input: 0.80, output: 4, cacheRead: 0.08 },
-  // Claude Opus class
   opus: { input: 15, output: 75, cacheRead: 1.50 },
 };
 
 /** Markup applied to raw provider cost when billing the client. */
 export const DEFAULT_MARKUP = Number(process.env.BILLING_MARKUP || '1.5');
 
-function priceForModel(modelId: string): ModelPrice {
+// Catalog prices change rarely (an admin edits them in the UI) and every LLM
+// call needs one, so cache briefly instead of a DB round-trip per call.
+const CATALOG_CACHE_TTL_MS = 5 * 60_000;
+let catalogCache: { at: number; byId: Map<string, ModelPrice> } | null = null;
+
+async function loadCatalogPrices(): Promise<Map<string, ModelPrice>> {
+  if (catalogCache && Date.now() - catalogCache.at < CATALOG_CACHE_TTL_MS) {
+    return catalogCache.byId;
+  }
+  const byId = new Map<string, ModelPrice>();
+  try {
+    const rows = await db.select().from(modelCatalog);
+    for (const row of rows) {
+      byId.set(row.id, {
+        input: Number(row.inputPricePerM),
+        output: Number(row.outputPricePerM),
+        // The catalog doesn't track a separate cache-read price per model yet
+        // (Mantle doesn't surface one uniformly across providers) — 10% of
+        // input is the standard Anthropic prompt-cache discount and a
+        // reasonable estimate for everything else too.
+        cacheRead: Number(row.inputPricePerM) * 0.10,
+      });
+    }
+  } catch {
+    // DB hiccup — callers fall back to family-shaped pricing below.
+  }
+  catalogCache = { at: Date.now(), byId };
+  return byId;
+}
+
+function fallbackPriceForModel(modelId: string): ModelPrice {
   const id = modelId.toLowerCase();
   if (id.includes('haiku')) {
-    return MODEL_PRICES.haiku!;
+    return FALLBACK_PRICES.haiku!;
   }
   if (id.includes('opus')) {
-    return MODEL_PRICES.opus!;
+    return FALLBACK_PRICES.opus!;
   }
-  return MODEL_PRICES.sonnet!;
+  return FALLBACK_PRICES.sonnet!;
+}
+
+async function priceForModel(modelId: string): Promise<ModelPrice> {
+  const catalog = await loadCatalogPrices();
+  return catalog.get(modelId) ?? fallbackPriceForModel(modelId);
 }
 
 export type TokenUsage = {
@@ -53,8 +92,8 @@ export type TokenUsage = {
 const CACHE_WRITE_MULTIPLIER = 1.25;
 
 /** Cost in USD of a single LLM call, from its actual token counts. */
-export function llmCostUsd(modelId: string, usage: TokenUsage): number {
-  const p = priceForModel(modelId);
+export async function llmCostUsd(modelId: string, usage: TokenUsage): Promise<number> {
+  const p = await priceForModel(modelId);
   return (
     (usage.inputTokens / 1_000_000) * p.input
     + (usage.outputTokens / 1_000_000) * p.output
@@ -71,7 +110,7 @@ export async function meterLlm(a: {
   detail?: string;
 }): Promise<void> {
   try {
-    const cost = llmCostUsd(a.modelId, a.usage);
+    const cost = await llmCostUsd(a.modelId, a.usage);
     await db.insert(usageEvents).values({
       tenantId: a.tenantId,
       kind: 'llm',

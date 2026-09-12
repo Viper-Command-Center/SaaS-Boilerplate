@@ -36,6 +36,7 @@ import type { BlockMessage } from '@/libs/agent/anthropic';
 import type { TenantToolset, ToolResultRich } from '@/libs/mcp/registry';
 import { callClaudeWithTools } from '@/libs/agent/anthropic';
 import { detectFabricatedCalls, fabricationNudge } from '@/libs/agent/fabricatedCalls';
+import { resolveModelConfig } from '@/libs/agent/modelConfig';
 import { checkSpend, meterLlm } from '@/libs/billing/meter';
 import { db } from '@/libs/DB';
 import { saveFile } from '@/libs/storage/files';
@@ -108,6 +109,12 @@ export async function runToolLoop(a: {
   const maxIterations = a.maxIterations ?? DEFAULT_MAX_ITERATIONS;
   const wallClockMs = a.wallClockMs ?? DEFAULT_WALL_CLOCK_MS;
   const startedAt = Date.now();
+
+  // Phase 43: which model serves this ENTIRE turn. A real conversationId is
+  // an interactive chat turn (cheap/fast default); an empty one is a
+  // scheduled task or mission step — real build work. Resolved once up front
+  // (not re-checked per iteration) so a turn doesn't switch models mid-way.
+  const { modelId, reasoningEffort } = await resolveModelConfig(a.tenantId, a.conversationId ? 'chat' : 'build');
 
   // The user's turn: [ ...images, { text } ] when there are attachments, or a
   // plain string when there aren't (cheaper to serialise, and the overwhelming
@@ -183,6 +190,8 @@ export async function runToolLoop(a: {
       system: a.system,
       messages,
       tools: a.toolset.anthropicTools,
+      modelId,
+      reasoningEffort,
     });
 
     // Meter the exact tokens this call used (returned in-band by the provider).
@@ -412,6 +421,8 @@ export async function runToolLoop(a: {
           },
         ],
         tools: [], // tool-free by construction
+        modelId,
+        reasoningEffort,
       });
       if (wrap.usage) {
         await meterLlm({

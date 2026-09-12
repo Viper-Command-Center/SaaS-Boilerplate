@@ -1,10 +1,40 @@
 /**
  * Multi-provider Claude transport (no SDK deps) — same pattern proven in the
  * BudgetSmart marketing repo. First configured provider wins:
- *   1. BEDROCK_API_KEY  — Bedrock bearer-token invoke (non-streaming; the
- *      reply is yielded in one chunk).
- *   2. ANTHROPIC_API_KEY / CLAUDE_API_KEY — api.anthropic.com with true
- *      token-by-token streaming.
+ *   1. BEDROCK_MANTLE_API_KEY — Bedrock Mantle (see below). Per-call model
+ *      selection; this is what powers workspace-level model assignment.
+ *   2. BEDROCK_API_KEY  — legacy Bedrock bearer-token invoke (non-streaming;
+ *      the reply is yielded in one chunk). ONE model for the whole platform —
+ *      kept only as a fallback for as long as Mantle isn't configured.
+ *   3. ANTHROPIC_API_KEY / CLAUDE_API_KEY — api.anthropic.com with true
+ *      token-by-token streaming. Same one-model limitation as #2.
+ *
+ * MANTLE (Phase 43 / 2026-09-12, Ryan): Amazon Bedrock Mantle is a newer
+ * Bedrock endpoint — distinct from classic bedrock-runtime — that exposes
+ * Claude AND third-party models (Kimi, DeepSeek, Nemotron, GLM, Qwen, Grok,
+ * GPT-*…) through two OpenAI-/Anthropic-compatible surfaces, both auth'd with
+ * a plain `x-api-key` bearer header (no AWS SigV4 signing):
+ *   - Anthropic-shaped: POST {base}/anthropic/v1/messages — identical shape
+ *     to api.anthropic.com (system/messages/tools/thinking). Used for every
+ *     `anthropic.*` model id so Claude keeps native tool_use blocks and
+ *     extended-thinking budgets.
+ *   - OpenAI-shaped: POST {base}/v1/chat/completions — standard OpenAI
+ *     chat-completions shape, with a `reasoning_effort` param
+ *     (minimal/low/medium/high) for "how hard should it think". Used for
+ *     every non-Claude model id.
+ * Whichever shape is used, callClaudeWithTools always speaks Anthropic-style
+ * blocks to its caller (loop.ts) — the OpenAI-shaped path converts the
+ * message history down and the response back up, so the tool loop, the
+ * retry/caching logic and the billing ledger never need to know which model
+ * actually served a given call.
+ *
+ * ⚠️ Tool-use reliability per third-party model is UNVERIFIED — Mantle's own
+ * console does not surface a tool-calling capability flag (only "Reasoning"
+ * ever appears on a model's detail panel). Ryan's call (2026-09-12): wire
+ * every model in now, find out which ones actually hold up under real tool
+ * loops via live testing, pull back any that don't. See
+ * agent_model_selection.md in project memory before trusting a non-Claude
+ * model for unattended build work.
  *
  * RETRY (Phase 27 / P0): transient provider failures — 429 throttling, 5xx,
  * 529 overloaded, and network-level fetch errors — are retried with
@@ -36,11 +66,37 @@ export type RawModelResponse = {
   _modelId?: string;
 };
 
+/**
+ * "How hard should it think" — Mantle's dial on BOTH API shapes (native
+ * extended-thinking budget for Claude, `reasoning_effort` for everything
+ * else). Chat should default low/undefined (fast, cheap); build work can ask
+ * for more.
+ */
+export type ReasoningEffort = 'minimal' | 'low' | 'medium' | 'high';
+
+// Legacy single-model constants — only read when BEDROCK_MANTLE_API_KEY is
+// NOT configured. Once Mantle is on, every call carries its own modelId.
 const BEDROCK_MODEL = process.env.BEDROCK_MODEL_ID || 'us.anthropic.claude-sonnet-4-6';
 const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-5';
 
+/** Platform default when a workspace hasn't picked a model of its own. */
+export const DEFAULT_MANTLE_MODEL = process.env.MANTLE_DEFAULT_MODEL_ID || 'anthropic.claude-sonnet-5';
+
 function bedrockRegion(): string {
   return process.env.BEDROCK_REGION || process.env.AWS_REGION || 'us-east-1';
+}
+
+function mantleBaseUrl(): string {
+  return process.env.BEDROCK_MANTLE_BASE_URL || `https://bedrock-mantle.${bedrockRegion()}.api.aws`;
+}
+
+/**
+ * True for every Claude model id we know how to name (the "anthropic.*"
+ * Mantle ids) — these go through the Anthropic-shaped endpoint so they keep
+ * native tool_use blocks and extended thinking.
+ */
+function isClaudeModelId(modelId: string): boolean {
+  return /claude|anthropic/i.test(modelId);
 }
 
 // ─── Transient-failure retry ─────────────────────────────────────────────────
@@ -218,16 +274,236 @@ function cachedSystem(system: string) {
 }
 
 /**
- * Tool-capable single model call (non-streaming) via the Bedrock bearer
- * endpoint — used by the agent tool loop. Falls back to api.anthropic.com
- * when only an Anthropic key is configured. Transient failures are retried
- * (see postWithRetry above).
+ * Extended-thinking budget for a Claude call on the Anthropic-shaped Mantle
+ * endpoint. undefined/'minimal'/'low' → no thinking block at all (fastest,
+ * cheapest — the right default for chat). 'medium'/'high' turn it on.
+ */
+function claudeThinkingBudget(effort: ReasoningEffort | undefined): number | undefined {
+  if (effort === 'high') {
+    return 8_192;
+  }
+  if (effort === 'medium') {
+    return 2_048;
+  }
+  return undefined;
+}
+
+function mantleHeaders(key: string): Record<string, string> {
+  return {
+    'x-api-key': key,
+    'anthropic-version': '2023-06-01',
+    'anthropic-workspace-id': process.env.BEDROCK_MANTLE_PROJECT || 'default',
+    'OpenAI-Project': process.env.BEDROCK_MANTLE_PROJECT || 'default',
+    'Content-Type': 'application/json',
+    'Accept': 'application/json',
+  };
+}
+
+async function callMantleAnthropic(a: {
+  modelId: string;
+  system: string;
+  messages: BlockMessage[];
+  tools: Array<{ name: string; description: string; input_schema: Record<string, unknown> }>;
+  maxTokens: number;
+  reasoningEffort?: ReasoningEffort;
+}): Promise<RawModelResponse> {
+  const key = process.env.BEDROCK_MANTLE_API_KEY!;
+  const budgetTokens = claudeThinkingBudget(a.reasoningEffort);
+  // Anthropic requires max_tokens to exceed the thinking budget.
+  const maxTokens = budgetTokens ? Math.max(a.maxTokens, budgetTokens + 1_024) : a.maxTokens;
+
+  const resp = await postWithRetry(`${mantleBaseUrl()}/anthropic/v1/messages`, mantleHeaders(key), JSON.stringify({
+    model: a.modelId,
+    max_tokens: maxTokens,
+    system: cachedSystem(a.system),
+    messages: a.messages,
+    ...(a.tools.length > 0 ? { tools: a.tools } : {}),
+    ...(budgetTokens ? { thinking: { type: 'enabled', budget_tokens: budgetTokens } } : {}),
+  }), 'Bedrock Mantle (Anthropic)');
+  if (!resp.ok) {
+    const detail = (await resp.text().catch(() => '')).slice(0, 300);
+    throw new Error(`Bedrock Mantle ${resp.status}: ${detail}`);
+  }
+  const data = await resp.json() as RawModelResponse;
+  data._modelId = a.modelId;
+  return data;
+}
+
+// ─── OpenAI-shaped Mantle path (every non-Claude model) ─────────────────────
+// loop.ts builds and re-sends message history in Anthropic block shape
+// regardless of which model is serving a turn, so every call through here
+// converts that history down to OpenAI chat-completions shape, and converts
+// the reply back up to the same RawModelResponse shape the Anthropic path
+// returns — the tool loop, retry/caching logic and billing ledger stay
+// completely unaware of which shape actually went over the wire.
+
+function anthropicToolsToOpenAI(tools: Array<{ name: string; description: string; input_schema: Record<string, unknown> }>) {
+  return tools.map(t => ({
+    type: 'function' as const,
+    function: { name: t.name, description: t.description, parameters: t.input_schema },
+  }));
+}
+
+/**
+ * A single Anthropic content block, loosely typed — the shapes vary by role
+ * and this module only reads the fields it needs to convert.
+ */
+type AnthropicBlock = {
+  type: string;
+  text?: string;
+  id?: string;
+  tool_use_id?: string;
+  name?: string;
+  input?: Record<string, unknown>;
+  content?: unknown;
+  source?: { type: string; media_type: string; data: string };
+  is_error?: boolean;
+};
+
+function blockMessagesToOpenAI(system: string, messages: BlockMessage[]): Array<Record<string, unknown>> {
+  const out: Array<Record<string, unknown>> = [{ role: 'system', content: system }];
+
+  for (const msg of messages) {
+    if (typeof msg.content === 'string') {
+      out.push({ role: msg.role, content: msg.content });
+      continue;
+    }
+    const blocks = (Array.isArray(msg.content) ? msg.content : []) as AnthropicBlock[];
+
+    if (msg.role === 'assistant') {
+      const textParts = blocks.filter(b => b.type === 'text').map(b => b.text ?? '').filter(Boolean);
+      const toolUses = blocks.filter(b => b.type === 'tool_use');
+      const entry: Record<string, unknown> = { role: 'assistant', content: textParts.join('\n') || null };
+      if (toolUses.length > 0) {
+        entry.tool_calls = toolUses.map(t => ({
+          id: t.id,
+          type: 'function',
+          function: { name: t.name, arguments: JSON.stringify(t.input ?? {}) },
+        }));
+      }
+      out.push(entry);
+      continue;
+    }
+
+    // user role: text/image blocks stay one message; each tool_result becomes
+    // its OWN message (OpenAI has no concept of a multi-result turn).
+    const contentParts: Array<Record<string, unknown>> = [];
+    for (const b of blocks) {
+      if (b.type === 'text' && b.text) {
+        contentParts.push({ type: 'text', text: b.text });
+      } else if (b.type === 'image' && b.source) {
+        contentParts.push({ type: 'image_url', image_url: { url: `data:${b.source.media_type};base64,${b.source.data}` } });
+      } else if (b.type === 'tool_result') {
+        // Flush any accumulated text/image content as its own user message
+        // first, so ordering (text/images, then the tool result) survives.
+        if (contentParts.length > 0) {
+          out.push({ role: 'user', content: contentParts.slice() });
+          contentParts.length = 0;
+        }
+        const resultContent = b.content;
+        const text = typeof resultContent === 'string'
+          ? resultContent
+          : Array.isArray(resultContent)
+            ? (resultContent as AnthropicBlock[]).filter(c => c.type === 'text').map(c => c.text ?? '').join('\n')
+            : '';
+        out.push({ role: 'tool', tool_call_id: b.tool_use_id, content: text });
+      }
+    }
+    if (contentParts.length > 0) {
+      out.push({ role: 'user', content: contentParts.length === 1 && contentParts[0]?.type === 'text' ? contentParts[0].text : contentParts });
+    }
+  }
+
+  return out;
+}
+
+function openAIStopReason(finishReason: string): string {
+  if (finishReason === 'tool_calls') {
+    return 'tool_use';
+  }
+  if (finishReason === 'length') {
+    return 'max_tokens';
+  }
+  return 'end_turn';
+}
+
+function openAIResponseToRaw(data: {
+  choices?: Array<{ message?: { content?: string | null; tool_calls?: Array<{ id: string; function: { name: string; arguments: string } }> }; finish_reason?: string }>;
+  usage?: { prompt_tokens?: number; completion_tokens?: number; prompt_tokens_details?: { cached_tokens?: number } };
+}, modelId: string): RawModelResponse {
+  const choice = data.choices?.[0];
+  const content: RawModelResponse['content'] = [];
+  if (choice?.message?.content) {
+    content.push({ type: 'text', text: choice.message.content });
+  }
+  for (const call of choice?.message?.tool_calls ?? []) {
+    let input: Record<string, unknown> = {};
+    try {
+      input = JSON.parse(call.function.arguments || '{}');
+    } catch {
+      input = {};
+    }
+    content.push({ type: 'tool_use', id: call.id, name: call.function.name, input });
+  }
+  return {
+    content,
+    stop_reason: openAIStopReason(choice?.finish_reason ?? 'stop'),
+    usage: {
+      input_tokens: data.usage?.prompt_tokens ?? 0,
+      output_tokens: data.usage?.completion_tokens ?? 0,
+      cache_read_input_tokens: data.usage?.prompt_tokens_details?.cached_tokens ?? 0,
+    },
+    _modelId: modelId,
+  };
+}
+
+async function callMantleOpenAI(a: {
+  modelId: string;
+  system: string;
+  messages: BlockMessage[];
+  tools: Array<{ name: string; description: string; input_schema: Record<string, unknown> }>;
+  maxTokens: number;
+  reasoningEffort?: ReasoningEffort;
+}): Promise<RawModelResponse> {
+  const key = process.env.BEDROCK_MANTLE_API_KEY!;
+  const resp = await postWithRetry(`${mantleBaseUrl()}/v1/chat/completions`, mantleHeaders(key), JSON.stringify({
+    model: a.modelId,
+    max_tokens: a.maxTokens,
+    messages: blockMessagesToOpenAI(a.system, a.messages),
+    ...(a.tools.length > 0 ? { tools: anthropicToolsToOpenAI(a.tools), tool_choice: 'auto' } : {}),
+    ...(a.reasoningEffort ? { reasoning_effort: a.reasoningEffort } : {}),
+  }), 'Bedrock Mantle (OpenAI)');
+  if (!resp.ok) {
+    const detail = (await resp.text().catch(() => '')).slice(0, 300);
+    throw new Error(`Bedrock Mantle ${resp.status}: ${detail}`);
+  }
+  const data = await resp.json();
+  return openAIResponseToRaw(data, a.modelId);
+}
+
+/**
+ * Tool-capable single model call (non-streaming) — used by the agent tool
+ * loop. Model selection:
+ *   - BEDROCK_MANTLE_API_KEY set → routes through Bedrock Mantle, using
+ *     `a.modelId` (falls back to DEFAULT_MANTLE_MODEL when the caller didn't
+ *     resolve one) and `a.reasoningEffort`. This is what makes per-workspace,
+ *     per-context (chat vs. build) model choice actually take effect.
+ *   - Otherwise: legacy behaviour, completely unchanged — ONE platform-wide
+ *     model (BEDROCK_MODEL/ANTHROPIC_MODEL), `a.modelId`/`a.reasoningEffort`
+ *     are ignored. This is intentional: flipping every workspace onto a new
+ *     API host on deploy, on a guess about which existing key is valid there,
+ *     is exactly the kind of change that should be an explicit opt-in — see
+ *     agent_model_selection.md for what to check before setting
+ *     BEDROCK_MANTLE_API_KEY in Railway.
+ * Transient failures are retried (see postWithRetry above) on every path.
  */
 export async function callClaudeWithTools(a: {
   system: string;
   messages: BlockMessage[];
   tools: Array<{ name: string; description: string; input_schema: Record<string, unknown> }>;
   maxTokens?: number;
+  modelId?: string;
+  reasoningEffort?: ReasoningEffort;
 }): Promise<RawModelResponse> {
   // 16k, not 4k: a start_mission call with a dozen detailed step instructions
   // is routinely >4k output tokens. At 4096 the response stopped at
@@ -236,6 +512,14 @@ export async function callClaudeWithTools(a: {
   // Sonnet supports far more; the loop also now RECOVERS from max_tokens
   // truncation, but headroom means it almost never has to.
   const maxTokens = a.maxTokens ?? 16_384;
+
+  if (process.env.BEDROCK_MANTLE_API_KEY) {
+    const modelId = a.modelId || DEFAULT_MANTLE_MODEL;
+    return isClaudeModelId(modelId)
+      ? callMantleAnthropic({ modelId, system: a.system, messages: a.messages, tools: a.tools, maxTokens, reasoningEffort: a.reasoningEffort })
+      : callMantleOpenAI({ modelId, system: a.system, messages: a.messages, tools: a.tools, maxTokens, reasoningEffort: a.reasoningEffort });
+  }
+
   const wantsBedrockBearer = Boolean(process.env.BEDROCK_API_KEY || process.env.AWS_BEARER_TOKEN_BEDROCK);
   const wantsAnthropic = Boolean(process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_API_KEY);
 
@@ -287,7 +571,8 @@ export async function callClaudeWithTools(a: {
 
   throw new Error(
     'No AI credentials configured. Add ONE of these to the Railway variables: '
-    + 'BEDROCK_API_KEY (+ optional BEDROCK_REGION/BEDROCK_MODEL_ID) or ANTHROPIC_API_KEY.',
+    + 'BEDROCK_MANTLE_API_KEY (recommended — enables per-workspace model choice), '
+    + 'BEDROCK_API_KEY (+ optional BEDROCK_REGION/BEDROCK_MODEL_ID), or ANTHROPIC_API_KEY.',
   );
 }
 

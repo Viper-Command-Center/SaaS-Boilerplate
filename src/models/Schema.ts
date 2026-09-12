@@ -572,6 +572,49 @@ export const playbooks = pgTable(
   t => [index('playbooks_scope_idx').on(t.scope, t.enabled)],
 );
 
+// ─── Phase 43: AI model catalog (Bedrock Mantle) ────────────────────────────
+// Ryan's 2026-09-12 ask: stop hardcoding one model for every workspace and
+// every kind of call. Bedrock Mantle (a newer Bedrock endpoint, OpenAI-/
+// Anthropic-compatible, simple x-api-key auth) exposes Claude alongside
+// third-party models (Kimi, DeepSeek, Nemotron, GLM, Qwen, Grok, GPT-*…) —
+// this table is the operator-editable price/capability sheet for all of them,
+// so adding a model or repricing one doesn't need a code deploy.
+//
+// `id` is the EXACT Mantle model id (e.g. "anthropic.claude-sonnet-5") — used
+// verbatim in the API call, so it doubles as the primary key.
+// `apiFormat` picks which Mantle endpoint shape callClaudeWithTools uses:
+// 'anthropic' → POST {mantle}/anthropic/v1/messages (native Claude shape,
+// extended-thinking budget for "reasoning"); 'openai' → POST
+// {mantle}/v1/chat/completions (everything else, reasoning_effort for
+// "reasoning"). See src/libs/agent/anthropic.ts.
+//
+// toolUseVerified starts FALSE for every row on purpose: Bedrock Mantle's own
+// console does not surface a tool-use/function-calling capability flag per
+// model (checked — only "Reasoning" ever appears), so reliability can only be
+// confirmed by a real mission test, not read off a spec sheet. Flip it to
+// true only after that test passes for a given model — see
+// agent_model_selection.md in project memory.
+export const modelCatalog = pgTable(
+  'model_catalog',
+  {
+    id: varchar('id', { length: 120 }).primaryKey(),
+    provider: varchar('provider', { length: 40 }).notNull(),
+    displayName: varchar('display_name', { length: 120 }).notNull(),
+    apiFormat: varchar('api_format', { length: 20 }).notNull().default('anthropic'), // 'anthropic' | 'openai'
+    inputPricePerM: numeric('input_price_per_m', { precision: 10, scale: 4 }).notNull(),
+    outputPricePerM: numeric('output_price_per_m', { precision: 10, scale: 4 }).notNull(),
+    contextWindow: integer('context_window'),
+    maxOutputTokens: integer('max_output_tokens'),
+    supportsReasoning: boolean('supports_reasoning').notNull().default(false),
+    toolUseVerified: boolean('tool_use_verified').notNull().default(false),
+    notes: text('notes'),
+    active: boolean('active').notNull().default(true),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  t => [index('model_catalog_active_idx').on(t.active, t.apiFormat)],
+);
+
 // ─── Phase 14: issue triage + escalation ────────────────────────────────────
 // When something breaks mid-conversation, three things must happen: the client
 // gets an honest message, the platform captures WHY (not a guess), and anything

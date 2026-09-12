@@ -1,11 +1,13 @@
 'use client';
 
 import type { BuiltinProvider, CatalogPreset, Plugin } from '@/features/admin/CatalogTab';
+import type { ModelCatalogRow } from '@/features/admin/ModelsTab';
 import type { AdminUser, Workspace as WsOption } from '@/features/admin/UsersTab';
 import { useCallback, useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { CatalogTab } from '@/features/admin/CatalogTab';
 import { IssuesTab } from '@/features/admin/IssuesTab';
+import { ModelsTab } from '@/features/admin/ModelsTab';
 import { PersonasTab } from '@/features/admin/PersonasTab';
 import { PlaybooksTab } from '@/features/admin/PlaybooksTab';
 import { UsersTab } from '@/features/admin/UsersTab';
@@ -25,12 +27,16 @@ type Workspace = {
   todayCostUsd: number;
   inputTokens: number;
   outputTokens: number;
+  chatModelId: string;
+  chatReasoningEffort: string;
+  buildModelId: string;
+  buildReasoningEffort: string;
 };
 
 const money = (n: number) => `$${n.toFixed(2)}`;
 
 export const AdminConsole = () => {
-  const [tab, setTab] = useState<'workspaces' | 'users' | 'catalog' | 'employees' | 'playbooks' | 'issues'>('workspaces');
+  const [tab, setTab] = useState<'workspaces' | 'users' | 'catalog' | 'models' | 'employees' | 'playbooks' | 'issues'>('workspaces');
   const [openIssues, setOpenIssues] = useState(0);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [totals, setTotals] = useState({ cost: 0, billed: 0, margin: 0, users: 0, workspaces: 0 });
@@ -40,12 +46,14 @@ export const AdminConsole = () => {
   const [catalog, setCatalog] = useState<Plugin[]>([]);
   const [builtins, setBuiltins] = useState<BuiltinProvider[]>([]);
   const [presets, setPresets] = useState<CatalogPreset[]>([]);
+  const [modelOptions, setModelOptions] = useState<ModelCatalogRow[]>([]);
   const [busy, setBusy] = useState(false);
 
   const reload = useCallback(() => {
     fetch('/api/admin/overview').then(r => r.json()).then((d) => {
       setWorkspaces(d.workspaces ?? []);
       setTotals(d.totals ?? { cost: 0, billed: 0, margin: 0, users: 0, workspaces: 0 });
+      setModelOptions(d.modelCatalog ?? []);
     }).catch(() => {});
     fetch('/api/admin/users').then(r => r.json()).then((d) => {
       setUsers(d.users ?? []);
@@ -106,6 +114,7 @@ export const AdminConsole = () => {
         <button type="button" className={tabClass('workspaces')} onClick={() => setTab('workspaces')}>Workspaces</button>
         <button type="button" className={tabClass('users')} onClick={() => setTab('users')}>Users</button>
         <button type="button" className={tabClass('catalog')} onClick={() => setTab('catalog')}>Plugin catalog</button>
+        <button type="button" className={tabClass('models')} onClick={() => setTab('models')}>Models</button>
         <button type="button" className={tabClass('employees')} onClick={() => setTab('employees')}>AI employees</button>
         <button type="button" className={tabClass('playbooks')} onClick={() => setTab('playbooks')}>Playbooks</button>
         <button type="button" className={tabClass('issues')} onClick={() => setTab('issues')}>
@@ -138,6 +147,8 @@ export const AdminConsole = () => {
                 <th className="p-3">Margin</th>
                 <th className="p-3">Today / cap</th>
                 <th className="p-3">Daily cap</th>
+                <th className="p-3">Chat model</th>
+                <th className="p-3">Build model</th>
                 <th className="p-3">Status</th>
               </tr>
             </thead>
@@ -188,6 +199,32 @@ export const AdminConsole = () => {
                       />
                     </td>
                     <td className="p-3">
+                      <select
+                        defaultValue={w.chatModelId}
+                        disabled={busy}
+                        onChange={e => patchWorkspace(w.id, { chatModelId: e.target.value })}
+                        className="
+                          rounded-sm border border-input bg-background px-2 py-1
+                          text-xs
+                        "
+                      >
+                        {modelOptions.map(m => <option key={m.id} value={m.id}>{m.displayName}</option>)}
+                      </select>
+                    </td>
+                    <td className="p-3">
+                      <select
+                        defaultValue={w.buildModelId}
+                        disabled={busy}
+                        onChange={e => patchWorkspace(w.id, { buildModelId: e.target.value })}
+                        className="
+                          rounded-sm border border-input bg-background px-2 py-1
+                          text-xs
+                        "
+                      >
+                        {modelOptions.map(m => <option key={m.id} value={m.id}>{m.displayName}</option>)}
+                      </select>
+                    </td>
+                    <td className="p-3">
                       <Button
                         size="sm"
                         variant={w.paused ? 'default' : 'outline'}
@@ -201,7 +238,7 @@ export const AdminConsole = () => {
                 );
               })}
               {workspaces.length === 0 && (
-                <tr><td colSpan={8} className="p-4 text-muted-foreground">No workspaces yet.</td></tr>
+                <tr><td colSpan={10} className="p-4 text-muted-foreground">No workspaces yet.</td></tr>
               )}
             </tbody>
           </table>
@@ -218,6 +255,8 @@ export const AdminConsole = () => {
       )}
 
       {tab === 'catalog' && <CatalogTab catalog={catalog} builtins={builtins} presets={presets} reload={reload} />}
+
+      {tab === 'models' && <ModelsTab />}
 
       {tab === 'employees' && <PersonasTab />}
 
