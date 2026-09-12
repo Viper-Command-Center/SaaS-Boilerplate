@@ -288,11 +288,24 @@ function claudeThinkingBudget(effort: ReasoningEffort | undefined): number | und
   return undefined;
 }
 
-function mantleHeaders(key: string): Record<string, string> {
+// Mantle validates headers STRICTLY per API format — sending the OTHER
+// format's project header on a request gets a 400 ("openai-project header
+// is not supported for this API format"), confirmed live 2026-09-12. So
+// these are deliberately separate builders, never a shared one with both
+// headers on it.
+function mantleAnthropicHeaders(key: string): Record<string, string> {
   return {
     'x-api-key': key,
     'anthropic-version': '2023-06-01',
     'anthropic-workspace-id': process.env.BEDROCK_MANTLE_PROJECT || 'default',
+    'Content-Type': 'application/json',
+    'Accept': 'application/json',
+  };
+}
+
+function mantleOpenAIHeaders(key: string): Record<string, string> {
+  return {
+    'x-api-key': key,
     'OpenAI-Project': process.env.BEDROCK_MANTLE_PROJECT || 'default',
     'Content-Type': 'application/json',
     'Accept': 'application/json',
@@ -312,7 +325,7 @@ async function callMantleAnthropic(a: {
   // Anthropic requires max_tokens to exceed the thinking budget.
   const maxTokens = budgetTokens ? Math.max(a.maxTokens, budgetTokens + 1_024) : a.maxTokens;
 
-  const resp = await postWithRetry(`${mantleBaseUrl()}/anthropic/v1/messages`, mantleHeaders(key), JSON.stringify({
+  const resp = await postWithRetry(`${mantleBaseUrl()}/anthropic/v1/messages`, mantleAnthropicHeaders(key), JSON.stringify({
     model: a.modelId,
     max_tokens: maxTokens,
     system: cachedSystem(a.system),
@@ -466,7 +479,7 @@ async function callMantleOpenAI(a: {
   reasoningEffort?: ReasoningEffort;
 }): Promise<RawModelResponse> {
   const key = process.env.BEDROCK_MANTLE_API_KEY!;
-  const resp = await postWithRetry(`${mantleBaseUrl()}/v1/chat/completions`, mantleHeaders(key), JSON.stringify({
+  const resp = await postWithRetry(`${mantleBaseUrl()}/v1/chat/completions`, mantleOpenAIHeaders(key), JSON.stringify({
     model: a.modelId,
     max_tokens: a.maxTokens,
     messages: blockMessagesToOpenAI(a.system, a.messages),
