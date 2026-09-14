@@ -322,6 +322,14 @@ expect('src/libs/agent/loop.ts', '\'loop.fabricated_calls\'', 'a fabrication is 
 expect('src/libs/agent/loop.ts', 'fabricationNudge(fab.names)', 'the model is sent back to make the real call');
 expect('src/libs/agent/prompt.ts', 'never write them yourself', 'the system prompt names the marker as platform-written');
 
+// ── Phase 43 — Divi 5 anti-HTML-fallback guidance (2026-09-14). Ryan's report:
+// prior page-builder work filled pages with raw HTML text boxes whenever an
+// agent didn't know the real module set for the builder it was on. DiviOps'
+// vendor guidance now says so explicitly, and steers to the vendor's own
+// verified starter templates before any hand-built module JSON.
+expect('src/libs/mcp/stdioCatalog.ts', 'THE FAILURE MODE THIS GUIDANCE EXISTS TO PREVENT', 'agents must be told not to fall back to a Code/raw-HTML module when they do not know the native one');
+expect('src/libs/mcp/stdioCatalog.ts', 'BEFORE composing any section by hand, call diviops_template_list', 'vendor-verified starter templates must be checked before hand-building module JSON');
+
 // ── Report ──────────────────────────────────────────────────────────────────
 if (failures.length > 0) {
   console.error(`\n✗ agent-evals: ${failures.length} of ${checks} tripwires FAILED\n`);
