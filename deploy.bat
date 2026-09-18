@@ -36,12 +36,12 @@ for /f "delims=" %%b in ('git rev-parse --abbrev-ref HEAD 2^>nul') do set "BRANC
 if not defined BRANCH (
   echo [deploy] ERROR: not a git repository, or .git is unreadable.
   echo [deploy] Try: git status   /   git fsck --full
-  call :die
+  goto :die
 )
 if /i not "!BRANCH!"=="main" (
   echo [deploy] ERROR: you are on branch "!BRANCH!", not main. Railway deploys main.
   echo [deploy] Nothing was committed or pushed.
-  call :die
+  goto :die
 )
 
 echo [deploy] Syncing dependencies / lockfile (npm)...
@@ -50,7 +50,7 @@ if errorlevel 1 (
   echo.
   echo [deploy] ERROR: npm install failed. Fix the error above before deploying.
   echo [deploy] Nothing was committed or pushed.
-  call :die
+  goto :die
 )
 
 echo [deploy] Typechecking (tsc --noEmit)...
@@ -63,7 +63,7 @@ if errorlevel 1 (
   echo [deploy] have failed too, 30 minutes from now, for the same reason.
   echo [deploy] Fix the errors ^(or send them to Claude^), then re-run.
   echo [deploy] ==========================================================
-  call :die
+  goto :die
 )
 
 REM ---------------------------------------------------------------------------
@@ -81,7 +81,7 @@ if exist ".git\index.lock" (
   ) else (
     echo [deploy] ERROR: .git\index.lock exists AND a git process is running.
     echo [deploy] Another git command is in progress. Let it finish, then re-run.
-    call :die
+    goto :die
   )
 )
 
@@ -91,7 +91,7 @@ if errorlevel 1 (
   echo.
   echo [deploy] ERROR: git add failed - the repository may be corrupt.
   echo [deploy] Try: git fsck --full
-  call :die
+  goto :die
 )
 
 REM ---------------------------------------------------------------------------
@@ -113,7 +113,7 @@ if errorlevel 1 (
     echo [deploy] ERROR: git commit FAILED. Nothing was pushed.
     echo [deploy] If you see "invalid object" errors, the object store is corrupt.
     echo [deploy] Recover with:  ren .git git-broken  ^&^&  git init -b main  ^&^&  git remote add origin ^<url^>  ^&^&  git fetch origin main  ^&^&  git reset --mixed FETCH_HEAD
-    call :die
+    goto :die
   )
   goto :push
 )
@@ -145,7 +145,7 @@ if errorlevel 1 (
   echo [deploy] ERROR: git push failed. See the error above.
   echo [deploy] If it says "non-fast-forward", something else pushed first. Run:
   echo [deploy]   git pull --rebase origin main
-  call :die
+  goto :die
 )
 
 echo.
