@@ -190,7 +190,7 @@ const tools: BuiltinTool[] = [
   },
   {
     name: 'wp_content_update',
-    description: 'Update a post or page (title, content, excerpt, status, slug, featured image). Read it first with wp_content_get so you keep what should stay. status="trash" is NOT valid here — use wp_content_trash.',
+    description: 'Update a post or page (title, content, excerpt, status, slug, published date, featured image). Read it first with wp_content_get so you keep what should stay. status="trash" is NOT valid here — use wp_content_trash. At least one field besides id/type is required — a call that changes nothing errors instead of silently reporting success.',
     input_schema: {
       type: 'object',
       properties: {
@@ -202,6 +202,7 @@ const tools: BuiltinTool[] = [
         excerpt: { type: 'string' },
         status: { type: 'string' },
         slug: { type: 'string' },
+        date: { type: 'string', description: 'Published date in the SITE\'s local time, ISO 8601 without a timezone offset, e.g. "2026-03-14T09:00:00". WordPress derives date_gmt from this using the site\'s timezone setting — do not also pass date_gmt.' },
         featuredMediaId: { type: 'number' },
       },
       required: ['id'],
@@ -648,15 +649,29 @@ async function execute(tool: string, args: Record<string, unknown>, tenantId: st
       if (String(args.status ?? '') === 'trash') {
         throw new Error('WordPress has no "trash" status — use wp_content_trash.');
       }
-      const updated = await rest(site, 'POST', `/wp/v2/${collection(args)}/${Number(args.id)}`, {
+      const payload = {
         ...(args.title !== undefined ? { title: String(args.title) } : {}),
         ...(args.content !== undefined ? { content: String(args.content) } : {}),
         ...(args.excerpt !== undefined ? { excerpt: String(args.excerpt) } : {}),
         ...(args.status !== undefined ? { status: String(args.status) } : {}),
         ...(args.slug !== undefined ? { slug: String(args.slug) } : {}),
+        ...(args.date !== undefined ? { date: String(args.date) } : {}),
         ...(args.featuredMediaId ? { featured_media: Number(args.featuredMediaId) } : {}),
-      }) as Record<string, any>;
-      return JSON.stringify({ id: updated.id, status: updated.status, link: updated.link, updated: true });
+      };
+      // 2026-09-18: a date-only call was silently dropped (date wasn't a
+      // recognised field yet) — the REST PATCH went out with an EMPTY body,
+      // WordPress echoed the post back unchanged with 200 OK, and the tool
+      // reported updated:true while nothing had changed. Same shape as every
+      // other "the platform lied quietly, the agent took the blame" bug in
+      // this file: refuse a no-op instead of reporting one as a success, and
+      // name every field this tool actually understands.
+      if (Object.keys(payload).length === 0) {
+        throw new Error(
+          'wp_content_update: no recognised field was set, so nothing would change on the site. Recognised fields are: title, content, excerpt, status, slug, date, featuredMediaId. If you meant something else, use wp_rest or wp_cli directly.',
+        );
+      }
+      const updated = await rest(site, 'POST', `/wp/v2/${collection(args)}/${Number(args.id)}`, payload) as Record<string, any>;
+      return JSON.stringify({ id: updated.id, status: updated.status, link: updated.link, date: updated.date, updated: true });
     }
     case 'wp_content_trash': {
       const trashed = await rest(site, 'DELETE', `/wp/v2/${collection(args)}/${Number(args.id)}`) as Record<string, any>;
