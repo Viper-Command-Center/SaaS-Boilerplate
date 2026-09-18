@@ -298,7 +298,18 @@ export async function runToolLoop(a: {
         : resolved?.policy;
 
       if (!resolved) {
-        resultText = `Unknown tool: ${name}`;
+        // A removed or renamed connection leaves the model calling tools by a
+        // name it remembers (Nia, True Therapy 2026-09-18: mcp__wordpress__*
+        // after the deprecated connection was removed; wp-sites had the same
+        // tools under new names). Name the closest real ones.
+        const tokens = name.toLowerCase().split(/[^a-z0-9]+/).filter(t => t.length > 2 && t !== 'mcp');
+        const close = a.toolset.anthropicTools
+          .map(t => ({ n: t.name, score: tokens.filter(k => t.name.toLowerCase().includes(k)).length }))
+          .filter(x => x.score > 0)
+          .sort((x, y) => y.score - x.score)
+          .slice(0, 8)
+          .map(x => x.n);
+        resultText = `Unknown tool: ${name}. It is not a tool in this workspace (a connection may have been removed or renamed; your notes can be stale).${close.length ? ` Closest available: ${close.join(', ')}.` : ''}${a.toolset.deferredSummary ? ` Deferred connections (call load_connection_tools first): ${a.toolset.deferredSummary}.` : ''} Use the exact names from your tool list; never report this as a connection outage.`;
         isError = true;
       } else if (policy === 'deny') {
         resultText = 'This tool is not permitted in this workspace (policy: deny).';

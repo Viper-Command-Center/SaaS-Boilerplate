@@ -7,7 +7,7 @@
 import { NextResponse } from 'next/server';
 import { getCurrentUser } from '@/libs/auth/session';
 import { getFile } from '@/libs/storage/files';
-import { getObject } from '@/libs/storage/r2';
+import { getObjectStream } from '@/libs/storage/r2';
 import { getUserTenants } from '@/libs/tenants';
 
 export const dynamic = 'force-dynamic';
@@ -37,14 +37,21 @@ export async function GET(
   }
 
   try {
-    const { body, contentType } = await getObject(row.r2Key);
-    return new NextResponse(new Uint8Array(body), {
-      headers: {
-        'Content-Type': row.mime || contentType,
-        'Content-Disposition': `${asAttachment ? 'attachment' : 'inline'}; filename="${row.name.replace(/"/g, '')}"`,
-        'Cache-Control': 'private, max-age=300',
-      },
-    });
+    // Streamed straight from R2, not buffered — see getObjectStream's doc
+    // comment. Buffering large files here (a big scanned PDF, an archived
+    // video) was crashing the Node process on memory and surfacing to the
+    // user as Cloudflare's own "502 Bad Gateway" page instead of anything
+    // this route could say.
+    const { body, contentType, contentLength } = await getObjectStream(row.r2Key);
+    const headers: Record<string, string> = {
+      'Content-Type': row.mime || contentType,
+      'Content-Disposition': `${asAttachment ? 'attachment' : 'inline'}; filename="${row.name.replace(/"/g, '')}"`,
+      'Cache-Control': 'private, max-age=300',
+    };
+    if (contentLength != null) {
+      headers['Content-Length'] = String(contentLength);
+    }
+    return new NextResponse(body, { headers });
   } catch {
     return NextResponse.json({ error: 'Could not read the file from storage.' }, { status: 502 });
   }

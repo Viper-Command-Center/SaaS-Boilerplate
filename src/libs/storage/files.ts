@@ -53,6 +53,24 @@ const MAX_EXTRACT_BYTES = 5 * 1024 * 1024;
 const MAX_PDF_BYTES = 20 * 1024 * 1024;
 
 /**
+ * Postgres rejects a NUL byte in text and jsonb ("invalid byte sequence for
+ * encoding UTF8: 0x00") and a lone surrogate. Extracted PDF/Office text can
+ * carry both. One bad character must not lose a 60-page print file.
+ *
+ * Declared here (rather than down by dbErrorText) because pdfTextOrNull /
+ * officeTextOrNull call it directly — sanitizing once at the extraction site
+ * means every caller gets safe text automatically instead of each of them
+ * having to remember to scrub it before the insert.
+ */
+export function pgSafeText(s: string | null | undefined): string | null {
+  if (s == null) {
+    return null;
+  }
+
+  return s.replace(/\0/g, '').replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '');
+}
+
+/**
  * Extract a PDF's text layer at write time, WITHOUT OCR.
  *
  * OCR is deliberately not done here: it is a multi-minute model call, and doing
@@ -77,7 +95,7 @@ async function pdfTextOrNull(a: {
       tenantId: a.tenantId,
       allowOcr: false,
     });
-    return result.text ? result.text.slice(0, MAX_TEXT_CHARS) : null;
+    return result.text ? pgSafeText(result.text.slice(0, MAX_TEXT_CHARS)) : null;
   } catch {
     return null;
   }
@@ -93,7 +111,7 @@ async function officeTextOrNull(a: { name: string; mime?: string | null; bytes: 
   }
   try {
     const result = await extractOfficeText(a);
-    return result.text ? result.text.slice(0, MAX_TEXT_CHARS) : null;
+    return result.text ? pgSafeText(result.text.slice(0, MAX_TEXT_CHARS)) : null;
   } catch {
     return null;
   }
@@ -112,6 +130,51 @@ export function reserveUpload(tenantId: string, name: string): { key: string; up
   }
   const key = keyFor(tenantId, name);
   return { key, uploadUrl: presignPutUrl(key) };
+}
+
+/** The Postgres reason drizzle hides behind "Failed query: …" — the part a human can act on. */
+export function dbErrorText(err: unknown): string {
+  const cause = (err as { cause?: unknown })?.cause;
+  const inner = cause instanceof Error ? cause.message : typeof cause === 'string' ? cause : '';
+  const outer = err instanceof Error ? err.message : String(err);
+  // Drizzle's message embeds the full SQL + params (can be tens of KB). Keep
+  // the first line only, plus the cause.
+  const head = outer.split('\n')[0]?.slice(0, 200) ?? '';
+  return inner ? `${inner} (${head})` : head;
+}
+
+function isTransientDbError(err: unknown): boolean {
+  const text = `${dbErrorText(err)} ${(err as { cause?: { code?: string } })?.cause?.code ?? ''}`;
+  return /terminated|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|timeout|Connection ended|not queryable|57P01|08006|08003/i.test(text);
+}
+
+/**
+ * Insert a `files` row, retrying once on a transient DB fault (a pool
+ * connection that died mid-request), and turning whatever Postgres says into
+ * a message a human can act on instead of drizzle's raw "Failed query: …"
+ * dump — which embeds the full SQL plus every param, including an entire
+ * extracted PDF's text, and used to reach the browser verbatim (Mia's
+ * workspace, 2026-09-07 — see the FileLibrary error banner).
+ *
+ * Every write in this file goes through this one place so that story can't
+ * quietly happen again in a fourth insert site nobody remembered to wrap.
+ */
+async function insertWithRetry<T>(insert: () => Promise<T[]>, r2Key: string): Promise<T | undefined> {
+  try {
+    const [row] = await insert();
+    return row;
+  } catch (err) {
+    if (isTransientDbError(err)) {
+      await new Promise(r => setTimeout(r, 750));
+      try {
+        const [row] = await insert();
+        return row;
+      } catch (again) {
+        throw new Error(`The file was stored (key ${r2Key}) but could not be indexed in the library: ${dbErrorText(again)}. Retried once. This is a platform/database fault, not a problem with the file.`);
+      }
+    }
+    throw new Error(`The file was stored (key ${r2Key}) but could not be indexed in the library: ${dbErrorText(err)}. This is a platform/database fault, not a problem with the file.`);
+  }
 }
 
 export async function confirmUpload(a: {
@@ -146,7 +209,7 @@ export async function confirmUpload(a: {
   if (isTextual(a.name, mime) && head.size <= MAX_EXTRACT_BYTES) {
     try {
       const { body } = await getObject(a.key);
-      text = body.toString('utf8').slice(0, MAX_TEXT_CHARS);
+      text = pgSafeText(body.toString('utf8').slice(0, MAX_TEXT_CHARS));
     } catch {
       text = null;
     }
@@ -175,23 +238,35 @@ export async function confirmUpload(a: {
     }
   }
 
-  const [row] = await db
-    .insert(files)
-    .values({
-      tenantId: a.tenantId,
-      name: a.name.slice(0, 300),
-      kind,
-      mime: mime.slice(0, 120),
-      sizeBytes: head.size,
-      r2Key: a.key,
-      publicUrl: kind === 'asset' ? publicUrlFor(a.key) : null,
-      source: 'upload',
-      textContent: text,
-      meta: {},
-      folder: normaliseFolder(a.folder),
-      createdBy: a.createdBy,
-    })
-    .returning();
+  // This is the insert that used to go straight to `db.insert(...)` with no
+  // sanitizing and no catch: an extracted PDF/Office text layer carrying a
+  // NUL byte or a lone surrogate (both common — a scanned form, a curly quote
+  // that didn't round-trip) made Postgres throw "invalid byte sequence for
+  // encoding UTF8: 0x00", and with nothing here to catch it, the raw drizzle
+  // error — the whole SQL statement plus every param, extracted text
+  // included — became the HTTP 500 body the Files page rendered verbatim.
+  // `saveFile` below already guarded against exactly this; this upload path
+  // (the direct-to-R2 flow the Files page actually uses) had not been.
+  const row = await insertWithRetry(
+    () => db
+      .insert(files)
+      .values({
+        tenantId: a.tenantId,
+        name: pgSafeText(a.name.slice(0, 300)) ?? 'file',
+        kind,
+        mime: mime.slice(0, 120),
+        sizeBytes: head.size,
+        r2Key: a.key,
+        publicUrl: kind === 'asset' ? publicUrlFor(a.key) : null,
+        source: 'upload',
+        textContent: pgSafeText(text),
+        meta: {},
+        folder: normaliseFolder(a.folder),
+        createdBy: a.createdBy,
+      })
+      .returning(),
+    a.key,
+  );
   return row;
 }
 
@@ -215,35 +290,6 @@ export function normaliseFolder(raw: unknown): string | null {
   }
   const s = String(raw).replace(/[\\/]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80);
   return s || null;
-}
-
-/**
- * Postgres rejects a NUL byte in text and jsonb ("invalid byte sequence for
- * encoding UTF8: 0x00") and a lone surrogate. Extracted PDF/Office text can
- * carry both. One bad character must not lose a 60-page print file.
- */
-export function pgSafeText(s: string | null | undefined): string | null {
-  if (s == null) {
-    return null;
-  }
-
-  return s.replace(/\0/g, '').replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '');
-}
-
-/** The Postgres reason drizzle hides behind "Failed query: …" — the part a human can act on. */
-export function dbErrorText(err: unknown): string {
-  const cause = (err as { cause?: unknown })?.cause;
-  const inner = cause instanceof Error ? cause.message : typeof cause === 'string' ? cause : '';
-  const outer = err instanceof Error ? err.message : String(err);
-  // Drizzle's message embeds the full SQL + params (can be tens of KB). Keep
-  // the first line only, plus the cause.
-  const head = outer.split('\n')[0]?.slice(0, 200) ?? '';
-  return inner ? `${inner} (${head})` : head;
-}
-
-function isTransientDbError(err: unknown): boolean {
-  const text = `${dbErrorText(err)} ${(err as { cause?: { code?: string } })?.cause?.code ?? ''}`;
-  return /terminated|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|timeout|Connection ended|not queryable|57P01|08006|08003/i.test(text);
 }
 
 /** Store bytes in R2 + index them. Returns the row. */
@@ -290,26 +336,7 @@ export async function saveFile(input: SaveInput) {
     folder: normaliseFolder(input.folder),
     createdBy: input.createdBy,
   };
-  try {
-    const [row] = await db.insert(files).values(values).returning();
-    return row;
-  } catch (err) {
-    // Mia's workspace, 2026-09-07: build_book_interior rendered 62 pages,
-    // uploaded 3.6 MB to R2, then "Failed query: insert into files" — and the
-    // agent could only relay that string, because drizzle keeps the Postgres
-    // reason in err.cause. A pool connection that died during a 40 s render
-    // is the likeliest cause; retry once on a fresh connection.
-    if (isTransientDbError(err)) {
-      await new Promise(r => setTimeout(r, 750));
-      try {
-        const [row] = await db.insert(files).values(values).returning();
-        return row;
-      } catch (again) {
-        throw new Error(`The file was stored (key ${key}) but could not be indexed in the library: ${dbErrorText(again)}. Retried once. This is a platform/database fault, not a problem with the file.`);
-      }
-    }
-    throw new Error(`The file was stored (key ${key}) but could not be indexed in the library: ${dbErrorText(err)}. This is a platform/database fault, not a problem with the file.`);
-  }
+  return insertWithRetry(() => db.insert(files).values(values).returning(), key);
 }
 
 /**
@@ -330,26 +357,29 @@ export async function archiveGeneratedAssets(a: {
 
   for (const url of a.urls.slice(0, 10)) {
     try {
-      const guessedName = decodeURIComponent(new URL(url).pathname.split('/').pop() || 'generated')
+      const guessedName = pgSafeText(decodeURIComponent(new URL(url).pathname.split('/').pop() || 'generated')
         .replace(/[^\w.-]+/g, '-')
-        .slice(-80);
+        .slice(-80)) || 'generated';
       const key = keyFor(a.tenantId, guessedName);
       const { bytes, contentType } = await archiveRemote(url, key);
 
-      const [row] = await db
-        .insert(files)
-        .values({
-          tenantId: a.tenantId,
-          name: guessedName,
-          kind: 'asset',
-          mime: contentType.slice(0, 120),
-          sizeBytes: bytes,
-          r2Key: key,
-          publicUrl: publicUrlFor(key),
-          source: a.source.slice(0, 40),
-          meta: { ...(a.meta ?? {}), originalUrl: url },
-        })
-        .returning({ id: files.id, name: files.name, publicUrl: files.publicUrl });
+      const row = await insertWithRetry(
+        () => db
+          .insert(files)
+          .values({
+            tenantId: a.tenantId,
+            name: guessedName,
+            kind: 'asset',
+            mime: contentType.slice(0, 120),
+            sizeBytes: bytes,
+            r2Key: key,
+            publicUrl: publicUrlFor(key),
+            source: a.source.slice(0, 40),
+            meta: { ...(a.meta ?? {}), originalUrl: url },
+          })
+          .returning({ id: files.id, name: files.name, publicUrl: files.publicUrl }),
+        key,
+      );
 
       if (row) {
         saved.push({ id: row.id, name: row.name, url: row.publicUrl });
@@ -399,23 +429,25 @@ export async function saveRemoteFile(a: {
     throw new Error('That file is larger than the 100MB limit.');
   }
 
-  const [row] = await db
-    .insert(files)
-    .values({
-      tenantId: a.tenantId,
-      name: a.name.slice(0, 300),
-      kind: 'asset', // binary output → gets a public URL so it can be published
-      mime: contentType.slice(0, 120),
-      sizeBytes: bytes,
-      r2Key: key,
-      publicUrl: publicUrlFor(key),
-      source: (a.source ?? 'agent').slice(0, 40),
-      meta: { ...(a.meta ?? {}), sourceUrl: a.url },
-      folder: normaliseFolder(a.folder),
-      createdBy: a.createdBy,
-    })
-    .returning();
-  return row;
+  return insertWithRetry(
+    () => db
+      .insert(files)
+      .values({
+        tenantId: a.tenantId,
+        name: pgSafeText(a.name.slice(0, 300)) ?? 'file',
+        kind: 'asset', // binary output → gets a public URL so it can be published
+        mime: contentType.slice(0, 120),
+        sizeBytes: bytes,
+        r2Key: key,
+        publicUrl: publicUrlFor(key),
+        source: (a.source ?? 'agent').slice(0, 40),
+        meta: { ...(a.meta ?? {}), sourceUrl: a.url },
+        folder: normaliseFolder(a.folder),
+        createdBy: a.createdBy,
+      })
+      .returning(),
+    key,
+  );
 }
 
 export async function listFiles(tenantId: string, limit = 100) {
@@ -507,7 +539,7 @@ export async function setFileText(tenantId: string, id: string, text: string): P
   try {
     await db
       .update(files)
-      .set({ textContent: text.slice(0, MAX_TEXT_CHARS) })
+      .set({ textContent: pgSafeText(text.slice(0, MAX_TEXT_CHARS)) })
       .where(and(eq(files.tenantId, tenantId), eq(files.id, id)));
   } catch {
     // The agent already has the text in hand; a cache miss next time is cheap.

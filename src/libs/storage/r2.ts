@@ -162,6 +162,46 @@ export async function getObject(key: string): Promise<{ body: Buffer; contentTyp
   };
 }
 
+/**
+ * Same as `getObject`, but hands back the live response stream instead of
+ * buffering the whole object into a Node `Buffer` first.
+ *
+ * `getObject` is fine for the places that already need the bytes in memory
+ * (text extraction, the zip endpoint's per-entry promises). It stops being
+ * fine for serving a file straight back to a browser: `/api/files/<id>/content`
+ * used to call `getObject` and then wrap the result in `new Uint8Array(body)`
+ * for `NextResponse` — two full in-memory copies of whatever was requested.
+ * A large PDF or an archived render was enough to spike the Railway
+ * container past its memory limit and crash the Node process mid-response;
+ * Cloudflare then has nothing to proxy and serves its own generic
+ * "502 Bad Gateway / Host Error" page instead of anything the app could have
+ * said. Piping the fetch response's body straight through keeps memory flat
+ * no matter how big the file is.
+ */
+export async function getObjectStream(key: string): Promise<{
+  body: ReadableStream<Uint8Array>;
+  contentType: string;
+  contentLength: number | null;
+}> {
+  const cfg = r2Config();
+  if (!cfg) {
+    throw new Error('Storage is not configured.');
+  }
+  const resp = await signedFetch(cfg, 'GET', key);
+  if (!resp.ok) {
+    throw new Error(`R2 download failed: HTTP ${resp.status}`);
+  }
+  if (!resp.body) {
+    throw new Error('R2 returned an empty response body.');
+  }
+  const len = resp.headers.get('content-length');
+  return {
+    body: resp.body,
+    contentType: resp.headers.get('content-type') ?? 'application/octet-stream',
+    contentLength: len ? Number(len) : null,
+  };
+}
+
 export async function deleteObject(key: string): Promise<void> {
   const cfg = r2Config();
   if (!cfg) {
