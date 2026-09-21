@@ -42,6 +42,8 @@ type Site = {
   status: 'healthy' | 'degraded' | 'failed' | 'untested';
   lastTestAt: string | null;
   lastTestReport: TestReport | null;
+  /** Site Chat (Phase 46). */
+  chat: { hasToken: boolean; enabled: boolean; dailyCap: number };
 };
 type LegacyConn = { id: string; name: string; provider: 'wordpress' | 'wpcli'; target: string; enabled: boolean };
 type Activity = { at: string; actor: string; action: string; detail: Record<string, unknown> };
@@ -141,6 +143,8 @@ export const WpSitesPanel = (props: { tenantSlug: string }) => {
   const [activity, setActivity] = useState<Record<string, Activity[]>>({});
   const [openActivity, setOpenActivity] = useState<string | null>(null);
   const [provisioning, setProvisioning] = useState('');
+  // Site Chat: a freshly minted token is shown ONCE, then only "issued".
+  const [chatToken, setChatToken] = useState<{ siteId: string; token: string; artivioUrl: string } | null>(null);
   const [showProvisioning, setShowProvisioning] = useState(false);
 
   const reload = useCallback(() => {
@@ -272,6 +276,56 @@ export const WpSitesPanel = (props: { tenantSlug: string }) => {
       reload();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not test.');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const mintChatToken = async (s: Site) => {
+    if (s.chat.hasToken) {
+      // eslint-disable-next-line no-alert
+      if (!window.confirm(`Issue a NEW chat token for "${s.label}"? The token currently pasted in that site's plugin stops working immediately.`)) {
+        return;
+      }
+    }
+    setBusy(`chat:${s.id}`);
+    setError(null);
+    try {
+      const data = await post(`/api/wp-sites/${s.id}/chat-token`, { tenantSlug: props.tenantSlug });
+      setChatToken({ siteId: s.id, token: data.token, artivioUrl: data.artivioUrl });
+      reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not issue the token.');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const setChat = async (s: Site, patch: { enabled?: boolean; dailyCap?: number }) => {
+    setBusy(`chat:${s.id}`);
+    setError(null);
+    try {
+      await post(`/api/wp-sites/${s.id}/chat-token`, { tenantSlug: props.tenantSlug, ...patch }, 'PATCH');
+      reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not update site chat.');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const revokeChat = async (s: Site) => {
+    // eslint-disable-next-line no-alert
+    if (!window.confirm(`Revoke the chat token for "${s.label}"? The assistant panel on that site stops working until a new token is pasted.`)) {
+      return;
+    }
+    setBusy(`chat:${s.id}`);
+    try {
+      await post(`/api/wp-sites/${s.id}/chat-token?tenant=${encodeURIComponent(props.tenantSlug)}`, undefined, 'DELETE');
+      setChatToken(null);
+      reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not revoke.');
     } finally {
       setBusy(null);
     }
@@ -761,6 +815,69 @@ export const WpSitesPanel = (props: { tenantSlug: string }) => {
                   {canManage && <Button variant="outline" size="sm" onClick={() => remove(s)}>Remove</Button>}
                 </div>
               </div>
+              {/* Site Chat (Phase 46): the site's own admins talk to the agent from wp-admin. */}
+              {canManage && (
+                <div className="
+                  mt-1.5 flex flex-wrap items-center gap-2 pl-3.5 text-[11px]
+                  text-white/50
+                "
+                >
+                  <span className="font-medium text-white/70">Site chat</span>
+                  <span>{s.chat.hasToken ? (s.chat.enabled ? '● on' : '○ off (token issued)') : '○ no token'}</span>
+                  <Button variant="outline" size="sm" disabled={busy === `chat:${s.id}`} onClick={() => mintChatToken(s)}>
+                    {s.chat.hasToken ? 'New token' : 'Enable + issue token'}
+                  </Button>
+                  {s.chat.hasToken && (
+                    <Button variant="outline" size="sm" disabled={busy === `chat:${s.id}`} onClick={() => setChat(s, { enabled: !s.chat.enabled })}>
+                      {s.chat.enabled ? 'Turn off' : 'Turn on'}
+                    </Button>
+                  )}
+                  {s.chat.hasToken && (
+                    <label className="flex items-center gap-1">
+                      cap/day
+                      <input
+                        type="number"
+                        min={1}
+                        max={2000}
+                        defaultValue={s.chat.dailyCap}
+                        className="
+                          w-16 rounded-sm border border-white/12 bg-white/4 px-1
+                          py-0.5 text-[11px] text-white/80
+                        "
+                        onBlur={(e) => {
+                          const v = Number(e.target.value);
+                          if (v >= 1 && v !== s.chat.dailyCap) {
+                            void setChat(s, { dailyCap: v });
+                          }
+                        }}
+                      />
+                    </label>
+                  )}
+                  {s.chat.hasToken && (
+                    <Button variant="outline" size="sm" disabled={busy === `chat:${s.id}`} onClick={() => revokeChat(s)}>Revoke</Button>
+                  )}
+                  {chatToken?.siteId === s.id && (
+                    <div className="
+                      mt-1 w-full rounded-lg border border-amber-400/30
+                      bg-amber-400/10 p-2 text-[11px] text-amber-100
+                    "
+                    >
+                      <p className="mb-1 font-medium">Paste into the site: WP Admin → Website Assistant → Settings. Shown once — it is not stored in readable form.</p>
+                      <p>
+                        Artivio URL:
+                        {' '}
+                        <code className="select-all">{chatToken.artivioUrl}</code>
+                      </p>
+                      <p>
+                        Site token:
+                        {' '}
+                        <code className="break-all select-all">{chatToken.token}</code>
+                      </p>
+                      <button type="button" className="mt-1 underline" onClick={() => setChatToken(null)}>Hide</button>
+                    </div>
+                  )}
+                </div>
+              )}
               {report && (
                 <div className="mt-1 pl-3.5">
                   <button

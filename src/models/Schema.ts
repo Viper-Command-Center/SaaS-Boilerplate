@@ -257,11 +257,20 @@ export const wpSites = pgTable(
     status: varchar('status', { length: 12 }).notNull().default('untested'), // healthy | degraded | failed | untested
     lastTestAt: timestamp('last_test_at', { withTimezone: true }),
     lastTestReport: jsonb('last_test_report'),
+    /**
+     * Site Chat (Phase 46): the WordPress plugin authenticates with a per-site
+     * token (sha256 stored, value shown once). chat_enabled gates the whole
+     * surface; the daily cap bounds turns per site per day.
+     */
+    chatTokenHash: varchar('chat_token_hash', { length: 64 }),
+    chatEnabled: boolean('chat_enabled').notNull().default(false),
+    chatDailyTurnCap: integer('chat_daily_turn_cap').notNull().default(60),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   t => [
     index('wp_sites_tenant_idx').on(t.tenantId),
+    index('wp_sites_chat_token_idx').on(t.chatTokenHash),
     uniqueIndex('wp_sites_tenant_label_uq').on(t.tenantId, t.label),
   ],
 );
@@ -310,14 +319,21 @@ export const conversations = pgTable(
     tenantId: uuid('tenant_id')
       .notNull()
       .references(() => tenants.id, { onDelete: 'cascade' }),
+    /** NULL for Site Chat conversations (Phase 46) — the speaker is a WordPress user, not an Artivio account. */
     userId: uuid('user_id')
-      .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
     title: text('title'),
-    channel: varchar('channel', { length: 20 }).notNull().default('web'), // web | whatsapp (later)
+    channel: varchar('channel', { length: 20 }).notNull().default('web'), // web | site (WordPress plugin) | whatsapp (later)
+    /** Site Chat: the wp_sites row this conversation is pinned to. */
+    siteId: uuid('site_id').references(() => wpSites.id, { onDelete: 'cascade' }),
+    /** Site Chat: the speaker on that site, e.g. "wp:12". */
+    externalKey: varchar('external_key', { length: 120 }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  t => [index('conversations_tenant_idx').on(t.tenantId)],
+  t => [
+    index('conversations_tenant_idx').on(t.tenantId),
+    index('conversations_site_idx').on(t.siteId, t.externalKey),
+  ],
 );
 
 export const messages = pgTable(

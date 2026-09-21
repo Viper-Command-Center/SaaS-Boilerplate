@@ -70,6 +70,7 @@ function toPublic(row: Row): PublicSite {
     status: row.status as SiteStatus,
     lastTestAt: row.lastTestAt ? row.lastTestAt.toISOString() : null,
     lastTestReport: (row.lastTestReport as TestReport | null) ?? null,
+    chat: { hasToken: Boolean(row.chatTokenHash), enabled: row.chatEnabled, dailyCap: row.chatDailyTurnCap },
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };

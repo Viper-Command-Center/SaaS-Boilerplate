@@ -105,6 +105,8 @@ export type PublicSite = {
   status: SiteStatus;
   lastTestAt: string | null;
   lastTestReport: TestReport | null;
+  /** Site Chat (Phase 46): plugin token issued / chat switched on / daily cap. */
+  chat: { hasToken: boolean; enabled: boolean; dailyCap: number };
   createdAt: string;
   updatedAt: string;
 };

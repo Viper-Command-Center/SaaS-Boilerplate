@@ -351,6 +351,18 @@ expect('src/libs/mcp/references.ts', 'MAX_REFERENCE_CHARS', 'every reference ans
 expect('src/libs/mcp/stdioCatalog.ts', 'call diviops_reference before building a module', 'guidance tells the agent to look up a module map before writing its JSON');
 forbid('src/libs/mcp/references.ts', "'public'", 'licensed reference files are never served from public/');
 
+// ── Phase 46 — Site Chat: the workspace agent pinned to ONE WordPress site,
+// driven from that site's own wp-admin (artivio-site-chat plugin). The scope
+// boundary is the product: a church admin must never reach WHMCS, Postgres,
+// other sites, WP-CLI or the operator's approvals inbox.
+expect('src/libs/sitechat/toolset.ts', 'site: site.label }', 'every WordPress Sites call is pinned to the site whatever the model sent');
+expect('src/libs/sitechat/toolset.ts', "p === 'approval' ? 'deny'", 'site chat never creates approval rows (approval resume would re-enter with the full toolset)');
+expect('src/libs/sitechat/toolset.ts', "r.provider === 'wp-sites'", 'WordPress Sites tools are identified by PROVIDER, not by tool name');
+forbid('src/libs/sitechat/toolset.ts', "'wp_cli'", 'WP-CLI is never on the site-chat allow-list (shared-hosting SSH is account-wide)');
+expect('src/libs/sitechat/auth.ts', 'hashSiteToken', 'site tokens are stored hashed and shown once');
+expect('src/app/api/site-chat/messages/route.ts', 'after(() => runSiteTurn', 'a site turn runs after the 202 — never tied to the PHP request');
+expect('src/libs/sitechat/prompt.ts', 'never write it yourself', 'the site-chat prompt carries the fabricated-call rule');
+
 // ── Report ──────────────────────────────────────────────────────────────────
 if (failures.length > 0) {
   console.error(`\n✗ agent-evals: ${failures.length} of ${checks} tripwires FAILED\n`);

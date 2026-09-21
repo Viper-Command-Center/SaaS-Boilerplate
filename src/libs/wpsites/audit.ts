@@ -57,7 +57,7 @@ export async function listSiteActivity(tenantId: string, siteId: string, limit =
 }
 
 /** Non-call events (test, rotate, edit) from the UI — same target, so they show in Activity. */
-export async function logSiteEvent(tenantId: string, siteId: string, actor: string, event: 'test' | 'rotate' | 'create' | 'update' | 'delete' | 'import', detail: Record<string, unknown> = {}): Promise<void> {
+export async function logSiteEvent(tenantId: string, siteId: string, actor: string, event: 'test' | 'rotate' | 'create' | 'update' | 'delete' | 'import' | 'chat_token.mint' | 'chat_token.update' | 'chat_token.revoke', detail: Record<string, unknown> = {}): Promise<void> {
   await db.insert(auditLog).values({
     tenantId,
     actor,

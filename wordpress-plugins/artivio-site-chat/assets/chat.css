@@ -1,0 +1,53 @@
+/* Artivio Website Assistant — admin chat panel. Inherits wp-admin type; accent from the AI employee. */
+.artivio-chat-wrap { max-width: 980px; }
+.artivio-chat {
+  --asc-accent: #4f46e5;
+  display: flex; flex-direction: column;
+  height: calc(100vh - 120px); min-height: 480px;
+  margin-top: 12px; background: #fff; border: 1px solid #dcdcde; border-radius: 12px;
+  box-shadow: 0 1px 2px rgba(0,0,0,.04); overflow: hidden;
+}
+.artivio-chat[data-loading] { min-height: 200px; }
+.asc-head { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid #eef0f2; }
+.asc-avatar { width: 40px; height: 40px; border-radius: 50%; background: var(--asc-accent) center/cover no-repeat; color: #fff; font-weight: 600; display: flex; align-items: center; justify-content: center; font-size: 16px; }
+.asc-title { display: flex; flex-direction: column; line-height: 1.25; }
+.asc-title strong { font-size: 15px; }
+.asc-title span { font-size: 12px; color: #646970; }
+.asc-state { margin-left: auto; font-size: 11px; padding: 3px 9px; border-radius: 999px; background: #f0f0f1; color: #50575e; text-transform: uppercase; letter-spacing: .04em; }
+.asc-state.is-online { background: #e7f6ec; color: #1e7a3a; }
+.asc-state.is-working { background: #fff4d6; color: #8a5a00; }
+.asc-log { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 10px; background: #fafafa; }
+.asc-msg { display: flex; }
+.asc-msg.asc-user { justify-content: flex-end; }
+.asc-bubble { max-width: 78%; padding: 10px 14px; border-radius: 14px; font-size: 14px; line-height: 1.5; background: #fff; border: 1px solid #e5e7eb; }
+.asc-user .asc-bubble { background: var(--asc-accent); color: #fff; border-color: transparent; border-bottom-right-radius: 4px; }
+.asc-assistant .asc-bubble { border-bottom-left-radius: 4px; }
+.asc-bubble p { margin: 0 0 6px; }
+.asc-bubble p:last-child { margin-bottom: 0; }
+.asc-bubble .asc-h { font-weight: 600; margin-top: 4px; }
+.asc-bubble ul, .asc-bubble ol { margin: 4px 0 6px 18px; }
+.asc-bubble code { font-size: 12px; background: rgba(0,0,0,.06); padding: 1px 4px; border-radius: 4px; }
+.asc-user .asc-bubble code { background: rgba(255,255,255,.2); }
+.asc-bubble a { color: inherit; text-decoration: underline; }
+.asc-bubble.asc-error { border-color: #f0b6b6; background: #fdf2f2; color: #8a1f1f; }
+.asc-status { font-size: 12px; color: #646970; padding: 2px 8px; margin: 2px 0; border-left: 2px solid #dcdcde; }
+.asc-status-tool { border-left-color: var(--asc-accent); }
+.asc-status-error, .asc-status-stopped { border-left-color: #d63638; color: #8a1f1f; }
+.asc-status-approval { border-left-color: #dba617; }
+.asc-working { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 12px; color: #646970; }
+.asc-dots i { display: inline-block; width: 6px; height: 6px; margin-right: 3px; border-radius: 50%; background: var(--asc-accent); opacity: .3; animation: asc-blink 1.2s infinite; }
+.asc-dots i:nth-child(2) { animation-delay: .2s; }
+.asc-dots i:nth-child(3) { animation-delay: .4s; }
+@keyframes asc-blink { 0%, 80%, 100% { opacity: .3; } 40% { opacity: 1; } }
+.asc-suggest { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 16px 0; }
+.asc-suggest[hidden] { display: none; }
+.asc-chip { border: 1px solid #dcdcde; background: #fff; border-radius: 999px; padding: 5px 11px; font-size: 12px; cursor: pointer; color: #1d2327; }
+.asc-chip:hover { border-color: var(--asc-accent); color: var(--asc-accent); }
+.asc-compose { display: flex; gap: 10px; padding: 12px 16px; border-top: 1px solid #eef0f2; align-items: flex-end; }
+.asc-compose textarea { flex: 1; resize: vertical; min-height: 44px; border-radius: 10px; font-size: 14px; }
+.asc-actions { display: flex; gap: 6px; }
+.asc-foot { margin: 0; padding: 0 16px 10px; font-size: 11px; color: #8c8f94; }
+@media (max-width: 782px) {
+  .artivio-chat { height: calc(100vh - 100px); border-radius: 0; margin: 0 -10px; }
+  .asc-bubble { max-width: 92%; }
+}
