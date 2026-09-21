@@ -46,6 +46,8 @@
  * blip killed the entire agent turn.
  */
 
+import { turnAborted, turnSignal } from '@/libs/agent/turnContext';
+
 export type ChatMessage = { role: 'user' | 'assistant'; content: string };
 
 /** Content-block message shape for tool-use turns. */
@@ -137,8 +139,12 @@ async function postWithRetry(
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     let resp: Response;
     try {
-      resp = await fetch(url, { method: 'POST', headers, body });
+      resp = await fetch(url, { method: 'POST', headers, body, signal: turnSignal() });
     } catch (err) {
+      // Phase 47: the user pressed Stop — not a network fault, never retried.
+      if (turnAborted()) {
+        throw new TurnStoppedError();
+      }
       // Network-level failure (DNS, reset, timeout) — transient by nature.
       lastNetworkError = err;
       if (attempt < MAX_ATTEMPTS) {
@@ -192,6 +198,7 @@ async function* streamAnthropicDirect(a: {
 }): AsyncGenerator<string> {
   const key = process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_API_KEY;
   const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    signal: turnSignal(),
     method: 'POST',
     headers: {
       'x-api-key': key || '',
@@ -617,4 +624,12 @@ export async function* streamClaude(a: {
     'No AI credentials configured. Add ONE of these to the Railway variables: '
     + 'BEDROCK_API_KEY (+ optional BEDROCK_REGION/BEDROCK_MODEL_ID) or ANTHROPIC_API_KEY.',
   );
+}
+
+/** Phase 47: thrown by every model call path when the turn's abort signal fires. */
+export class TurnStoppedError extends Error {
+  constructor() {
+    super('Stopped at your request');
+    this.name = 'TurnStoppedError';
+  }
 }

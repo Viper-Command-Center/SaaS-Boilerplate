@@ -363,6 +363,29 @@ expect('src/libs/sitechat/auth.ts', 'hashSiteToken', 'site tokens are stored has
 expect('src/app/api/site-chat/messages/route.ts', 'after(() => runSiteTurn', 'a site turn runs after the 202 — never tied to the PHP request');
 expect('src/libs/sitechat/prompt.ts', 'never write it yourself', 'the site-chat prompt carries the fabricated-call rule');
 
+// ── Phase 47 — Divi guardrails: no Divi write reaches a site unless it passes
+// the vendor module maps, the conversation has read the map for every module
+// in it, and the surface is allowed to call the tool. Born 2026-09-21 when the
+// agent built the build9 Outreach page from guessed attribute paths, Divi
+// dropped them all silently, and the agent reported a 404 as "rendered cleanly".
+expect('src/libs/divi/validator.ts', 'does not exist on ${b.name}', 'unknown decoration groups are refused per module map');
+expect('src/libs/divi/validator.ts', 'workspace-library URL', 'workspace-library media is refused in Divi markup');
+expect('src/libs/divi/validator.ts', 'must be an object of sides', 'bare "40px" padding is refused (Divi drops it silently)');
+expect('src/libs/divi/gate.ts', 'has not read the reference map for', 'a write is refused until diviops_reference was read for every module type in it');
+expect('src/libs/divi/gate.ts', 'no turn context', 'the gate fails CLOSED outside a turn');
+expect('src/libs/divi/gate.ts', "not available from a site's chat", 'a site\'s chat never reaches theme-builder / preset / variable tools');
+expect('src/libs/divi/moduleMap.ts', 'refusing to validate against a partial map', 'a partial or missing module map refuses all writes, never skips validation');
+expect('src/libs/mcp/registry.ts', 'if (guarded.refuse)', 'a guard refusal is returned as text — never thrown, billed or escalated');
+expect('src/libs/mcp/registry.ts', 'recordConsulted(', 'diviops_reference module lookups feed the consulted ledger');
+expect('src/libs/mcp/registry.ts', 'spec.afterCall', 'page writes are followed by a render check of the SAVED page');
+expect('src/libs/agent/webTools.ts', 'PAGE NOT FOUND (404)', 'fetch_url reports a 404 / soft-404 as data the model must act on');
+expect('src/libs/agent/loop.ts', 'runWithTurnContext(', 'every turn runs inside a turn context (gates and abort read it)');
+expect('src/libs/agent/anthropic.ts', 'signal: turnSignal()', 'model requests carry the turn abort signal so Stop ends an in-flight generation');
+expect('src/libs/sitechat/turns.ts', "surface: 'site'", 'site turns are marked as the site surface for tool tiering');
+expect('src/libs/sitechat/toolset.ts', 'isSiteSurfaceDiviToolAllowed', 'site-chat schemas hide agency-level DiviOps tools');
+expect('src/libs/mcp/stdioCatalog.ts', 'NEVER GUESS', 'the DiviOps guidance tells the model the gate exists and how to satisfy it');
+expect('wordpress-plugins/artivio-site-chat/assets/chat.js', 'Stopping…', 'the site chat panel acknowledges Stop immediately');
+
 // ── Report ──────────────────────────────────────────────────────────────────
 if (failures.length > 0) {
   console.error(`\n✗ agent-evals: ${failures.length} of ${checks} tripwires FAILED\n`);

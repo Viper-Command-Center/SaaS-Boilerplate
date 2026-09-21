@@ -24,6 +24,7 @@ import type { AnthropicTool, TenantToolset, ToolPolicy } from '@/libs/mcp/regist
 import { and, eq } from 'drizzle-orm';
 import { buildPlatformTools } from '@/libs/agent/platformTools';
 import { db } from '@/libs/DB';
+import { isSiteSurfaceDiviToolAllowed } from '@/libs/divi/gate';
 import { buildTenantToolset } from '@/libs/mcp/registry';
 import { wpSiteLabelOf } from '@/libs/mcp/stdioCatalog';
 import { mcpConnections, pluginCatalog } from '@/models/Schema';
@@ -110,7 +111,11 @@ export function isSiteChatToolAllowed(name: string, bound: { layout: string[]; w
   }
   const conn = m[1]!.toLowerCase();
   if (bound.layout.some(n => sanitize(n) === conn)) {
-    return true;
+    // Phase 47: a site's chat gets page-content tools only — never theme
+    // builder, presets, variables, canvases (agency operations). DiviOps
+    // names are underscore-only, so the sanitized form round-trips.
+    const original = m[2]!.toLowerCase().replace(/-/g, '_');
+    return original.startsWith('diviops_') ? isSiteSurfaceDiviToolAllowed(original) : true;
   }
   return bound.wpSites.some(n => sanitize(n) === conn) && WP_ALLOWED_SANITIZED.has(m[2]!.toLowerCase());
 }

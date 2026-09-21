@@ -16,6 +16,8 @@
 
 import type { ReferenceSpec } from '@/libs/mcp/references';
 import { createRequire } from 'node:module';
+import { diviWriteGate } from '@/libs/divi/gate';
+import { diviRenderCheck } from '@/libs/divi/renderCheck';
 
 export type StdioServerSpec = {
   /** Allowlist key. Stored in pluginCatalog.provider for stdio entries. */
@@ -53,18 +55,32 @@ export type StdioServerSpec = {
    * Postgres built-ins: fix what can be fixed mechanically, refuse what will
    * silently corrupt, and say why in words the model can act on. Returns the
    * (possibly rewritten) args plus an optional note appended to the result.
-   * Throw to refuse the call.
+   * Set `refuse` to answer the model WITHOUT calling the server (Phase 47) —
+   * a refusal is a tool decision, never a thrown "platform" error.
    */
-  guardCall?: (toolName: string, args: Record<string, unknown>) => {
-    args: Record<string, unknown>;
-    note?: string;
-  };
+  guardCall?: (toolName: string, args: Record<string, unknown>, ctx: GuardContext) => GuardResult;
+  /**
+   * Optional post-call hook (Phase 47): runs after a SUCCESSFUL call with the
+   * raw result text and a way to call sibling tools on the same server. Used
+   * for the Divi render check — a page write is followed by a render of the
+   * saved page so the model reports what the site shows, not what it sent.
+   * Returns text to append to the result, or undefined.
+   */
+  afterCall?: (toolName: string, args: Record<string, unknown>, resultText: string, callTool: (name: string, a: Record<string, unknown>) => Promise<string>, ctx: GuardContext) => Promise<string | undefined>;
   /**
    * Phase 45: the vendor's full client-side skill, vendored under `dir` and
    * served on demand through ONE meta-tool (`toolName`). Registered once per
    * server key however many connections use it. See references.ts.
    */
   references?: ReferenceSpec;
+};
+
+export type GuardContext = { target: string; connectionName: string };
+export type GuardResult = {
+  args: Record<string, unknown>;
+  note?: string;
+  /** Set → the tool is NOT called; this is the result the model reads. */
+  refuse?: string;
 };
 
 // ─── DiviOps guardrails ───────────────────────────────────────────────────────
@@ -103,12 +119,12 @@ const DIVI_ADMIN_LABEL_RE = /"adminLabel":\{"desktop":\{"value":"([^"]*)"/g;
  */
 const DIVI_WP_CLI_TOOLS = new Set(['diviops_meta_wp_cli', 'diviops_scf_status', 'diviops_scf_export', 'diviops_scf_import', 'diviops_scf_sync', 'diviops_scf_field_group_list', 'diviops_scf_field_group_get']);
 
-export function diviopsGuard(toolName: string, args: Record<string, unknown>): { args: Record<string, unknown>; note?: string } {
+export function diviopsGuard(toolName: string, args: Record<string, unknown>, ctx: GuardContext): GuardResult {
   const out: Record<string, unknown> = { ...args };
   const notes: string[] = [];
 
   if (DIVI_WP_CLI_TOOLS.has(toolName)) {
-    throw new Error(
+    return refuse(
       `${toolName} is not available on this platform — DiviOps' WP-CLI passthrough needs a local WordPress install (WP_PATH) and there is none here; no environment variable or connection setting can enable it, so do not ask the owner for WP_PATH or WP_CLI_CMD. WP-CLI runs through the "wp-sites" connection (WordPress Sites: wp_cli, wp_cache_flush, wp_search_replace, wp_snapshot — pass the site label) or, on older workspaces, the legacy "wpcli" connection (wp_status, wp_cli…). If neither is in your list, the workspace owner needs to enable "WordPress Sites" in the Tools panel and add the site with its SSH details (or click Enable on the connection row if it is disabled).`,
     );
   }
@@ -117,7 +133,7 @@ export function diviopsGuard(toolName: string, args: Record<string, unknown>): {
     for (const field of ['label', 'match_text'] as const) {
       const value = out[field];
       if (typeof value === 'string' && DIVI_UNMATCHABLE_RE.test(value)) {
-        throw new Error(
+        return refuse(
           `${toolName}: the ${field} "${value}" contains a character (& < > " or --) that the DiviOps plugin stores as a JSON unicode escape, so its section lookup can never match it — this is a known plugin limitation, not a wrong page id. Target the section with match_text using a distinctive plain phrase from its content (letters, digits, spaces only), or rebuild it: diviops_section_append the new section, then diviops_section_remove the old one by a plain phrase.`,
         );
       }
@@ -147,10 +163,25 @@ export function diviopsGuard(toolName: string, args: Record<string, unknown>): {
     }
   }
 
-  return { args: out, note: notes.length > 0 ? notes.join('\n') : undefined };
+  // Phase 47: validation, reference ledger, budgets, surface tiering.
+  const gated = diviWriteGate(toolName, out, ctx);
+  if (gated.refuse) {
+    return { args: out, refuse: gated.refuse };
+  }
+  if (gated.note) {
+    notes.push(gated.note);
+  }
+  return { args: gated.args, note: notes.length > 0 ? notes.join('\n') : undefined };
+}
+
+function refuse(message: string): GuardResult {
+  return { args: {}, refuse: `[refused] ${message}` };
 }
 
 const DIVIOPS_GUIDANCE = `DiviOps (Divi 5 authoring) — these rules come from the vendor's divi-5-builder skill and from reading the plugin source; violating them fails SILENTLY (the write succeeds and the page renders wrong or blank):
+- NEVER GUESS. The platform GATES every Divi write (page_create, page_update_content, section_append/replace, library_save, tb_layout_update, canvas_*, module_update): the markup is validated against the vendor's module maps — every element, decoration group, breakpoint, innerContent shape, spacing object and media URL — and a write with any unknown attribute path is REFUSED before it reaches the site, with the exact paths named. It is also refused if this conversation has not read the map for every module type in it. So the only workflow that works: (1) diviops_reference {module:"Heading"} — one call per module type you will use, read the element map and the minimal snippet; (2) build the markup ONLY from paths in those maps; (3) diviops_validate_blocks; (4) write; (5) read the [render check] line appended to the write result — that is what the site actually shows. If you are unsure of a path, look it up (module map, {query:"…"}, or diviops_schema_get_module) — never write a plausible path and hope, and never fall back to a Text/Code module with inline HTML because the real module's format is unfamiliar.
+- Media: every image/video URL in Divi markup must be on THIS site (upload with wp_upload_media / wp_media_upload first, use the returned site URL). Workspace-library URLs (s.artivio.ai, /api/files/…) and hot-links to other hosts are refused by the gate.
+- Drafts have no public URL: fetch_url on an unpublished page returns the 404 page and says so. Verify drafts with diviops_render_preview {page_id} (the gate runs it for you after each write) and give the owner the wp-admin preview link. Never describe a page as rendered or published on the strength of anything but a render check or a browser screenshot.
 - Workflow: diviops_page_get_layout / diviops_section_get to read → build block markup → diviops_validate_blocks on the markup → write (section_append / section_replace / page_update_content) → diviops_render_preview to confirm. Never skip validate_blocks before a write; never declare a page fixed without render_preview or a browser check.
 - BEFORE composing any section by hand, call diviops_template_list (and diviops_template_get for a match) — hero, features, cards, CTA and other common shapes ship as vendor-verified starter sections. Start from one and edit it; only build module JSON from scratch when nothing there fits.
 - THE FAILURE MODE THIS GUIDANCE EXISTS TO PREVENT: never reach for a Code module, or any "insert raw HTML" content mode, as a stand-in for a native module you don't know how to build. Prior page-builder work on this platform — before agents had this guidance — filled pages with walls of raw HTML exactly when the agent didn't know the real module set. Divi 5 has a native module for nearly every ordinary shape (heading, text, button, blurb, icon list, pricing table, testimonial, image, gallery, accordion, tabs, form, counter…) — check diviops_template_list and an existing section on the site before writing a Code module. Legitimate Code-module use is narrow: a genuine third-party embed script, or a snippet the human supplied verbatim — never headings, text, buttons, or anything else with a dedicated module. Before calling a page done, re-check its content for a wp:divi/code block you can't justify that way.
@@ -204,6 +235,7 @@ export const STDIO_SERVERS: Record<string, StdioServerSpec> = {
     },
     guidance: DIVIOPS_GUIDANCE,
     guardCall: diviopsGuard,
+    afterCall: diviRenderCheck,
     references: {
       dir: 'vendor/diviops-skill',
       toolName: 'diviops_reference',

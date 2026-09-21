@@ -3,7 +3,7 @@
  * Plugin Name:  Artivio Website Assistant
  * Plugin URI:   https://artivio.ai
  * Description:  A chat panel inside wp-admin where the site owner asks for changes in plain words and the Artivio AI employee makes them on this site. Pairs with Artivio → Tools → WordPress Sites → Site chat.
- * Version:      1.0.0
+ * Version:      1.0.1
  * Author:       Artivio
  * Author URI:   https://artivio.ai
  * License:      GPL-2.0-or-later
@@ -28,7 +28,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'ARTIVIO_SITE_CHAT_VERSION', '1.0.0' );
+define( 'ARTIVIO_SITE_CHAT_VERSION', '1.0.1' );
 define( 'ARTIVIO_SITE_CHAT_FILE', __FILE__ );
 define( 'ARTIVIO_SITE_CHAT_CAP', 'artivio_site_chat' );
 define( 'ARTIVIO_SITE_CHAT_OPTION', 'artivio_site_chat' );

@@ -34,9 +34,10 @@
 
 import type { BlockMessage } from '@/libs/agent/anthropic';
 import type { TenantToolset, ToolResultRich } from '@/libs/mcp/registry';
-import { callClaudeWithTools } from '@/libs/agent/anthropic';
+import { callClaudeWithTools, TurnStoppedError } from '@/libs/agent/anthropic';
 import { detectFabricatedCalls, fabricationNudge } from '@/libs/agent/fabricatedCalls';
 import { resolveModelConfig } from '@/libs/agent/modelConfig';
+import { runWithTurnContext, turnAborted } from '@/libs/agent/turnContext';
 import { checkSpend, meterLlm } from '@/libs/billing/meter';
 import { db } from '@/libs/DB';
 import { saveFile } from '@/libs/storage/files';
@@ -67,9 +68,43 @@ export type ToolLoopResult = {
   exhausted: boolean;
 };
 
-export async function runToolLoop(a: {
+type ToolLoopArgs = Parameters<typeof runToolLoopInner>[0];
+
+/**
+ * Run one agent turn (Phase 47 wrapper): establishes the turn context —
+ * tenant, conversation, surface, abort signal — that gates and model calls
+ * read via AsyncLocalStorage, and turns a Stop into a real abort of the
+ * in-flight model request rather than a check between iterations.
+ */
+export async function runToolLoop(a: ToolLoopArgs): Promise<ToolLoopResult> {
+  return runWithTurnContext(
+    { tenantId: a.tenantId, conversationId: a.conversationId, surface: a.surface ?? 'operator' },
+    async (turn) => {
+      // Poll the caller's stop flag while the turn runs; the loop checks it
+      // between iterations, this makes the in-flight request end too.
+      const poll = a.shouldStop
+        ? setInterval(() => {
+            if (a.shouldStop?.() && !turn.abort.signal.aborted) {
+              turn.abort.abort();
+            }
+          }, 500)
+        : null;
+      try {
+        return await runToolLoopInner(a);
+      } finally {
+        if (poll) {
+          clearInterval(poll);
+        }
+      }
+    },
+  );
+}
+
+async function runToolLoopInner(a: {
   tenantId: string;
   conversationId: string;
+  /** Phase 47: which surface is speaking — gates tier tools by it. Default 'operator'. */
+  surface?: 'operator' | 'site';
   system: string;
   /**
    * Widened from ChatMessage[] to BlockMessage[] so history can carry image
@@ -186,13 +221,26 @@ export async function runToolLoop(a: {
       break;
     }
 
-    const response = await callClaudeWithTools({
-      system: a.system,
-      messages,
-      tools: a.toolset.anthropicTools,
-      modelId,
-      reasoningEffort,
-    });
+    let response: Awaited<ReturnType<typeof callClaudeWithTools>>;
+    try {
+      response = await callClaudeWithTools({
+        system: a.system,
+        messages,
+        tools: a.toolset.anthropicTools,
+        modelId,
+        reasoningEffort,
+      });
+    } catch (err) {
+      if (err instanceof TurnStoppedError || turnAborted()) {
+        // Phase 47: Stop pressed mid-generation — the request was aborted.
+        const msg = '\n\n[stopped] Stopped at your request — progress up to here is saved.';
+        a.onDelta(msg);
+        finalText += msg;
+        await audit(a.tenantId, 'loop.user_stopped', 'runToolLoop', { iteration: i, inFlight: true });
+        break;
+      }
+      throw err;
+    }
 
     // Meter the exact tokens this call used (returned in-band by the provider).
     if (response.usage) {

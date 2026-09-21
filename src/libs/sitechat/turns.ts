@@ -130,6 +130,7 @@ export async function runSiteTurn(ctx: SiteChatContext, user: SiteChatUser, conv
     await runToolLoop({
       tenantId: ctx.tenant.id,
       conversationId,
+      surface: 'site',
       system,
       history,
       userText: text,

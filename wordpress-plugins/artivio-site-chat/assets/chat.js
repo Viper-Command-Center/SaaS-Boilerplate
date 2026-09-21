@@ -77,7 +77,7 @@
   };
 
   // ── State
-  var state = { agent: null, messages: [], live: null, sending: false, pollTimer: null, lastCount: 0 };
+  var state = { agent: null, messages: [], live: null, sending: false, stopping: false, pollTimer: null, lastCount: 0 };
 
   var el = {};
   var build = function () {
@@ -109,7 +109,25 @@
       }
     });
     el.stop.addEventListener('click', function () {
-      api('/stop', { method: 'POST' }).catch(function () {});
+      // Immediate feedback: the platform aborts the in-flight step, but the
+      // panel would otherwise look ignored until the next poll.
+      state.stopping = true;
+      paint();
+      api('/stop', { method: 'POST' })
+        .then(function (r) {
+          if (r && r.stopped === false) {
+            state.stopping = false;
+            state.live = null;
+            paint();
+          }
+          clearTimeout(state.pollTimer);
+          state.pollTimer = setTimeout(refresh, 800);
+        })
+        .catch(function (e) {
+          state.stopping = false;
+          paint();
+          showError(e);
+        });
     });
     (cfg.suggestions || []).forEach(function (s) {
       var b = document.createElement('button');
@@ -134,16 +152,21 @@
       html += '<div class="asc-msg asc-' + (m.role === 'user' ? 'user' : 'assistant') + '"><div class="asc-bubble">' + render(m.content) + '</div></div>';
     });
     if (state.live) {
-      var working = 'Working' + (state.live.iteration ? ' — ' + state.live.iteration + ' step' + (state.live.iteration === 1 ? '' : 's') : '') +
+      var working = (state.stopping || state.live.stopRequested ? 'Stopping…' : 'Working') + (state.live.iteration ? ' — ' + state.live.iteration + ' step' + (state.live.iteration === 1 ? '' : 's') : '') +
         (state.live.lastTool ? ' · ' + esc(state.live.lastTool.replace(/^mcp__[a-z0-9-]+__/, '')) : '');
       html += '<div class="asc-msg asc-assistant asc-live"><div class="asc-bubble">' + (state.live.text ? render(state.live.text) : '') +
         '<div class="asc-working"><span class="asc-dots"><i></i><i></i><i></i></span> ' + working + '</div></div></div>';
     }
     log.innerHTML = html;
     log.scrollTop = log.scrollHeight;
-    el.state.textContent = state.live ? 'working' : 'online';
+    if (!state.live) {
+      state.stopping = false;
+    }
+    el.state.textContent = state.live ? (state.stopping ? 'stopping' : 'working') : 'online';
     el.state.className = 'asc-state ' + (state.live ? 'is-working' : 'is-online');
     el.stop.hidden = !state.live;
+    el.stop.disabled = state.stopping;
+    el.stop.textContent = state.stopping ? 'Stopping…' : 'Stop';
     el.send.disabled = Boolean(state.live) || state.sending;
     el.suggest.hidden = state.messages.length > 0;
   };

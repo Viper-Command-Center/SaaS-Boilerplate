@@ -7,8 +7,10 @@
 import type { PriceRule } from '@/libs/billing/meter';
 import { and, eq, inArray } from 'drizzle-orm';
 import { loadPlaybooksFor } from '@/libs/agent/playbooks';
+import { currentTurn } from '@/libs/agent/turnContext';
 import { meterPlugin } from '@/libs/billing/meter';
 import { db } from '@/libs/DB';
+import { recordConsulted } from '@/libs/divi/consulted';
 import { McpHttpClient } from '@/libs/mcp/client';
 import { httpGuardFor } from '@/libs/mcp/httpGuards';
 import { loadReferenceLibrary } from '@/libs/mcp/references';
@@ -20,7 +22,7 @@ import { storageConfigured } from '@/libs/storage/r2';
 import { captureIssue } from '@/libs/support/issues';
 import { openSecret } from '@/libs/vault';
 import { resolveSiteByLabel } from '@/libs/wpsites/store';
-import { credentials, mcpConnections, pluginCatalog } from '@/models/Schema';
+import { auditLog, credentials, mcpConnections, pluginCatalog } from '@/models/Schema';
 
 export type ToolPolicy = 'auto' | 'approval' | 'deny';
 
@@ -731,7 +733,17 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
             connectionName: 'platform',
             toolName: ref.toolName,
             policy: 'auto',
-            call: async args => loadReferenceLibrary(ref).lookup(args as Record<string, unknown>),
+            call: async (args) => {
+              const a = args as Record<string, unknown>;
+              const out = loadReferenceLibrary(ref).lookup(a);
+              // Phase 47: a successful MODULE lookup is what unlocks writing
+              // that module (divi/gate.ts). Search hits and file reads do not
+              // count — the map is the thing that has to have been read.
+              if (typeof a.module === 'string' && a.module.trim() && !out.startsWith('No module map named')) {
+                recordConsulted(currentTurn()?.conversationId ?? '', a.module);
+              }
+              return out;
+            },
           });
         }
         const guard = spec.guardCall;
@@ -763,16 +775,30 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
               policy: policyMap[tool.name] ?? policyMap['*'] ?? 'approval',
               call: async (args) => {
                 // In-process guard first (stdioCatalog.ts): it may rewrite the
-                // args, add a note to the result, or refuse the call outright
-                // with a reason the model can act on. A guard throw is a
-                // platform-side refusal, not a server error — no explainToolError.
-                const guarded = guard ? guard(tool.name, args as Record<string, unknown>) : { args: args as Record<string, unknown> };
+                // args, add a note to the result, or REFUSE the call with a
+                // reason the model can act on. A refusal is returned as the
+                // tool's text (Phase 47) — never thrown — so it is neither
+                // billed, escalated as a platform bug, nor sent to the site.
+                const guardCtx = { target, connectionName: conn.name };
+                const guarded = guard ? guard(tool.name, args as Record<string, unknown>, guardCtx) : { args: args as Record<string, unknown> };
+                if (guarded.refuse) {
+                  await auditRefusal(tenantId, conn.name, tool.name, guarded.refuse);
+                  return guarded.refuse;
+                }
                 const result = await client.callTool(tool.name, guarded.args);
                 const raw = flattenMcpContent(result.content);
                 if (result.isError) {
                   // Errors stay verbatim and short — never spill one to a file the
                   // agent then has to go and open — but do say whose fault it is.
                   throw new Error(explainToolError(raw, tool.inputSchema, guarded.args));
+                }
+                // Phase 47: post-write verification on the same server (render
+                // check). Advisory — a failure here is reported, never thrown.
+                let after: string | undefined;
+                if (spec.afterCall) {
+                  after = await spec
+                    .afterCall(tool.name, guarded.args, raw, async (n, a) => flattenMcpContent((await client.callTool(n, a)).content), guardCtx)
+                    .catch((e: unknown) => `[render check] skipped: ${e instanceof Error ? e.message.slice(0, 120) : 'error'}`);
                 }
                 const text = await capToolOutput({
                   text: raw,
@@ -781,7 +807,8 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
                   connectionName: conn.name,
                 });
                 const body = text || '(no output)';
-                return guarded.note ? `${body}\n\n${guarded.note}` : body;
+                const extras = [guarded.note, after].filter(Boolean);
+                return extras.length > 0 ? `${body}\n\n${extras.join('\n\n')}` : body;
               },
             },
           });
@@ -997,4 +1024,12 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
       return null;
     },
   };
+}
+
+/** Phase 47: a guard refusal is a tool decision — it goes in the audit log like a denial. */
+async function auditRefusal(tenantId: string, connectionName: string, toolName: string, reason: string): Promise<void> {
+  await db
+    .insert(auditLog)
+    .values({ tenantId, actor: 'agent', action: 'tool.refused', target: `${connectionName}/${toolName}`, detail: { reason: reason.slice(0, 2000) } })
+    .catch(() => {});
 }

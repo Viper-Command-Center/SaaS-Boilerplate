@@ -190,12 +190,25 @@ export function buildWebTools(): {
         signal: AbortSignal.timeout(20_000),
       });
       const body = await resp.text();
+      const type = resp.headers.get('content-type') ?? '';
+      const isHtml = type.includes('html');
+      // Phase 47: a 404 (or a WordPress soft-404 — HTTP 200 with the theme's
+      // error404 body) is an ANSWER, not a transport failure. It comes back
+      // as data the model must act on, so an unpublished draft can never be
+      // reported as "rendered" on the strength of its 404 page.
+      const soft404 = isHtml && /class="[^"]*\berror404\b/.test(body);
+      if (resp.status === 404 || soft404) {
+        return JSON.stringify({
+          url: url.toString(),
+          status: 404,
+          content: '',
+          note: 'PAGE NOT FOUND (404). Nothing on this page is verified. If this is a WordPress page you just created or edited, it is most likely a DRAFT — drafts have no public URL. Verify it with diviops_render_preview {page_id} (or wp_content_get) and give the owner the wp-admin preview link instead. Do not describe this page as rendered, published or working.',
+        });
+      }
       if (!resp.ok) {
         throw new Error(`HTTP ${resp.status} fetching ${url.hostname}.`);
       }
 
-      const type = resp.headers.get('content-type') ?? '';
-      const isHtml = type.includes('html');
       const content = isHtml ? htmlToText(body) : body;
 
       return JSON.stringify({
