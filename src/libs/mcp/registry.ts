@@ -11,6 +11,7 @@ import { meterPlugin } from '@/libs/billing/meter';
 import { db } from '@/libs/DB';
 import { McpHttpClient } from '@/libs/mcp/client';
 import { httpGuardFor } from '@/libs/mcp/httpGuards';
+import { loadReferenceLibrary } from '@/libs/mcp/references';
 import { getStdioServer, wpSiteLabelOf } from '@/libs/mcp/stdioCatalog';
 import { acquireStdioClient } from '@/libs/mcp/stdioClient';
 import { getBuiltinProvider } from '@/libs/plugins';
@@ -705,6 +706,33 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
         // connections to the same server contribute it once.
         if (spec.guidance) {
           guidanceByProvider.set(`stdio:${spec.key}`, spec.guidance.trim());
+        }
+        // Phase 45: the vendor's reference library as ONE on-demand tool per
+        // server key (two DiviOps connections share it). Bare name, policy
+        // auto — it reads files, nothing else — and it is NOT deferred: the
+        // whole point is that it is there before the first module is written.
+        if (spec.references && !executors.has(spec.references.toolName)) {
+          const ref = spec.references;
+          anthropicTools.push({
+            name: ref.toolName,
+            description: ref.description.slice(0, 1000),
+            input_schema: {
+              type: 'object',
+              properties: {
+                module: { type: 'string', description: 'A module name, e.g. "Blurb", "Button", "Text", "Section", "Toggle".' },
+                file: { type: 'string', description: 'A file name or fragment, e.g. "module-formats", "presets", "design-guide".' },
+                section: { type: 'string', description: 'A heading within that file (prefix or breadcrumb match).' },
+                query: { type: 'string', description: 'Free-text keyword search across every file.' },
+              },
+            },
+          });
+          executors.set(ref.toolName, {
+            connectionId: '',
+            connectionName: 'platform',
+            toolName: ref.toolName,
+            policy: 'auto',
+            call: async args => loadReferenceLibrary(ref).lookup(args as Record<string, unknown>),
+          });
         }
         const guard = spec.guardCall;
 

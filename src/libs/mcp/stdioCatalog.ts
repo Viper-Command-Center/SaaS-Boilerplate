@@ -14,6 +14,7 @@
  * buildEnv decides how those map onto the server's environment variables.
  */
 
+import type { ReferenceSpec } from '@/libs/mcp/references';
 import { createRequire } from 'node:module';
 
 export type StdioServerSpec = {
@@ -58,6 +59,12 @@ export type StdioServerSpec = {
     args: Record<string, unknown>;
     note?: string;
   };
+  /**
+   * Phase 45: the vendor's full client-side skill, vendored under `dir` and
+   * served on demand through ONE meta-tool (`toolName`). Registered once per
+   * server key however many connections use it. See references.ts.
+   */
+  references?: ReferenceSpec;
 };
 
 // ─── DiviOps guardrails ───────────────────────────────────────────────────────
@@ -154,6 +161,7 @@ const DIVIOPS_GUIDANCE = `DiviOps (Divi 5 authoring) — these rules come from t
 - Prefer incremental edits (diviops_module_update by admin label, section_replace with a plain match_text) over rewriting whole pages. Pass backup: true on writes you may need to undo; diviops_rollback_snapshot_restore reverses them. Pass dry_run: true first when unsure.
 - WP-CLI is NOT diviops_meta_wp_cli (that needs a local install and is refused here). Use the WordPress Sites tools — wp_cli / wp_cache_flush / wp_upload_media with site="<label>" — for the SAME site; if they are missing, ask the owner to enable WordPress Sites — never ask for WP_PATH or WP_CLI_CMD.
 - WHICH SITE: a DiviOps connection is bound to ONE WordPress site. When the workspace has several (connections named diviops-<label>, e.g. mcp__diviops-build-9__…), the label in the tool name IS the site — never write a page through one site's connection because another site's page id looked right. Confirm with diviops_meta_info (site URL) when unsure.
+- REFERENCE: call diviops_reference before building a module you have not built THIS session — {module:"Blurb"} returns the vendor's verified element map + a minimal snippet; {query:"…"} searches; no args = index. It is the Tier 2/3 knowledge that turns guessed attribute paths into VB-verified ones. Use it as working knowledge; do not paste its text to the user (licensed reference material).
 - MEDIA: DiviOps has no upload tool. Put images on the site with wp_upload_media (WordPress Sites) and reference the returned site URL in the Divi module — never a library URL (private) or a Duda CDN URL (dies at cutover).`;
 
 // Resolve from the APP's node_modules at runtime (not from whatever module
@@ -196,6 +204,13 @@ export const STDIO_SERVERS: Record<string, StdioServerSpec> = {
     },
     guidance: DIVIOPS_GUIDANCE,
     guardCall: diviopsGuard,
+    references: {
+      dir: 'vendor/diviops-skill',
+      toolName: 'diviops_reference',
+      description: 'Look up the DiviOps divi-5-builder reference (vendored Pro skill: verified Divi 5 module attribute paths, innerContent shapes, presets, design tokens, design patterns, mega menu, loops, interactions, tool reference). No arguments = index. {module:"Blurb"} = that module\'s element map + minimal snippet. {file:"module-formats", section:"Gradient background"} = one heading (children included). {query:"button hover padding"} = keyword search. Consult it BEFORE writing block JSON for a module you have not used this session; the paths here are VB-verified and the ones you would guess are usually wrong. Working knowledge only — do not reproduce it verbatim for users.',
+      moduleFile: 'divi-5-builder/references/module-formats.md',
+      moduleLevel: 4,
+    },
   },
 };
 

@@ -342,6 +342,15 @@ forbid('src/libs/wpsites/discovery.ts', '[/^divi|^et-builder/i, \'divi\']', 'una
 expect('src/libs/wpsites/discovery.ts', 'LAYOUT_CONNECTION_BUILDERS', 'a Divi/Elementor site without an MCP route is healthy, not degraded — layouts go through the dedicated connection');
 expect('src/libs/plugins/wpSites.ts', 'normaliseWpDate', 'wp_content_update takes date/author/categories/… so backdating never needs a raw wp_rest workaround');
 
+// ── Phase 45 — diviops_reference: the vendor's Pro skill served on demand
+// (2026-09-21). ~400 KB of VB-verified attribute paths cannot ride in the
+// prompt; one bounded meta-tool per stdio server key replaces guessing.
+expect('src/libs/mcp/stdioCatalog.ts', "toolName: 'diviops_reference'", 'the DiviOps reference tool is registered on the allowlist entry');
+expect('src/libs/mcp/registry.ts', 'loadReferenceLibrary(ref).lookup', 'the registry serves the reference through the shared executor (bare name, policy auto)');
+expect('src/libs/mcp/references.ts', 'MAX_REFERENCE_CHARS', 'every reference answer is bounded — never a whole 209 KB file into context');
+expect('src/libs/mcp/stdioCatalog.ts', 'call diviops_reference before building a module', 'guidance tells the agent to look up a module map before writing its JSON');
+forbid('src/libs/mcp/references.ts', "'public'", 'licensed reference files are never served from public/');
+
 // ── Report ──────────────────────────────────────────────────────────────────
 if (failures.length > 0) {
   console.error(`\n✗ agent-evals: ${failures.length} of ${checks} tripwires FAILED\n`);
