@@ -90,7 +90,7 @@ expect('src/libs/agent/prompt.ts', 'MEMORY:', 'Max claimed "no memory" about a s
 expect('src/libs/agent/prompt.ts', 'MISSIONS:', 'big jobs must go through start_mission (persisted plan), not one giant chat turn');
 
 // ── Loop budget honesty (Phase 26 — overnight build stopped silently at wk 2)
-expect('src/libs/agent/loop.ts', 'DEFAULT_MAX_ITERATIONS = 24', 'silent 8-iteration cap starved overnight builds');
+expect('src/libs/agent/loop.ts', 'DEFAULT_MAX_ITERATIONS = 40', 'silent 8-iteration cap starved overnight builds (raised 24 → 40 in Sept 2026; the cap is the spend guard, not the iteration count)');
 expect('src/libs/agent/loop.ts', 'shouldStop', 'Stop button: loop must check the cancel flag before every iteration');
 expect('src/libs/agent/loop.ts', '[budget]', 'exhaustion must be narrated to the user, never silent');
 expect('src/libs/agent/loop.ts', 'exhausted', 'loop must RETURN exhaustion so runners can requeue continuations');
@@ -329,6 +329,18 @@ expect('src/libs/agent/prompt.ts', 'never write them yourself', 'the system prom
 // verified starter templates before any hand-built module JSON.
 expect('src/libs/mcp/stdioCatalog.ts', 'THE FAILURE MODE THIS GUIDANCE EXISTS TO PREVENT', 'agents must be told not to fall back to a Code/raw-HTML module when they do not know the native one');
 expect('src/libs/mcp/stdioCatalog.ts', 'BEFORE composing any section by hand, call diviops_template_list', 'vendor-verified starter templates must be checked before hand-building module JSON');
+
+// ── Phase 44 — DiviOps binds to a WordPress Sites entry (2026-09-21). One
+// DiviOps connection per WORKSPACE was the limit, each holding its own copy of
+// an app password the wp_sites vault already had. Now `wp-site:<label>` on the
+// connection borrows the site's credential at spawn time — one connection per
+// site, one credential per site, rotated in one place.
+expect('src/libs/mcp/stdioCatalog.ts', "WP_SITE_TARGET_PREFIX = 'wp-site:'", 'bound-site target convention');
+expect('src/libs/mcp/registry.ts', 'resolveSiteByLabel(tenantId, boundLabel)', 'the registry resolves a bound site from wp_sites, never from a second credential copy');
+expect('src/app/api/plugins/route.ts', 'wpSiteLabel', 'the marketplace can bind a per-site stdio plugin to a registered site');
+forbid('src/libs/wpsites/discovery.ts', '[/^divi|^et-builder/i, \'divi\']', 'unanchored /^divi/ matched diviops-agent-pro and reported 1.0.16-beta as the Divi version');
+expect('src/libs/wpsites/discovery.ts', 'LAYOUT_CONNECTION_BUILDERS', 'a Divi/Elementor site without an MCP route is healthy, not degraded — layouts go through the dedicated connection');
+expect('src/libs/plugins/wpSites.ts', 'normaliseWpDate', 'wp_content_update takes date/author/categories/… so backdating never needs a raw wp_rest workaround');
 
 // ── Report ──────────────────────────────────────────────────────────────────
 if (failures.length > 0) {

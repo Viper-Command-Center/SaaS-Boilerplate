@@ -152,7 +152,9 @@ const DIVIOPS_GUIDANCE = `DiviOps (Divi 5 authoring) — these rules come from t
 - Give every section meta.adminLabel, using ONLY letters, digits and spaces. The plugin stores & < > " and -- as JSON escapes but looks sections up by raw substring, so such a label (or match_text) can never be matched again. This is why section_replace/section_get report not_found on sections you wrote earlier — it is a plugin limitation, not a wrong page id.
 - page_update_content takes the whole page wrapped in <!-- wp:divi/placeholder -->…<!-- /wp:divi/placeholder -->. section_append and section_replace take ONE section with NO placeholder wrapper (the platform strips it from section_replace for you, because a nested placeholder renders the page blank).
 - Prefer incremental edits (diviops_module_update by admin label, section_replace with a plain match_text) over rewriting whole pages. Pass backup: true on writes you may need to undo; diviops_rollback_snapshot_restore reverses them. Pass dry_run: true first when unsure.
-- WP-CLI is NOT diviops_meta_wp_cli (that needs a local install and is refused here). Use the wpcli connection's wp_status / wp_cli / wp_cache_flush tools; if they are missing, ask the owner to enable the WP-CLI over SSH plugin — never ask for WP_PATH or WP_CLI_CMD.`;
+- WP-CLI is NOT diviops_meta_wp_cli (that needs a local install and is refused here). Use the WordPress Sites tools — wp_cli / wp_cache_flush / wp_upload_media with site="<label>" — for the SAME site; if they are missing, ask the owner to enable WordPress Sites — never ask for WP_PATH or WP_CLI_CMD.
+- WHICH SITE: a DiviOps connection is bound to ONE WordPress site. When the workspace has several (connections named diviops-<label>, e.g. mcp__diviops-build-9__…), the label in the tool name IS the site — never write a page through one site's connection because another site's page id looked right. Confirm with diviops_meta_info (site URL) when unsure.
+- MEDIA: DiviOps has no upload tool. Put images on the site with wp_upload_media (WordPress Sites) and reference the returned site URL in the Divi module — never a library URL (private) or a Duda CDN URL (dies at cutover).`;
 
 // Resolve from the APP's node_modules at runtime (not from whatever module
 // graph the bundler built) — Next.js never needs to know these packages exist.
@@ -199,6 +201,25 @@ export const STDIO_SERVERS: Record<string, StdioServerSpec> = {
 
 export function getStdioServer(key: string | null | undefined): StdioServerSpec | undefined {
   return key ? STDIO_SERVERS[key] : undefined;
+}
+
+/**
+ * A per-connection stdio server may BORROW a WordPress Sites entry instead of
+ * holding its own copy of the site's application password (Phase 44). The
+ * connection's `url` column then reads `wp-site:<label>`; at spawn time the
+ * registry resolves the label to the site's URL + `user:app-password` from
+ * the wp_sites vault row. One credential per site, rotated in one place, and
+ * an owner never retypes a password to give DiviOps a site it already trusts.
+ */
+export const WP_SITE_TARGET_PREFIX = 'wp-site:';
+
+export function wpSiteLabelOf(target: string | null | undefined): string | null {
+  const t = (target ?? '').trim();
+  if (!t.toLowerCase().startsWith(WP_SITE_TARGET_PREFIX)) {
+    return null;
+  }
+  const label = t.slice(WP_SITE_TARGET_PREFIX.length).trim().toLowerCase();
+  return label || null;
 }
 
 /** For the admin UI: what stdio servers can be added to the catalog. */

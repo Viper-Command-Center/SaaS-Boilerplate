@@ -190,7 +190,7 @@ const tools: BuiltinTool[] = [
   },
   {
     name: 'wp_content_update',
-    description: 'Update a post or page (title, content, excerpt, status, slug, published date, featured image). Read it first with wp_content_get so you keep what should stay. status="trash" is NOT valid here — use wp_content_trash. At least one field besides id/type is required — a call that changes nothing errors instead of silently reporting success.',
+    description: 'Update a post or page: title, content, excerpt, status, slug, featured image, publish DATE, author, categories/tags, sticky, comments, format, template, and (pages) parent/menu_order. Only the fields you pass change. Read it first with wp_content_get. status="trash" is NOT valid here — use wp_content_trash. Dates are site-local ISO 8601 ("2026-03-14T09:00:00"); changing a date re-sorts the blog and, if the permalink structure includes the date, changes the URL — check wp_cli ["option","get","permalink_structure"] before bulk re-dating.',
     input_schema: {
       type: 'object',
       properties: {
@@ -202,8 +202,18 @@ const tools: BuiltinTool[] = [
         excerpt: { type: 'string' },
         status: { type: 'string' },
         slug: { type: 'string' },
-        date: { type: 'string', description: 'Published date in the SITE\'s local time, ISO 8601 without a timezone offset, e.g. "2026-03-14T09:00:00". WordPress derives date_gmt from this using the site\'s timezone setting — do not also pass date_gmt.' },
         featuredMediaId: { type: 'number' },
+        date: { type: 'string', description: 'Publish date, site-local ISO 8601 e.g. "2026-03-14T09:00:00". A future date with status "publish" makes WordPress schedule it ("future").' },
+        author: { type: 'number', description: 'WordPress user id (wp_cli ["user","list","--format=json"]).' },
+        categories: { type: 'array', items: { type: 'number' }, description: 'Category ids — REPLACES the set (wp_cli ["term","list","category","--format=json"]).' },
+        tags: { type: 'array', items: { type: 'number' }, description: 'Tag ids — REPLACES the set.' },
+        sticky: { type: 'boolean' },
+        commentStatus: { type: 'string', enum: ['open', 'closed'] },
+        format: { type: 'string', description: 'standard | aside | gallery | link | image | quote | status | video | audio | chat' },
+        template: { type: 'string', description: 'Theme template file, e.g. "page-full-width.php"; "" resets to default.' },
+        parent: { type: 'number', description: 'Pages: parent page id (0 = top level).' },
+        menuOrder: { type: 'number', description: 'Pages: ordering among siblings.' },
+        meta: { type: 'object', description: 'Custom fields registered to REST (show_in_rest). Unknown keys are ignored by WordPress — verify with wp_content_get afterwards.' },
       },
       required: ['id'],
     },
@@ -440,6 +450,21 @@ async function describeTarget(site: ResolvedSite, a: Record<string, unknown>): P
   return { id, exists: true, verified: false, title: '', type: '', status: '', link: '' };
 }
 
+/**
+ * WordPress wants site-local "YYYY-MM-DDTHH:MM:SS" in `date`. Models send
+ * "2026-03-14", "2026-03-14 09:00", or an ISO string with a Z — all accepted;
+ * a trailing Z/offset is passed through as `date_gmt` semantics by WordPress
+ * only via date_gmt, so strip it and treat the wall time as site-local.
+ */
+export function normaliseWpDate(raw: unknown): string {
+  const s = String(raw ?? '').trim().replace(' ', 'T');
+  const m = /^(\d{4}-\d{2}-\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2}))?)?/.exec(s);
+  if (!m) {
+    throw new Error(`date "${String(raw).slice(0, 40)}" is not a date — use "YYYY-MM-DDTHH:MM:SS" (site-local).`);
+  }
+  return `${m[1]}T${m[2] ?? '09'}:${m[3] ?? '00'}:${m[4] ?? '00'}`;
+}
+
 function collection(args: Record<string, unknown>): 'posts' | 'pages' {
   return String(args.type ?? 'post').toLowerCase() === 'page' ? 'pages' : 'posts';
 }
@@ -649,29 +674,26 @@ async function execute(tool: string, args: Record<string, unknown>, tenantId: st
       if (String(args.status ?? '') === 'trash') {
         throw new Error('WordPress has no "trash" status — use wp_content_trash.');
       }
-      const payload = {
+      const updated = await rest(site, 'POST', `/wp/v2/${collection(args)}/${Number(args.id)}`, {
         ...(args.title !== undefined ? { title: String(args.title) } : {}),
         ...(args.content !== undefined ? { content: String(args.content) } : {}),
         ...(args.excerpt !== undefined ? { excerpt: String(args.excerpt) } : {}),
         ...(args.status !== undefined ? { status: String(args.status) } : {}),
         ...(args.slug !== undefined ? { slug: String(args.slug) } : {}),
-        ...(args.date !== undefined ? { date: String(args.date) } : {}),
         ...(args.featuredMediaId ? { featured_media: Number(args.featuredMediaId) } : {}),
-      };
-      // 2026-09-18: a date-only call was silently dropped (date wasn't a
-      // recognised field yet) — the REST PATCH went out with an EMPTY body,
-      // WordPress echoed the post back unchanged with 200 OK, and the tool
-      // reported updated:true while nothing had changed. Same shape as every
-      // other "the platform lied quietly, the agent took the blame" bug in
-      // this file: refuse a no-op instead of reporting one as a success, and
-      // name every field this tool actually understands.
-      if (Object.keys(payload).length === 0) {
-        throw new Error(
-          'wp_content_update: no recognised field was set, so nothing would change on the site. Recognised fields are: title, content, excerpt, status, slug, date, featuredMediaId. If you meant something else, use wp_rest or wp_cli directly.',
-        );
-      }
-      const updated = await rest(site, 'POST', `/wp/v2/${collection(args)}/${Number(args.id)}`, payload) as Record<string, any>;
-      return JSON.stringify({ id: updated.id, status: updated.status, link: updated.link, date: updated.date, updated: true });
+        ...(args.date !== undefined ? { date: normaliseWpDate(args.date) } : {}),
+        ...(args.author !== undefined ? { author: Number(args.author) } : {}),
+        ...(Array.isArray(args.categories) ? { categories: args.categories.map(Number) } : {}),
+        ...(Array.isArray(args.tags) ? { tags: args.tags.map(Number) } : {}),
+        ...(typeof args.sticky === 'boolean' ? { sticky: args.sticky } : {}),
+        ...(args.commentStatus !== undefined ? { comment_status: String(args.commentStatus) } : {}),
+        ...(args.format !== undefined ? { format: String(args.format) } : {}),
+        ...(args.template !== undefined ? { template: String(args.template) } : {}),
+        ...(args.parent !== undefined ? { parent: Number(args.parent) } : {}),
+        ...(args.menuOrder !== undefined ? { menu_order: Number(args.menuOrder) } : {}),
+        ...(args.meta && typeof args.meta === 'object' ? { meta: args.meta } : {}),
+      }) as Record<string, any>;
+      return JSON.stringify({ id: updated.id, status: updated.status, date: updated.date, link: updated.link, updated: true });
     }
     case 'wp_content_trash': {
       const trashed = await rest(site, 'DELETE', `/wp/v2/${collection(args)}/${Number(args.id)}`) as Record<string, any>;

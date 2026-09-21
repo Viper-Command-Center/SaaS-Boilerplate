@@ -14,10 +14,14 @@
 
 import type { Discovered } from '@/libs/wpsites/store';
 import type { Builder, ResolvedSite, SiteCapabilities, SiteStatus, TestReport, TestRow } from '@/libs/wpsites/types';
+import { and, eq } from 'drizzle-orm';
+import { db } from '@/libs/DB';
+import { WP_SITE_TARGET_PREFIX } from '@/libs/mcp/stdioCatalog';
 import { cliExec, mcpClientFor, renderCli, restRequest } from '@/libs/wpsites/channels';
 import { redactSecrets } from '@/libs/wpsites/redact';
 import { getResolvedSite, storeTestResult } from '@/libs/wpsites/store';
 import { EMPTY_CAPABILITIES } from '@/libs/wpsites/types';
+import { mcpConnections, pluginCatalog } from '@/models/Schema';
 
 /** Oldest Agent Connector / MCP Adapter we know speaks the protocol we use. */
 export const MIN_AGENT_CONNECTOR_VERSION = '0.1.0';
@@ -51,12 +55,49 @@ const BUILDER_NAMESPACE_HINTS: Array<[RegExp, Builder]> = [
   [/^divi|^et[-_]/i, 'divi'],
 ];
 
+// Plugin SLUGS. Anchored on purpose: `/^divi/` also matched `diviops-agent-pro`
+// and reported the DiviOps plugin's 1.0.16-beta as the Divi version (Phase 44).
 const BUILDER_PLUGIN_HINTS: Array<[RegExp, Builder]> = [
   [/^oxygen/i, 'oxygen'],
   [/^bricks/i, 'bricks'],
   [/^elementor$/i, 'elementor'],
-  [/^divi|^et-builder/i, 'divi'],
+  [/^divi(?:-builder)?$|^et-builder/i, 'divi'],
 ];
+
+/**
+ * Builders whose layouts are edited through a DEDICATED connection rather
+ * than the site's MCP endpoint. For these, "no mcp/* route" is the normal
+ * state, not a fault — the test must not mark the site degraded for it.
+ */
+export const LAYOUT_CONNECTION_BUILDERS: Partial<Record<Builder, { connection: string; how: string }>> = {
+  divi: { connection: 'DiviOps', how: 'Enable DiviOps under Tools and pick this site.' },
+  elementor: { connection: 'Elementor', how: 'Enable the Elementor plugin under Tools with this site\'s URL + application password.' },
+};
+
+/**
+ * Is the builder's dedicated connection present for THIS site in the
+ * workspace? DiviOps: a stdio connection bound `wp-site:<label>` or pointed at
+ * the site URL. Elementor: the built-in connection whose target is the site.
+ * Returns the connection name, or null.
+ */
+export async function findLayoutConnection(tenantId: string, builder: Builder, site: { label: string; siteUrl: string }): Promise<string | null> {
+  const wanted = builder === 'divi' ? 'diviops' : builder === 'elementor' ? 'elementor' : null;
+  if (!wanted) {
+    return null;
+  }
+  try {
+    const rows = await db
+      .select({ name: mcpConnections.name, url: mcpConnections.url, enabled: mcpConnections.enabled, provider: pluginCatalog.provider })
+      .from(mcpConnections)
+      .innerJoin(pluginCatalog, eq(pluginCatalog.id, mcpConnections.catalogId))
+      .where(and(eq(mcpConnections.tenantId, tenantId), eq(pluginCatalog.provider, wanted)));
+    const norm = (u: string | null) => (u ?? '').trim().toLowerCase().replace(/\/+$/, '');
+    const hit = rows.find(r => r.enabled && (norm(r.url) === `${WP_SITE_TARGET_PREFIX}${site.label}` || norm(r.url) === norm(site.siteUrl)));
+    return hit?.name ?? null;
+  } catch {
+    return null;
+  }
+}
 
 export function detectBuilder(input: {
   namespaces?: string[];
@@ -308,7 +349,14 @@ async function checkMcp(ctx: Ctx, index: { namespaces: string[]; routes: Record<
   if (!route) {
     ctx.discovered.mcpEndpointUrl = null;
     ctx.caps.mcp = false;
-    row(ctx, { check: 'MCP endpoint', status: 'fail', detail: 'No mcp/* route in /wp-json/', hint: mcpMissingHint(builderHint) });
+    const dedicated = builderHint ? LAYOUT_CONNECTION_BUILDERS[builderHint as Builder] : undefined;
+    if (dedicated) {
+      // Divi / Elementor never expose layouts over the site's MCP endpoint —
+      // absence is the expected state, so it must not degrade the site.
+      row(ctx, { check: 'MCP endpoint', status: 'ok', detail: `No mcp/* route — not needed for ${builderHint}. ${mcpMissingHint(builderHint)}` });
+    } else {
+      row(ctx, { check: 'MCP endpoint', status: 'fail', detail: 'No mcp/* route in /wp-json/', hint: mcpMissingHint(builderHint) });
+    }
     return [];
   }
   const endpoint = `${ctx.site.siteUrl}/wp-json${route}`;
@@ -474,7 +522,9 @@ export async function discoverAndTest(site: ResolvedSite, opts: TestOptions = {}
     ctx.caps.plugins = base.plugins;
   }
   ctx.discovered.builder = det.builder;
-  ctx.discovered.builderVersion = det.version ?? base.builderVersion ?? null;
+  // The base plugin reads the theme/plugin version off the site itself —
+  // prefer it; the WP-CLI plugin-list match is the fallback.
+  ctx.discovered.builderVersion = base.builderVersion ?? det.version ?? null;
   ctx.discovered.wpVersion ??= base.wp ?? null;
   ctx.discovered.phpVersion ??= base.php ?? cli.php ?? null;
 
@@ -483,6 +533,17 @@ export async function discoverAndTest(site: ResolvedSite, opts: TestOptions = {}
       row(ctx, { check: 'Builder', status: 'ok', detail: 'No page builder detected (block editor) — content tools apply.' });
     } else if (det.abilities.length > 0) {
       row(ctx, { check: 'Builder', status: 'ok', detail: `${det.builder}${det.version ? ` ${det.version}` : ''} — ${det.abilities.length} MCP abilities` });
+    } else if (LAYOUT_CONNECTION_BUILDERS[det.builder]) {
+      // Phase 44: say whether the dedicated layout connection exists for THIS
+      // site instead of a warning that reads like the site is broken.
+      const ded = LAYOUT_CONNECTION_BUILDERS[det.builder]!;
+      const version = ctx.discovered.builderVersion ?? det.version;
+      const connName = await findLayoutConnection(site.tenantId, det.builder, { label: site.label, siteUrl: site.siteUrl });
+      if (connName) {
+        row(ctx, { check: 'Builder', status: 'ok', detail: `${det.builder}${version ? ` ${version}` : ''} — layouts via the ${ded.connection} connection "${connName}"` });
+      } else {
+        row(ctx, { check: 'Builder', status: 'warn', detail: `${det.builder}${version ? ` ${version}` : ''} — no ${ded.connection} connection for this site yet; content tools work, layout editing does not`, hint: ded.how });
+      }
     } else {
       row(ctx, {
         check: 'Builder',

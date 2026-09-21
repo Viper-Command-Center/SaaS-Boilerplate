@@ -11,13 +11,14 @@ import { meterPlugin } from '@/libs/billing/meter';
 import { db } from '@/libs/DB';
 import { McpHttpClient } from '@/libs/mcp/client';
 import { httpGuardFor } from '@/libs/mcp/httpGuards';
-import { getStdioServer } from '@/libs/mcp/stdioCatalog';
+import { getStdioServer, wpSiteLabelOf } from '@/libs/mcp/stdioCatalog';
 import { acquireStdioClient } from '@/libs/mcp/stdioClient';
 import { getBuiltinProvider } from '@/libs/plugins';
 import { archiveGeneratedAssets, saveFile } from '@/libs/storage/files';
 import { storageConfigured } from '@/libs/storage/r2';
 import { captureIssue } from '@/libs/support/issues';
 import { openSecret } from '@/libs/vault';
+import { resolveSiteByLabel } from '@/libs/wpsites/store';
 import { credentials, mcpConnections, pluginCatalog } from '@/models/Schema';
 
 export type ToolPolicy = 'auto' | 'approval' | 'deny';
@@ -675,9 +676,26 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
         }
         // The workspace's sealed credential + the connection's target (url
         // field) become the child env — mapping decided by the allowlist spec.
-        const secrets = await resolveHeaders(conn.headerCredentials);
-        const credentialValue = Object.values(secrets)[0] ?? '';
-        const env = spec.buildEnv(conn.url ?? '', credentialValue);
+        // Phase 44: `wp-site:<label>` borrows the WordPress Sites entry — the
+        // site's URL and its vault-sealed application password — so DiviOps
+        // and any future per-site stdio server share ONE credential per site
+        // with the REST/CLI channels. Rotating the site's password in the
+        // Sites panel rotates it here too (the pool fingerprint includes env).
+        let target = conn.url ?? '';
+        let credentialValue = '';
+        const boundLabel = wpSiteLabelOf(target);
+        if (boundLabel) {
+          const site = await resolveSiteByLabel(tenantId, boundLabel);
+          if (site.authScheme !== 'basic' || !site.authUser) {
+            throw new Error(`site "${boundLabel}" authenticates with a bearer token; ${spec.name} needs a username + application password (basic auth)`);
+          }
+          target = site.siteUrl;
+          credentialValue = `${site.authUser}:${site.authSecret}`;
+        } else {
+          const secrets = await resolveHeaders(conn.headerCredentials);
+          credentialValue = Object.values(secrets)[0] ?? '';
+        }
+        const env = spec.buildEnv(target, credentialValue);
         const client = acquireStdioClient(conn.id, spec.resolveEntry(), env, conn.name);
         const tools = await client.listTools();
         const policyMap = (conn.toolPolicy ?? {}) as Record<string, ToolPolicy>;

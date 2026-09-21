@@ -42,6 +42,10 @@ type CatalogPlugin = {
   /** 'ssh-key' = platform-generated key; the form shows Generate instead of a paste box. */
   credentialKind?: 'ssh-key' | null;
   installed: boolean;
+  /** Phase 44: per-site stdio server (DiviOps) — one connection per registered WordPress site. */
+  multiSite?: boolean;
+  /** Registered WordPress Sites labels this plugin is NOT yet connected to. */
+  wpSiteLabels?: string[];
   pricing: Array<{ tool: string; unit: string; retailUsd: number }>;
 };
 
@@ -66,6 +70,8 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
   const [keyFor, setKeyFor] = useState<string | null>(null);
   const [keyValue, setKeyValue] = useState('');
   const [siteUrl, setSiteUrl] = useState('');
+  // Phase 44: which registered WordPress site to bind a per-site stdio plugin to.
+  const [bindSite, setBindSite] = useState<Record<string, string>>({});
   // SSH-backed plugins (WP-CLI): the key is minted server-side; we hold only
   // the credential id to enable with, and the PUBLIC key to show the client.
   const [sshKey, setSshKey] = useState<{ pluginId: string; credentialId: string; publicKey: string } | null>(null);
@@ -97,11 +103,11 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
     reload();
   }, [reload]);
 
-  const enablePlugin = async (plugin: CatalogPlugin) => {
+  const enablePlugin = async (plugin: CatalogPlugin, wpSiteLabel?: string) => {
     // Open the inline form first if we still need something from the client.
     const hasGeneratedKey = plugin.credentialKind === 'ssh-key' && sshKey?.pluginId === plugin.id;
-    const missing = (plugin.needsKey && !keyValue.trim() && !hasGeneratedKey)
-      || (plugin.needsSiteUrl && !siteUrl.trim());
+    const missing = !wpSiteLabel && ((plugin.needsKey && !keyValue.trim() && !hasGeneratedKey)
+      || (plugin.needsSiteUrl && !siteUrl.trim()));
     if (missing) {
       setKeyFor(plugin.id);
       return;
@@ -110,13 +116,15 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
     const res = await fetch('/api/plugins', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        tenantSlug: props.tenantSlug,
-        pluginId: plugin.id,
-        credentialValue: plugin.needsKey && !hasGeneratedKey ? keyValue.trim() : undefined,
-        credentialId: hasGeneratedKey ? sshKey?.credentialId : undefined,
-        siteUrl: plugin.needsSiteUrl ? siteUrl.trim() : undefined,
-      }),
+      body: JSON.stringify(wpSiteLabel
+        ? { tenantSlug: props.tenantSlug, pluginId: plugin.id, wpSiteLabel }
+        : {
+            tenantSlug: props.tenantSlug,
+            pluginId: plugin.id,
+            credentialValue: plugin.needsKey && !hasGeneratedKey ? keyValue.trim() : undefined,
+            credentialId: hasGeneratedKey ? sshKey?.credentialId : undefined,
+            siteUrl: plugin.needsSiteUrl ? siteUrl.trim() : undefined,
+          }),
     });
     const data = await res.json().catch(() => null);
     if (!res.ok) {
@@ -320,7 +328,8 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
   // Editing a per-connection built-in: no endpoint, no auth header, and the
   // "url" field is really that provider's target (Phase 30.1).
   const isBuiltinEdit = editing?.transport === 'builtin';
-  const available = catalog.filter(p => !p.installed);
+  // A per-site stdio plugin stays offered while a registered site is unbound.
+  const available = catalog.filter(p => !p.installed || (p.multiSite && (p.wpSiteLabels?.length ?? 0) > 0));
 
   return (
     <div className="glass glass-topline relative">
@@ -505,8 +514,37 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
                       </p>
                     )}
                   </div>
-                  <Button size="sm" onClick={() => enablePlugin(p)}>Enable</Button>
+                  {p.multiSite && (p.wpSiteLabels?.length ?? 0) > 0
+                    ? (
+                        <div className="flex items-center gap-2">
+                          <select
+                            className="
+                              rounded-lg border border-white/12 bg-white/4 px-2
+                              py-1.5 text-sm text-white/90 outline-none
+                            "
+                            aria-label="Registered WordPress site"
+                            value={bindSite[p.id] ?? ''}
+                            onChange={e => setBindSite(prev => ({ ...prev, [p.id]: e.target.value }))}
+                          >
+                            <option value="">Pick a registered site…</option>
+                            {p.wpSiteLabels!.map(l => <option key={l} value={l}>{l}</option>)}
+                          </select>
+                          <Button
+                            size="sm"
+                            disabled={!bindSite[p.id]}
+                            onClick={() => enablePlugin(p, bindSite[p.id])}
+                          >
+                            {p.installed ? 'Connect site' : 'Enable'}
+                          </Button>
+                        </div>
+                      )
+                    : <Button size="sm" onClick={() => enablePlugin(p)}>Enable</Button>}
                 </div>
+                {p.multiSite && (p.wpSiteLabels?.length ?? 0) > 0 && (
+                  <p className="mt-1 text-xs text-white/35">
+                    Uses the site's WordPress Sites credential — nothing to paste. One connection per site.
+                  </p>
+                )}
 
                 {keyFor === p.id && (
                   <div className="mt-2 space-y-2">

@@ -14,10 +14,12 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getCurrentUser } from '@/libs/auth/session';
 import { db } from '@/libs/DB';
-import { getStdioServer } from '@/libs/mcp/stdioCatalog';
+import { getStdioServer, WP_SITE_TARGET_PREFIX, wpSiteLabelOf } from '@/libs/mcp/stdioCatalog';
 import { getBuiltinProvider } from '@/libs/plugins';
 import { getUserTenants } from '@/libs/tenants';
 import { sealSecret, vaultConfigured } from '@/libs/vault';
+import { normaliseLabel } from '@/libs/wpsites/auth';
+import { listSites } from '@/libs/wpsites/store';
 import { auditLog, credentials, mcpConnections, pluginCatalog } from '@/models/Schema';
 
 export const dynamic = 'force-dynamic';
@@ -49,10 +51,14 @@ export async function GET(request: Request) {
     .where(eq(pluginCatalog.enabled, true));
 
   const installed = await db
-    .select({ catalogId: mcpConnections.catalogId, enabled: mcpConnections.enabled })
+    .select({ catalogId: mcpConnections.catalogId, enabled: mcpConnections.enabled, url: mcpConnections.url })
     .from(mcpConnections)
     .where(eq(mcpConnections.tenantId, tenant.id));
   const installedIds = new Set(installed.map(i => i.catalogId).filter(Boolean));
+  // Phase 44: per-site stdio servers (DiviOps) can be connected once PER
+  // REGISTERED SITE, borrowing the WordPress Sites credential. Offer the
+  // labels not yet bound so the panel can show "connect another site".
+  const siteLabels = (await listSites(tenant.id).catch(() => [])).map(s => s.label);
 
   return NextResponse.json({
     plugins: catalog.map((p) => {
@@ -63,7 +69,11 @@ export async function GET(request: Request) {
       const stdioSpec = p.transport === 'stdio' && p.provider ? getStdioServer(p.provider) : undefined;
       const perConnection = Boolean(provider?.perConnection) || Boolean(stdioSpec?.perConnection);
       const noCredential = Boolean(provider?.noCredential);
+      const multiSite = Boolean(stdioSpec?.perConnection);
+      const boundLabels = new Set(installed.filter(i => i.catalogId === p.id).map(i => wpSiteLabelOf(i.url)).filter(Boolean));
       return {
+        multiSite,
+        wpSiteLabels: multiSite ? siteLabels.filter(l => !boundLabels.has(l)) : [],
         id: p.id,
         slug: p.slug,
         name: p.name,
@@ -128,6 +138,14 @@ const EnableSchema = z.object({
    * workspace's (or the platform's) secret.
    */
   credentialId: z.string().uuid().optional(),
+  /**
+   * Phase 44: bind a per-site stdio server (DiviOps) to a WordPress Sites
+   * entry by label. The connection then stores `wp-site:<label>` and NO
+   * credential of its own — the registry reads the site's URL + application
+   * password from wp_sites at spawn time. Several such connections may exist
+   * (one per site); they are named `<plugin>-<label>`.
+   */
+  wpSiteLabel: z.string().min(1).max(80).optional(),
 });
 
 export async function POST(request: Request) {
@@ -153,15 +171,6 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Plugin not available.' }, { status: 404 });
   }
 
-  const already = await db
-    .select({ id: mcpConnections.id })
-    .from(mcpConnections)
-    .where(and(eq(mcpConnections.tenantId, tenant.id), eq(mcpConnections.catalogId, plugin.id)))
-    .limit(1);
-  if (already.length > 0) {
-    return NextResponse.json({ error: 'Already enabled in this workspace.' }, { status: 409 });
-  }
-
   // Who supplies the credential?
   //  · tier1 + platform provider  → the catalog's key; nothing stored here.
   //  · tier2, or a per-connection built-in (WordPress) → this workspace's own.
@@ -172,15 +181,54 @@ export async function POST(request: Request) {
     ? getStdioServer(plugin.provider)
     : undefined;
   const perConnection = Boolean(provider?.perConnection) || Boolean(stdioSpec?.perConnection);
+
+  // Phase 44: a per-site stdio server bound to a WordPress Sites entry.
+  const boundLabel = stdioSpec?.perConnection && body.wpSiteLabel ? normaliseLabel(body.wpSiteLabel) : null;
+  if (body.wpSiteLabel && !boundLabel) {
+    return NextResponse.json({ error: 'Only per-site stdio plugins (e.g. DiviOps) can be bound to a WordPress Sites entry.' }, { status: 400 });
+  }
+  if (boundLabel) {
+    const site = (await listSites(tenant.id)).find(s => s.label === boundLabel);
+    if (!site) {
+      return NextResponse.json({ error: `No WordPress site labelled "${boundLabel}" in this workspace — add it under WordPress Sites first.` }, { status: 400 });
+    }
+    if (site.authScheme !== 'basic') {
+      return NextResponse.json({ error: `Site "${boundLabel}" uses a bearer token; ${plugin.name} needs a username + application password. Edit the site to use an application password.` }, { status: 400 });
+    }
+  }
+
+  const existing = await db
+    .select({ id: mcpConnections.id, name: mcpConnections.name, url: mcpConnections.url })
+    .from(mcpConnections)
+    .where(and(eq(mcpConnections.tenantId, tenant.id), eq(mcpConnections.catalogId, plugin.id)));
+  const connectionName = boundLabel ? `${plugin.slug}-${boundLabel}`.slice(0, 40) : plugin.slug;
+  if (boundLabel) {
+    if (existing.some(e => wpSiteLabelOf(e.url) === boundLabel)) {
+      return NextResponse.json({ error: `${plugin.name} is already connected to site "${boundLabel}".` }, { status: 409 });
+    }
+    if (existing.some(e => e.name === connectionName)) {
+      return NextResponse.json({ error: `A connection named "${connectionName}" already exists — remove it first.` }, { status: 409 });
+    }
+  } else if (existing.length > 0) {
+    return NextResponse.json({
+      error: stdioSpec?.perConnection
+        ? 'Already enabled in this workspace. To add another site, pick a registered WordPress site (wpSiteLabel).'
+        : 'Already enabled in this workspace.',
+    }, { status: 409 });
+  }
+
   // noCredential providers (AgentCore browser) authenticate with platform AWS
-  // keys — there is nothing for the client to supply, even on tier 2.
-  const needsOwnCredential = !provider?.noCredential
+  // keys — there is nothing for the client to supply, even on tier 2. A
+  // connection bound to a WordPress site borrows that site's credential.
+  const needsOwnCredential = !provider?.noCredential && !boundLabel
     && (plugin.tier === 'tier2' || perConnection);
 
   // Per-connection plugins (WordPress, DiviOps) target the workspace's own site.
-  const targetUrl = perConnection ? (body.siteUrl ?? '') : plugin.url;
+  const targetUrl = boundLabel
+    ? `${WP_SITE_TARGET_PREFIX}${boundLabel}`
+    : perConnection ? (body.siteUrl ?? '') : plugin.url;
   // Validate the target against what THIS provider says it needs.
-  if (perConnection && targetUrl && provider?.targetIsUrl !== false) {
+  if (perConnection && !boundLabel && targetUrl && provider?.targetIsUrl !== false) {
     try {
       void new URL(targetUrl);
     } catch {
@@ -239,7 +287,7 @@ export async function POST(request: Request) {
 
   await db.insert(mcpConnections).values({
     tenantId: tenant.id,
-    name: plugin.slug,
+    name: connectionName,
     transport: plugin.transport === 'builtin' ? 'builtin' : plugin.transport === 'stdio' ? 'stdio' : 'http',
     url: targetUrl,
     catalogId: plugin.id,
@@ -252,7 +300,7 @@ export async function POST(request: Request) {
     actor: user.id,
     action: 'plugin.enable',
     target: plugin.slug,
-    detail: { tier: plugin.tier },
+    detail: { tier: plugin.tier, ...(boundLabel ? { wpSite: boundLabel } : {}) },
   }).catch(() => {});
 
   return NextResponse.json({ ok: true });

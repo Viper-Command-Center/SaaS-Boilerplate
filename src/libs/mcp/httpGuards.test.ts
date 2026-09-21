@@ -40,3 +40,15 @@ describe('Zernio guard (Phase 38 — BudgetSmart daily failure emails)', () => {
     expect(httpGuardFor({ id: '1', name: 'github', url: 'https://api.githubcopilot.com/mcp' })).toBeNull();
   });
 });
+
+describe('wp-site bound stdio targets (Phase 44)', async () => {
+  const { WP_SITE_TARGET_PREFIX, wpSiteLabelOf } = await import('@/libs/mcp/stdioCatalog');
+
+  it('reads the label out of a bound target and nothing out of a URL', () => {
+    expect(wpSiteLabelOf(`${WP_SITE_TARGET_PREFIX}build-9`)).toBe('build-9');
+    expect(wpSiteLabelOf(' WP-Site:Build-9 ')).toBe('build-9');
+    expect(wpSiteLabelOf('https://build9.churchwebglobal.com')).toBeNull();
+    expect(wpSiteLabelOf('wp-site:')).toBeNull();
+    expect(wpSiteLabelOf(null)).toBeNull();
+  });
+});

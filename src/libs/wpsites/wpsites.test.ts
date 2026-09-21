@@ -5,7 +5,7 @@
 
 import JSZip from 'jszip';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mcpArgs, normaliseArgv, wpSitesProvider } from '@/libs/plugins/wpSites';
+import { mcpArgs, normaliseArgv, normaliseWpDate, wpSitesProvider } from '@/libs/plugins/wpSites';
 import { buildAuthHeader, LABEL_RE, maskSecret, normaliseLabel, normaliseSecret, normaliseSiteUrl } from '@/libs/wpsites/auth';
 import { MAX_REST_BODY, resolveRoute, restRequest } from '@/libs/wpsites/channels';
 import { compareVersions, detectBuilder, findMcpRoute, httpsUpgradeOf, mcpMissingHint } from '@/libs/wpsites/discovery';
@@ -195,6 +195,20 @@ describe('discovery', () => {
 });
 
 describe('compareVersions', () => {
+  it('does not mistake the DiviOps plugins for Divi itself (Phase 44)', () => {
+    // build9: CLI plugin list carries diviops-agent 1.5.25 + diviops-agent-pro
+    // 1.0.16-beta; the theme is Divi 5.13.1. `/^divi/` matched the plugins.
+    const d = detectBuilder({
+      plugins: [{ name: 'diviops-agent', version: '1.5.25' }, { name: 'diviops-agent-pro', version: '1.0.16-beta' }],
+      themes: [{ name: 'Divi', status: 'active' }],
+      basePluginBuilder: 'divi',
+    });
+
+    expect(d.builder).toBe('divi');
+    expect(d.version).toBeNull();
+    expect(detectBuilder({ plugins: [{ name: 'divi-builder', version: '5.13.1' }] }).version).toBe('5.13.1');
+  });
+
   it('reads a v-prefixed or pre-release version as its number', () => {
     expect(compareVersions('v1.0.0', '0.1.0')).toBeGreaterThan(0);
     expect(compareVersions('6.2.0-beta.8', '6.1.3')).toBeGreaterThan(0);
@@ -379,5 +393,22 @@ describe('http→https upgrade (BBI, 2026-09-08)', () => {
     expect(httpsUpgradeOf('http://a.example', 301, 'https://b.example/wp-json/')).toBeNull();
     expect(httpsUpgradeOf('https://a.example', 301, 'https://a.example/x')).toBeNull();
     expect(httpsUpgradeOf('http://a.example', 200, undefined)).toBeNull();
+  });
+});
+
+describe('wp_content_update date (Nia, True Therapy 2026-09-18)', () => {
+  it('accepts the shapes a model sends and emits site-local ISO', () => {
+    expect(normaliseWpDate('2026-03-14')).toBe('2026-03-14T09:00:00');
+    expect(normaliseWpDate('2026-03-14 14:30')).toBe('2026-03-14T14:30:00');
+    expect(normaliseWpDate('2026-03-14T14:30:15Z')).toBe('2026-03-14T14:30:15');
+    expect(() => normaliseWpDate('March 14')).toThrow(/not a date/);
+  });
+
+  it('the schema exposes the editorial fields', () => {
+    const t = wpSitesProvider.tools.find(x => x.name === 'wp_content_update')!;
+    const props = Object.keys((t.input_schema as { properties: Record<string, unknown> }).properties);
+    for (const k of ['date', 'author', 'categories', 'tags', 'sticky', 'commentStatus', 'parent', 'menuOrder', 'meta']) {
+      expect(props).toContain(k);
+    }
   });
 });
