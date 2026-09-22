@@ -142,6 +142,19 @@ export async function buildSiteChatToolset(tenantId: string, site: { label: stri
   visible.push(...platform.anthropicTools, ...full.anthropicTools);
   full.attachToolSink(visible);
 
+  // Phase 47.1: WordPress Sites has ≥ DEFER_THRESHOLD tools, so the registry
+  // DEFERS it — and this surface only lets load_connection_tools pull in the
+  // layout connection. Net effect on the first live test: the site's chat had
+  // NO wp_* tools at all ("I don't have permission to list pages"). Load the
+  // group here, once, so the allow-listed WordPress tools are in the schema
+  // from the first step; the sink filter above still hides the rest.
+  const loader = full.resolve('load_connection_tools');
+  if (loader) {
+    for (const name of bound.wpSites) {
+      await loader.call({ connection: name }).catch(() => undefined);
+    }
+  }
+
   // Deferred summary: only the connections this site may load.
   const deferredSummary = full.deferredSummary
     .split(', ')
@@ -181,7 +194,8 @@ export async function buildSiteChatToolset(tenantId: string, site: { label: stri
         ...r,
         call: async (args) => {
           const requested = String(args.connection ?? '').trim().toLowerCase();
-          if (!layoutConnections.some(n => n.toLowerCase() === requested)) {
+          const loadable = [...layoutConnections, ...bound.wpSites];
+          if (!loadable.some(n => n.toLowerCase() === requested)) {
             return `Only this site's layout connection can be loaded here: ${layoutConnections.join(', ') || 'none is bound to this site'}.`;
           }
           return r.call(args);

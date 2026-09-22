@@ -245,12 +245,8 @@ export function validateDiviMarkup(markup: string, opts: ValidateOptions): Valid
       c.err(b.path, `${b.attrsError} — the attrs must be one JSON object between the block name and -->.`);
       return;
     }
-    if (b.rawAttrs && /--/.test(b.rawAttrs)) {
-      c.err(b.path, 'attrs JSON contains "--", which terminates the HTML comment early; Divi stores it as \\u002d\\u002d — escape it.');
-    }
-    if (b.rawAttrs && /<\/?[a-z]/i.test(b.rawAttrs)) {
-      c.warn(b.path, 'raw HTML tags inside attrs JSON — Divi writes them unicode-escaped (\\u003cp\\u003e); escape < and > so the comment cannot be cut short.');
-    }
+    // Raw HTML / "--" inside attrs are fine here: the gate re-serialises every
+    // block with WordPress's own escaping before the write (blocks.ts).
 
     const spec = schema.modules.get(b.name);
     if (!spec) {

@@ -125,7 +125,7 @@ export function parseDiviBlocks(markup: string): ParseResult {
             attrsError = 'attrs JSON is not an object';
           }
         } catch (e) {
-          attrsError = `attrs JSON does not parse (${e instanceof Error ? e.message : 'syntax error'})`;
+          attrsError = describeJsonError(json, e);
         }
       }
       const parent = stack[stack.length - 1];
@@ -168,6 +168,63 @@ export function parseDiviBlocks(markup: string): ParseResult {
   }
 
   return { roots, errors, count };
+}
+
+/**
+ * A JSON syntax error with the offending neighbourhood quoted, so the model
+ * can see the missing comma instead of guessing at "position 1187".
+ */
+function describeJsonError(json: string, e: unknown): string {
+  const msg = e instanceof Error ? e.message : 'syntax error';
+  const m = /position (\d+)/.exec(msg);
+  if (!m) {
+    return `attrs JSON does not parse (${msg})`;
+  }
+  const pos = Number(m[1]);
+  const from = Math.max(0, pos - 60);
+  const to = Math.min(json.length, pos + 40);
+  const before = json.slice(from, pos);
+  const after = json.slice(pos, to);
+  return `attrs JSON does not parse (${msg.replace(/ in JSON.*$/, '')}) — here: …${before}⟪HERE⟫${after}…`;
+}
+
+/**
+ * Serialise a block tree back to Divi 5 markup with WordPress's own attribute
+ * escaping (serialize_block_attributes): `--` `<` `>` `&` `"` become unicode
+ * escapes so no HTML in an attribute can terminate the comment. This lets the
+ * model write PLAIN JSON with ordinary HTML strings and leaves the escaping to
+ * the platform — hand-escaping was the main source of unparseable attrs.
+ */
+export function serializeDiviBlocks(blocks: DiviBlock[], indent = ''): string {
+  const out: string[] = [];
+  for (const b of blocks) {
+    const attrs = Object.keys(b.attrs).length > 0 ? ` ${escapeBlockAttrs(JSON.stringify(b.attrs))}` : '';
+    if (b.selfClosing || (b.children.length === 0 && !isContainerName(b.name))) {
+      out.push(`${indent}<!-- wp:${b.name}${attrs} /-->`);
+      continue;
+    }
+    out.push(`${indent}<!-- wp:${b.name}${attrs} -->`);
+    if (b.children.length > 0) {
+      out.push(serializeDiviBlocks(b.children, indent));
+    }
+    out.push(`${indent}<!-- /wp:${b.name} -->`);
+  }
+  return out.join('\n');
+}
+
+const CONTAINER_NAMES = new Set(['divi/placeholder', 'divi/section', 'divi/row', 'divi/row-inner', 'divi/column', 'divi/column-inner', 'divi/group', 'divi/group-carousel']);
+function isContainerName(name: string): boolean {
+  return CONTAINER_NAMES.has(name);
+}
+
+/** WordPress serialize_block_attributes() escaping, byte for byte. */
+export function escapeBlockAttrs(json: string): string {
+  return json
+    .replace(/--/g, '\\u002d\\u002d')
+    .replace(/</g, '\\u003c')
+    .replace(/>/g, '\\u003e')
+    .replace(/&/g, '\\u0026')
+    .replace(/\\"/g, '\\u0022');
 }
 
 /** Depth-first walk. */

@@ -508,7 +508,9 @@ async function runToolLoopInner(a: {
       // reply and the NEXT session had to reconstruct what was done from
       // scratch. Persist it as a library note as well, so the standing
       // "check the library first" doctrine finds it. Best-effort.
-      if (wrapText.trim()) {
+      // Phase 47.1: a site's chat has no library and its transcript IS the
+      // handoff — do not save a note the church admin cannot see.
+      if (wrapText.trim() && a.surface !== 'site') {
         const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
         const body = `# Handoff — turn ended on tool budget (${stamp} UTC)\n\n${wrapText.trim()}\n`;
         const saved = await saveFile({

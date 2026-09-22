@@ -386,6 +386,12 @@ expect('src/libs/sitechat/toolset.ts', 'isSiteSurfaceDiviToolAllowed', 'site-cha
 expect('src/libs/mcp/stdioCatalog.ts', 'NEVER GUESS', 'the DiviOps guidance tells the model the gate exists and how to satisfy it');
 expect('wordpress-plugins/artivio-site-chat/assets/chat.js', 'Stopping…', 'the site chat panel acknowledges Stop immediately');
 
+// ── Phase 47.1 — first live test of the gates (2026-09-21 site chat on build9)
+expect('src/libs/sitechat/toolset.ts', "loader.call({ connection: name })", 'site chat eagerly loads the DEFERRED WordPress Sites group — without it the site has no wp_* tools');
+expect('src/libs/divi/gate.ts', 'serializeDiviBlocks(tree.roots)', 'validated markup is re-serialised with WordPress block-attribute escaping (no hand-escaping by the model)');
+expect('src/libs/divi/blocks.ts', '⟪HERE⟫', 'JSON syntax errors quote the offending spot');
+expect('src/libs/agent/loop.ts', "a.surface !== 'site'", 'no library handoff note on the site surface');
+
 // ── Report ──────────────────────────────────────────────────────────────────
 if (failures.length > 0) {
   console.error(`\n✗ agent-evals: ${failures.length} of ${checks} tripwires FAILED\n`);

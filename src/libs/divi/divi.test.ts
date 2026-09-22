@@ -267,3 +267,38 @@ describe('render summary', () => {
     expect(summariseRender('<div class="et_pb_section"></div>', HOST)).toMatch(/NOTHING rendered/);
   });
 });
+
+describe('Phase 47.1 — plain JSON in, WordPress-escaped markup out', () => {
+  beforeEach(() => resetConsulted());
+
+  const ctx = { target: `https://${HOST}`, connectionName: 'diviops-build-9' };
+
+  it('re-serialises validated markup with block-attribute escaping', async () => {
+    for (const m of ['Heading', 'Blurb', 'Image', 'Button']) {
+      recordConsulted('conv', m);
+    }
+    const plain = GOOD_PAGE.replace('\\u003cp\\u003eWeekly meals\\u003c/p\\u003e', '<p>Weekly &amp; daily -- meals</p>');
+    const r = await runWithTurnContext({ tenantId: 't', conversationId: 'conv', surface: 'operator' }, async () => diviWriteGate('diviops_page_create', { content: plain }, ctx));
+
+    expect(r.refuse).toBeUndefined();
+
+    const out = String(r.args.content);
+
+    expect(out).not.toContain('<p>');
+    expect(out).toContain('\\u003cp\\u003eWeekly \\u0026amp; daily \\u002d\\u002d meals\\u003c/p\\u003e');
+
+    // Round-trips to the same tree.
+    const again = parseDiviBlocks(out);
+
+    expect(again.errors).toEqual([]);
+    expect(again.count).toBe(8);
+    expect((again.roots[0]!.children[0]!.children[0]!.children[0]!.children[1]!.attrs as { content: { innerContent: { desktop: { value: string } } } }).content.innerContent.desktop.value).toBe('<p>Weekly &amp; daily -- meals</p>');
+  });
+
+  it('quotes the spot of a JSON syntax error', () => {
+    const r = parseDiviBlocks('<!-- wp:divi/section {"builderVersion":"5.0.0" "module":{}} -->\n<!-- /wp:divi/section -->');
+
+    expect(r.roots[0]!.attrsError).toMatch(/⟪HERE⟫/);
+    expect(r.roots[0]!.attrsError).toMatch(/"5\.0\.0" ⟪HERE⟫"module"/);
+  });
+});

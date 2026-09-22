@@ -16,6 +16,7 @@
  */
 
 import { bumpCounter, currentTurn } from '@/libs/agent/turnContext';
+import { parseDiviBlocks, serializeDiviBlocks } from './blocks';
 import { unconsulted } from './consulted';
 import { loadModuleSchema, referenceNameFor, STRUCTURAL } from './moduleMap';
 import { formatValidation, validateDiviMarkup } from './validator';
@@ -199,7 +200,14 @@ export function diviWriteGate(toolName: string, args: Record<string, unknown>, c
     }
   }
 
+  // Canonical form: the model may write plain JSON with ordinary HTML; the
+  // platform applies WordPress's block-attribute escaping so nothing inside
+  // an attribute can end the comment early. Same tree, byte-safe output.
+  const tree = parseDiviBlocks(markup);
+  const normalised = tree.errors.length === 0 ? serializeDiviBlocks(tree.roots) : markup;
+  const outArgs = normalised === markup ? args : { ...args, [spec.arg]: normalised };
+
   const summary = `[validated] ${result.stats.blocks} blocks · ${Object.entries(result.stats.modules).map(([k, v]) => `${k.replace(/^divi\//, '')}×${v}`).join(', ') || 'structure only'}${result.stats.images ? ` · ${result.stats.images} site-hosted image(s)` : ''}`;
   const warnings = result.warnings.length > 0 ? `\n${formatValidation(result, toolName)}` : '';
-  return { args, note: `${summary}${warnings}` };
+  return { args: outArgs, note: `${summary}${warnings}` };
 }

@@ -22,8 +22,10 @@ import { conversations, messages } from '@/models/Schema';
 
 const HISTORY_LIMIT = 30;
 /** Site chats are for edits, not overnight builds. */
-const SITE_TURN_MAX_ITERATIONS = 16;
-const SITE_TURN_WALL_CLOCK_MS = 3 * 60_000;
+// Phase 47.1: a gated page build is ~4 reference reads + validate + write +
+// render before any images; 16 ran out mid-build on the first live test.
+const SITE_TURN_MAX_ITERATIONS = 28;
+const SITE_TURN_WALL_CLOCK_MS = 6 * 60_000;
 
 /** Partial reply text of a running turn, keyed by conversation id. */
 const liveText = new Map<string, string>();
