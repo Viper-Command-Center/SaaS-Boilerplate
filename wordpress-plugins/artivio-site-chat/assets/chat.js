@@ -30,6 +30,14 @@
       .replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g, '$1<a href="$2" target="_blank" rel="noopener noreferrer">$2</a>');
   };
   var STATUS_RE = /^\s*\[(tool|approval|artivio|system|platform|budget|stopped|error)\]\s*(.*)$/;
+  // Site chat's audience is non-technical church staff, not developers watching
+  // an agent work. Internal tool-call narration ("[tool] calling
+  // search_stock_photos...") is noise here — it can repeat a dozen+ times for
+  // one request and means nothing to that audience. Only surface the status
+  // types that are actually meaningful to them; the live "Working…" indicator
+  // (built from iteration/lastTool, not this text) still shows something is
+  // happening in the meantime.
+  var VISIBLE_STATUS_TYPES = { error: true, stopped: true, system: true, approval: true };
   var render = function (text) {
     var lines = esc(text).split('\n');
     var html = '';
@@ -45,7 +53,9 @@
       var m = STATUS_RE.exec(line);
       if (m) {
         flush();
-        html += '<div class="asc-status asc-status-' + m[1] + '">' + inline(m[2]) + '</div>';
+        if (VISIBLE_STATUS_TYPES[m[1]]) {
+          html += '<div class="asc-status asc-status-' + m[1] + '">' + inline(m[2]) + '</div>';
+        }
         continue;
       }
       var h = /^(#{1,3})\s+(.*)$/.exec(line);
