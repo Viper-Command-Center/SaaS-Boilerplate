@@ -328,6 +328,8 @@ export const conversations = pgTable(
     siteId: uuid('site_id').references(() => wpSites.id, { onDelete: 'cascade' }),
     /** Site Chat: the speaker on that site, e.g. "wp:12". */
     externalKey: varchar('external_key', { length: 120 }),
+    /** Site Chat: set when the speaker hit "Start New Conversation" — the thread is kept but no longer the active one for that (site, externalKey). NULL = active. */
+    archivedAt: timestamp('archived_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   t => [

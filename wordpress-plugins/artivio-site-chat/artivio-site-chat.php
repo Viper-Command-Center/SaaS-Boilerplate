@@ -3,7 +3,7 @@
  * Plugin Name:  Artivio Website Assistant
  * Plugin URI:   https://artivio.ai
  * Description:  A chat panel inside wp-admin where the site owner asks for changes in plain words and the Artivio AI employee makes them on this site. Pairs with Artivio → Tools → WordPress Sites → Site chat.
- * Version:      1.0.2
+ * Version:      1.0.3
  * Author:       Artivio
  * Author URI:   https://artivio.ai
  * License:      GPL-2.0-or-later
@@ -28,7 +28,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'ARTIVIO_SITE_CHAT_VERSION', '1.0.2' );
+define( 'ARTIVIO_SITE_CHAT_VERSION', '1.0.3' );
 define( 'ARTIVIO_SITE_CHAT_FILE', __FILE__ );
 define( 'ARTIVIO_SITE_CHAT_CAP', 'artivio_site_chat' );
 define( 'ARTIVIO_SITE_CHAT_OPTION', 'artivio_site_chat' );
@@ -372,6 +372,7 @@ final class Artivio_Site_Chat {
 		register_rest_route( 'artivio-chat/v1', '/messages', array( 'methods' => 'GET', 'callback' => array( $this, 'rest_messages' ), 'permission_callback' => $perm ) );
 		register_rest_route( 'artivio-chat/v1', '/send', array( 'methods' => 'POST', 'callback' => array( $this, 'rest_send' ), 'permission_callback' => $perm ) );
 		register_rest_route( 'artivio-chat/v1', '/stop', array( 'methods' => 'POST', 'callback' => array( $this, 'rest_stop' ), 'permission_callback' => $perm ) );
+		register_rest_route( 'artivio-chat/v1', '/reset', array( 'methods' => 'POST', 'callback' => array( $this, 'rest_reset' ), 'permission_callback' => $perm ) );
 	}
 
 	public function rest_config() {
@@ -408,6 +409,12 @@ final class Artivio_Site_Chat {
 
 	public function rest_stop() {
 		$r = $this->artivio( 'POST', 'stop', array( 'user' => $this->current_speaker() ), 15 );
+		return is_wp_error( $r ) ? $r : rest_ensure_response( $r );
+	}
+
+	/** "Start new conversation" — archives the speaker's current thread on Artivio so the next message opens a fresh one. */
+	public function rest_reset() {
+		$r = $this->artivio( 'POST', 'reset', array( 'user' => $this->current_speaker() ), 15 );
 		return is_wp_error( $r ) ? $r : rest_ensure_response( $r );
 	}
 }

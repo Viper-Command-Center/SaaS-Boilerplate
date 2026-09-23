@@ -10,7 +10,7 @@
  */
 
 import type { SiteChatContext, SiteChatUser } from '@/libs/sitechat/auth';
-import { and, desc, eq, gte, inArray, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, isNull, sql } from 'drizzle-orm';
 import { beginTurn, endTurn, getTurn, isStopRequested, noteProgress } from '@/libs/agent/activeTurns';
 import { runToolLoop } from '@/libs/agent/loop';
 import { resolveAgentForTenant } from '@/libs/agent/persona';
@@ -35,7 +35,8 @@ export async function findOrCreateSiteConversation(ctx: SiteChatContext, user: S
   let [conv] = await db
     .select()
     .from(conversations)
-    .where(and(eq(conversations.siteId, ctx.site.id), eq(conversations.externalKey, key)))
+    .where(and(eq(conversations.siteId, ctx.site.id), eq(conversations.externalKey, key), isNull(conversations.archivedAt)))
+    .orderBy(desc(conversations.createdAt))
     .limit(1);
   if (!conv) {
     [conv] = await db
@@ -47,6 +48,30 @@ export async function findOrCreateSiteConversation(ctx: SiteChatContext, user: S
     throw new Error('Could not open the conversation.');
   }
   return conv;
+}
+
+/**
+ * "Start New Conversation": archive the speaker's current thread so the next
+ * message opens a fresh one. Past threads stay in the DB (never deleted) —
+ * there is no history browser in the plugin, this just stops the one thread
+ * from being an infinite, never-reset transcript.
+ */
+export async function archiveSiteConversation(ctx: SiteChatContext, user: SiteChatUser): Promise<{ archived: boolean; reason?: string }> {
+  const key = externalKeyFor(user);
+  const [conv] = await db
+    .select()
+    .from(conversations)
+    .where(and(eq(conversations.siteId, ctx.site.id), eq(conversations.externalKey, key), isNull(conversations.archivedAt)))
+    .orderBy(desc(conversations.createdAt))
+    .limit(1);
+  if (!conv) {
+    return { archived: true }; // nothing active — already "fresh"
+  }
+  if (getTurn(conv.id)) {
+    return { archived: false, reason: 'The assistant is still working — wait for it to finish before starting a new conversation.' };
+  }
+  await db.update(conversations).set({ archivedAt: new Date() }).where(eq(conversations.id, conv.id));
+  return { archived: true };
 }
 
 /** Turns (assistant messages) this site produced today, across all its users. */

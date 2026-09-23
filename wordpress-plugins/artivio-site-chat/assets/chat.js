@@ -97,6 +97,7 @@
       '  <div class="asc-avatar" id="asc-avatar"></div>' +
       '  <div class="asc-title"><strong id="asc-name">Assistant</strong><span id="asc-tag"></span></div>' +
       '  <div class="asc-state" id="asc-state"></div>' +
+      '  <button type="button" class="asc-newchat" id="asc-newchat" title="Start a new conversation">New chat</button>' +
       '</div>' +
       '<div class="asc-log" id="asc-log"></div>' +
       '<div class="asc-suggest" id="asc-suggest"></div>' +
@@ -105,7 +106,7 @@
       '  <div class="asc-actions"><button type="button" class="button" id="asc-stop" hidden>Stop</button><button type="submit" class="button button-primary" id="asc-send">Send</button></div>' +
       '</form>' +
       '<p class="asc-foot">Changes are made on ' + esc(cfg.siteUrl || 'this site') + '. Check the page after each change.</p>';
-    ['avatar', 'name', 'tag', 'state', 'log', 'suggest', 'form', 'input', 'stop', 'send'].forEach(function (k) {
+    ['avatar', 'name', 'tag', 'state', 'newchat', 'log', 'suggest', 'form', 'input', 'stop', 'send'].forEach(function (k) {
       el[k] = document.getElementById('asc-' + k);
     });
     el.form.addEventListener('submit', function (e) {
@@ -137,6 +138,28 @@
           state.stopping = false;
           paint();
           showError(e);
+        });
+    });
+    el.newchat.addEventListener('click', function () {
+      if (state.live || el.newchat.disabled) {
+        return;
+      }
+      if (!window.confirm('Start a new conversation? This one will be saved — ' + (state.agent && state.agent.name ? state.agent.name : 'the assistant') + ' just won\'t remember it while you keep talking.')) {
+        return;
+      }
+      el.newchat.disabled = true;
+      api('/reset', { method: 'POST' })
+        .then(function () {
+          clearTimeout(state.pollTimer);
+          state.messages = [];
+          state.live = null;
+          state.sending = false;
+          paint();
+          schedule();
+        })
+        .catch(showError)
+        .then(function () {
+          el.newchat.disabled = Boolean(state.live);
         });
     });
     (cfg.suggestions || []).forEach(function (s) {
@@ -178,6 +201,7 @@
     el.stop.disabled = state.stopping;
     el.stop.textContent = state.stopping ? 'Stopping…' : 'Stop';
     el.send.disabled = Boolean(state.live) || state.sending;
+    el.newchat.disabled = Boolean(state.live);
     el.suggest.hidden = state.messages.length > 0;
   };
 
