@@ -3,7 +3,7 @@
  * Plugin Name:  Artivio Website Assistant
  * Plugin URI:   https://artivio.ai
  * Description:  A chat panel inside wp-admin where the site owner asks for changes in plain words and the Artivio AI employee makes them on this site. Pairs with Artivio → Tools → WordPress Sites → Site chat.
- * Version:      1.0.3
+ * Version:      1.0.4
  * Author:       Artivio
  * Author URI:   https://artivio.ai
  * License:      GPL-2.0-or-later
@@ -28,7 +28,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'ARTIVIO_SITE_CHAT_VERSION', '1.0.3' );
+define( 'ARTIVIO_SITE_CHAT_VERSION', '1.0.4' );
 define( 'ARTIVIO_SITE_CHAT_FILE', __FILE__ );
 define( 'ARTIVIO_SITE_CHAT_CAP', 'artivio_site_chat' );
 define( 'ARTIVIO_SITE_CHAT_OPTION', 'artivio_site_chat' );
@@ -364,6 +364,24 @@ final class Artivio_Site_Chat {
 
 	// ─── REST proxy (browser → this plugin → Artivio) ───────────────────────
 
+	/**
+	 * These REST responses are always live/per-user — never let any cache layer
+	 * store them. WordPress core already sends `Cache-Control: no-cache … private`,
+	 * but LiteSpeed's private-cache tier (common on Hostinger, where many church
+	 * clients are hosted) ignores plain Cache-Control from the app and caches the
+	 * transcript GET — so a poll can land on a stale copy and the user's own
+	 * just-sent message (and the reply) appears to vanish. Confirmed live on
+	 * build9 (2026-09-23): `x-litespeed-cache: hit,private` + byte-identical ETag
+	 * across a real accepted write. LiteSpeed needs its OWN explicit signal.
+	 */
+	private function never_cache(): void {
+		nocache_headers(); // WP core belt-and-suspenders
+		if ( ! headers_sent() ) {
+			header( 'X-LiteSpeed-Cache-Control: no-cache' );
+		}
+		do_action( 'litespeed_control_set_nocache', 'artivio-site-chat: always dynamic' );
+	}
+
 	public function rest_routes(): void {
 		$perm = function () {
 			return current_user_can( ARTIVIO_SITE_CHAT_CAP );
@@ -376,6 +394,7 @@ final class Artivio_Site_Chat {
 	}
 
 	public function rest_config() {
+		$this->never_cache();
 		if ( ! $this->connected() ) {
 			return new WP_Error( 'not_connected', 'The assistant is not connected yet.', array( 'status' => 409 ) );
 		}
@@ -384,6 +403,7 @@ final class Artivio_Site_Chat {
 	}
 
 	public function rest_messages() {
+		$this->never_cache();
 		if ( ! $this->connected() ) {
 			return new WP_Error( 'not_connected', 'The assistant is not connected yet.', array( 'status' => 409 ) );
 		}
@@ -393,6 +413,7 @@ final class Artivio_Site_Chat {
 	}
 
 	public function rest_send( WP_REST_Request $req ) {
+		$this->never_cache();
 		if ( ! $this->connected() ) {
 			return new WP_Error( 'not_connected', 'The assistant is not connected yet.', array( 'status' => 409 ) );
 		}
@@ -408,12 +429,14 @@ final class Artivio_Site_Chat {
 	}
 
 	public function rest_stop() {
+		$this->never_cache();
 		$r = $this->artivio( 'POST', 'stop', array( 'user' => $this->current_speaker() ), 15 );
 		return is_wp_error( $r ) ? $r : rest_ensure_response( $r );
 	}
 
 	/** "Start new conversation" — archives the speaker's current thread on Artivio so the next message opens a fresh one. */
 	public function rest_reset() {
+		$this->never_cache();
 		$r = $this->artivio( 'POST', 'reset', array( 'user' => $this->current_speaker() ), 15 );
 		return is_wp_error( $r ) ? $r : rest_ensure_response( $r );
 	}
