@@ -1,0 +1,14 @@
+﻿artivio-abilities-bridge
+artivio-elementor-agent
+artivio-site-chat
+artivio-wp-agent
+===PHP FILES===
+\artivio-abilities-bridge\artivio-abilities-bridge.php
+\artivio-elementor-agent\artivio-elementor-agent.php
+\artivio-site-chat\artivio-site-chat.php
+\artivio-wp-agent\artivio-wp-agent.php
+===ZIPS===
+artivio-abilities-bridge.zip
+artivio-elementor-agent.zip
+artivio-site-chat.zip
+artivio-wp-agent.zip
