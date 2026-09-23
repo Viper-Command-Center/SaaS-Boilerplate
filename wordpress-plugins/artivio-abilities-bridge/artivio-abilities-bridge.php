@@ -3,7 +3,7 @@
  * Plugin Name:  Artivio Abilities Bridge
  * Plugin URI:   https://artivio.io
  * Description:  Registers WordPress Abilities API abilities for the plugins on the Gutenberg/Kadence build line that don't ship their own agent abilities — SEOPress content fields, Contact Form 7 form creation, The Events Calendar one-off events, and a LiteSpeed cache purge — so the WordPress MCP Adapter (or any other Abilities-API consumer) can expose them to Noah. Deliberately does NOT register ACF abilities (ACF ≥ 6.8 ships its own via the Abilities API — a second registration under a different plugin would just create two competing sources of truth). This plugin only REGISTERS abilities; it does not speak MCP itself and does nothing without the MCP Adapter (or equivalent) active.
- * Version:      1.3.0
+ * Version:      1.3.1
  * Requires PHP: 7.4
  * Requires at least: 6.9
  * Author:       Artivio
@@ -74,7 +74,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'ARTIVIO_AB_VERSION', '1.2.0' );
+define( 'ARTIVIO_AB_VERSION', '1.3.1' );
 define( 'ARTIVIO_AB_NS', 'artivio-abilities/v1' );
 
 add_action( 'wp_abilities_api_categories_init', 'artivio_ab_register_categories' );
@@ -623,6 +623,29 @@ function artivio_ab_cache_purge_execute( $input ) {
  * ══════════════════════════════════════════════════════════════════════════ */
 
 add_action( 'rest_api_init', 'artivio_ab_register_routes' );
+
+/**
+ * The /status response reports live ability-registration ground truth — never
+ * let any cache layer store it, or a diagnosis reads a stale picture of what's
+ * actually registered/active. WordPress core already sends `Cache-Control: …
+ * private`, but LiteSpeed's cache tier (common on Hostinger, where many church
+ * clients are hosted) ignores plain Cache-Control from the app and needs its
+ * OWN signal — same root cause as artivio-site-chat 1.0.4. Scoped to THIS
+ * plugin's namespace, applied via rest_pre_serve_request so it covers every
+ * route, including any added later.
+ */
+add_filter( 'rest_pre_serve_request', 'artivio_ab_never_cache', 10, 4 );
+
+function artivio_ab_never_cache( $served, $result, $request, $server ) {
+	if ( is_object( $request ) && 0 === strpos( (string) $request->get_route(), '/' . ARTIVIO_AB_NS ) ) {
+		nocache_headers(); // WP core belt-and-suspenders
+		if ( ! headers_sent() ) {
+			header( 'X-LiteSpeed-Cache-Control: no-cache' );
+		}
+		do_action( 'litespeed_control_set_nocache', 'artivio-abilities-bridge: always dynamic' );
+	}
+	return $served;
+}
 
 function artivio_ab_register_routes() {
 	register_rest_route(

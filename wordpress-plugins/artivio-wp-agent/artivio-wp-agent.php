@@ -3,7 +3,7 @@
  * Plugin Name:  Artivio WP Agent (base)
  * Plugin URI:   https://artivio.io
  * Description:  Builder-agnostic base plugin for Artivio. Repairs WordPress Application Passwords on CGI/FastCGI hosts, exposes a self-diagnosing auth check, reports what a site actually runs, and reads/writes SEO fields for Rank Math, Yoast, SEOPress, or Slim SEO. Install on every client WordPress site regardless of page builder.
- * Version:      1.3.0
+ * Version:      1.3.1
  * Requires PHP: 7.4
  * Author:       Artivio
  * License:      GPL-2.0-or-later
@@ -56,7 +56,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'ARTIVIO_WP_VERSION', '1.3.0' );
+define( 'ARTIVIO_WP_VERSION', '1.3.1' );
 define( 'ARTIVIO_WP_NS', 'artivio/v1' );
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -624,6 +624,30 @@ function artivio_wp_patch_seo( WP_REST_Request $r ) {
  * ══════════════════════════════════════════════════════════════════════════ */
 
 add_action( 'rest_api_init', 'artivio_wp_register_routes' );
+
+/**
+ * These REST responses are live, per-request state (auth check, discovered
+ * site facts, SEO fields) — never let any cache layer store them. A stale
+ * cached /site feeds discovery outdated WP/PHP/builder/plugin facts, and a
+ * stale /seo read drives a wrong SEO write. WordPress core already sends
+ * `Cache-Control: … private`, but LiteSpeed's cache tier (common on Hostinger,
+ * where many church clients are hosted) ignores plain Cache-Control from the
+ * app and needs its OWN signal — same root cause as artivio-site-chat 1.0.4.
+ * Scoped to THIS plugin's namespace, applied via rest_pre_serve_request so it
+ * covers every route — reads, writes, errors and any route added later.
+ */
+add_filter( 'rest_pre_serve_request', 'artivio_wp_never_cache', 10, 4 );
+
+function artivio_wp_never_cache( $served, $result, $request, $server ) {
+	if ( is_object( $request ) && 0 === strpos( (string) $request->get_route(), '/' . ARTIVIO_WP_NS ) ) {
+		nocache_headers(); // WP core belt-and-suspenders
+		if ( ! headers_sent() ) {
+			header( 'X-LiteSpeed-Cache-Control: no-cache' );
+		}
+		do_action( 'litespeed_control_set_nocache', 'artivio-wp-agent: always dynamic' );
+	}
+	return $served;
+}
 
 function artivio_wp_register_routes() {
 	/**

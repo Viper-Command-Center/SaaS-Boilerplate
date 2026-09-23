@@ -3,7 +3,7 @@
  * Plugin Name:  Artivio Elementor Agent
  * Plugin URI:   https://artivio.io
  * Description:  Exposes Elementor's page tree over the REST API so Artivio's agent can read and edit layouts. Elementor stores every page in the protected `_elementor_data` postmeta key, which core WP REST will never touch — this plugin is the only reason remote editing is possible.
- * Version:      1.4.1
+ * Version:      1.4.2
  * Requires PHP: 7.4
  * Author:       Artivio
  * License:      GPL-2.0-or-later
@@ -41,7 +41,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'ARTIVIO_EA_VERSION', '1.4.1' );
+define( 'ARTIVIO_EA_VERSION', '1.4.2' );
 define( 'ARTIVIO_EA_NS', 'artivio-elementor/v1' );
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -444,6 +444,32 @@ function artivio_ea_guard_post( int $post_id ) {
  * ══════════════════════════════════════════════════════════════════════════ */
 
 add_action( 'rest_api_init', 'artivio_ea_register_routes' );
+
+/**
+ * These REST responses are live, per-request page state — never let any cache
+ * layer store them. A stale cached GET here is worse than the site-chat case:
+ * if /tree or /elements returns an outdated copy, the agent reads stale element
+ * state and then PATCH/PUT/DELETEs on top of it, corrupting the page or
+ * overwriting newer edits. WordPress core already sends `Cache-Control: …
+ * private`, but LiteSpeed's cache tier (common on Hostinger, where many church
+ * clients are hosted) ignores plain Cache-Control from the app and needs its
+ * OWN signal — same root cause as artivio-site-chat 1.0.4. Scoped to THIS
+ * plugin's namespace, and applied via rest_pre_serve_request so it covers every
+ * route — reads, writes, errors and any route added later — not one callback at
+ * a time.
+ */
+add_filter( 'rest_pre_serve_request', 'artivio_ea_never_cache', 10, 4 );
+
+function artivio_ea_never_cache( $served, $result, $request, $server ) {
+	if ( is_object( $request ) && 0 === strpos( (string) $request->get_route(), '/' . ARTIVIO_EA_NS ) ) {
+		nocache_headers(); // WP core belt-and-suspenders
+		if ( ! headers_sent() ) {
+			header( 'X-LiteSpeed-Cache-Control: no-cache' );
+		}
+		do_action( 'litespeed_control_set_nocache', 'artivio-elementor-agent: always dynamic' );
+	}
+	return $served;
+}
 
 function artivio_ea_register_routes() {
 	$auth = 'artivio_ea_can_edit';
