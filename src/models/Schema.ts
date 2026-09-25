@@ -841,3 +841,69 @@ export const books = pgTable(
   },
   t => [index('books_tenant_idx').on(t.tenantId, t.updatedAt)],
 );
+
+// ─── Phase 48: Duda → WordPress migration (Part 1 — foundation) ──────────────
+// A migration is a THREE-PHASE background job with a human review gate, not a
+// chat-turn tool: Extract (Duda → a reviewable Markdown file set) → review →
+// Map (Markdown → a WP build plan) → Build (via the wp-sites/diviops tools).
+// Part 1 ships the data model + Phase 1 (Extract) only; Phase 2/3 are separate
+// handoffs. `migration_items` is one row per page/post/collection-row/media
+// file so a crashed or timed-out job can resume from the last completed item
+// instead of restarting (the resume itself lands with Phase 3).
+export const migrationJobs = pgTable(
+  'migration_jobs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+    // Only 'duda' in v1; kept as a column so a second source (Wix, Squarespace…)
+    // is a value, not a schema change.
+    sourceType: varchar('source_type', { length: 20 }).notNull().default('duda'),
+    // The Duda site identifier (its `site_name` / alias in the Duda API).
+    sourceSiteId: text('source_site_id').notNull(),
+    // The destination WordPress site this migration builds into. Nullable +
+    // ON DELETE set null: the job row (and its reviewable Markdown) outlives the
+    // site record for audit, and Phase 1 extraction does not need a dest site.
+    destSiteId: uuid('dest_site_id').references(() => wpSites.id, { onDelete: 'set null' }),
+    // extracting | awaiting_review | mapping | building | done | failed
+    status: varchar('status', { length: 20 }).notNull().default('extracting'),
+    // Free-form human-readable phase note ("extracting pages 12/45", "extract").
+    currentPhase: text('current_phase'),
+    // Set when the job ends in 'failed' — the clear reason a human reads.
+    error: text('error'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  t => [index('migration_jobs_tenant_idx').on(t.tenantId, t.createdAt)],
+);
+
+export const migrationItems = pgTable(
+  'migration_items',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    jobId: uuid('job_id')
+      .notNull()
+      .references(() => migrationJobs.id, { onDelete: 'cascade' }),
+    // page | post | collection_row | media
+    itemType: varchar('item_type', { length: 20 }).notNull(),
+    // The source-side id: a Duda page path/uuid, blog post id, collection-row id,
+    // or (for media) the original remote image URL.
+    sourceRef: text('source_ref').notNull(),
+    // extracted | reviewed | mapped | built | failed
+    status: varchar('status', { length: 20 }).notNull().default('extracted'),
+    // Path (inside the job's Markdown folder) of this item's file, for
+    // pages/posts/media. NULL for items with no standalone file.
+    filePath: text('file_path'),
+    // The created WP post/page/attachment id — set in Phase 3, never here.
+    builtRef: text('built_ref'),
+    error: text('error'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  t => [
+    index('migration_items_job_idx').on(t.jobId),
+    // One row per (job, type, source) — lets extraction UPSERT on re-run/resume.
+    uniqueIndex('migration_items_job_ref_uq').on(t.jobId, t.itemType, t.sourceRef),
+  ],
+);

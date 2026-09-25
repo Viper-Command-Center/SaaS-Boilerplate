@@ -204,6 +204,13 @@
       "when": 1790050000000,
       "tag": "0028_site-chat-archive",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1790400000000,
+      "tag": "0029_duda-migration",
+      "breakpoints": true
     }
   ]
 }
