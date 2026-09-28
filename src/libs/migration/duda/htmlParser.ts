@@ -8,6 +8,9 @@
  * the images (src + alt), the links/CTAs, and the site nav (once, from the
  * header/footer). A tolerant regex/stack walk is enough and keeps us to the
  * repo's no-new-deps rule; `parse5` in the tree is a dev-only transitive dep.
+ *
+ * For blog posts that load content dynamically, use the async version with
+ * Playwright to get the fully rendered content.
  */
 
 export type ParsedImage = { src: string; alt: string };
@@ -207,4 +210,50 @@ export function parsePageHtml(rawHtml: string, pageUrl: string): ParsedPage {
   }
 
   return { title, metaDescription, blocks, images, links, nav };
+}
+
+/**
+ * Parse a blog post's HTML using a headless browser to get fully rendered content.
+ * This is needed for Duda blog posts that load content dynamically via JS/AJAX.
+ * 
+ * @param url - The live URL of the blog post
+ * @returns Promise resolving to parsed page structure
+ */
+export async function parseBlogPostHtmlWithPlaywright(url: string): Promise<ParsedPage> {
+  // Check if Playwright is available
+  try {
+    const { chromium } = await import('@playwright/test');
+    
+    const browser = await chromium.launch({
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox']
+    });
+    
+    try {
+      const page = await browser.newPage();
+      await page.goto(url, { waitUntil: 'networkidle', timeout: 30000 });
+      
+      // Get the fully rendered HTML
+      const rawHtml = await page.content();
+      
+      // Close browser
+      await browser.close();
+      
+      // Parse with our existing parser
+      return parsePageHtml(rawHtml, url);
+    } catch (error) {
+      await browser.close();
+      throw error;
+    }
+  } catch (error) {
+    // Fallback to regular parsing if Playwright is not available
+    console.warn('Playwright not available, falling back to regular HTML parsing:', error.message);
+    // We'll fetch the URL and parse it regularly as fallback
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch blog post: ${response.status} ${response.statusText}`);
+    }
+    const rawHtml = await response.text();
+    return parsePageHtml(rawHtml, url);
+  }
 }

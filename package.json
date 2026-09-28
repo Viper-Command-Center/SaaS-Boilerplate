@@ -32,6 +32,7 @@
     "build-storybook": "storybook build"
   },
   "dependencies": {
+  "dependencies": {
     "@diviops/mcp-server": "1.5.47",
     "@logtape/logtape": "^2.1.5",
     "@napi-rs/canvas": "^0.1.100",
@@ -53,6 +54,9 @@
     "mammoth": "^1.12.2",
     "next": "^16.2.9",
     "next-intl": "^4.13.0",
+     "next-intl": "^4.13.0",
+     "playwright": "^1.61.0",
+     "pdf-lib": "^1.17.1",
     "pdf-lib": "^1.17.1",
     "pg": "^8.21.0",
     "pptxgenjs": "^4.0.1",
@@ -78,7 +82,7 @@
     "@lingual/i18n-check": "^0.9.5",
     "@next/bundle-analyzer": "^16.2.9",
     "@next/eslint-plugin-next": "^16.2.9",
-    "@playwright/test": "^1.61.0",
+
     "@spotlightjs/spotlight": "^4.11.6",
     "@storybook/addon-a11y": "^10.4.6",
     "@storybook/addon-docs": "^10.4.6",

@@ -13,7 +13,7 @@ export type MigrationJob = typeof migrationJobs.$inferSelect;
 export type MigrationItem = typeof migrationItems.$inferSelect;
 
 export type ItemType = 'page' | 'post' | 'collection_row' | 'media';
-export type ItemStatus = 'extracted' | 'reviewed' | 'mapped' | 'built' | 'failed';
+export type ItemStatus = 'extracted' | 'extracted_with_warnings' | 'reviewed' | 'mapped' | 'built' | 'failed';
 export type JobStatus = 'extracting' | 'awaiting_review' | 'mapping' | 'building' | 'done' | 'failed';
 
 export async function createJob(input: {

@@ -15,7 +15,7 @@
 import type { DudaBlogPost, DudaClient, DudaContentLibrary, DudaNavItem, DudaPage, DudaSiteTheme } from '@/libs/migration/duda/client';
 import type { MigrationJob } from '@/libs/migration/store';
 import { CrawlBackoffError, PoliteCrawler } from '@/libs/migration/duda/crawl';
-import { htmlToMarkdown, parsePageHtml } from '@/libs/migration/duda/htmlParser';
+import { htmlToMarkdown, parsePageHtml, parseBlogPostHtmlWithPlaywright } from '@/libs/migration/duda/htmlParser';
 import {
   buildCurrentDesignMarkdown,
   buildNewDesignBriefSkeleton,
@@ -267,17 +267,68 @@ export async function runExtraction(job: MigrationJob, client: DudaClient): Prom
         if (feat) {
           featPath = (await ingestImage({ jobId, tenantId, crawler, url: feat, alt: post.title ?? '', mediaMap, manifest })) ?? '';
         }
+        
+        // Fetch the live URL and parse with headless browser for full content
+        // Blog posts often load content dynamically via JS/AJAX
+        const postUrl = `${details.canonical_url?.replace(/\/+$/, '') || details.site_domain ?? ''}/${post.slug}`;
+        let parsedPage;
+         let parsedPage;
+         let playwrightFallback = false;
+        try {
+          parsedPage = await parseBlogPostHtmlWithPlaywright(postUrl);
+        } catch (playwrightError) {
+          // Fallback to API content if headless browser fails
+          console.warn(`Headless browser failed for blog post ${postId}, falling back to API content:`, playwrightError.message);
+          parsedPage = parsePageHtml(post.content || post.html || '', postUrl);
+           parsedPage = parsePageHtml(post.content || post.html || '', postUrl);
+           playwrightFallback = true;
+        }
+        
+        // Sanity check: if extracted body is suspiciously short, add warning
+        const bodyText = parsedPage.blocks
+          .filter(b => b.kind === 'paragraph')
+          .map(b => (b as { text: string }).text)
+          .join(' ')
+          .trim();
+        
+         const wordCount = bodyText.split(/\\s+/).filter(word => word.length > 0).length;
+         const hasWarning = wordCount < 50 || playwrightFallback; // Arbitrary threshold - adjust as needed
+        const wordCount = bodyText.split(/\s+/).filter(word => word.length > 0).length;
+        const hasWarning = wordCount < 50; // Arbitrary threshold - adjust as needed
+        
         const md = buildPostMarkdown({
           date,
           author: post.author ?? '',
           tags: post.tags ?? post.categories ?? [],
           featuredImage: featPath,
           title: post.title ?? slug,
-          bodyMarkdown: htmlToMarkdown(post.content || post.html || ''),
+          bodyMarkdown: htmlToMarkdown(parsedPage.blocks
+            .map(block => {
+              if (block.kind === 'heading') {
+                return `<h${block.level}>${block.text}</h${block.level}>`;
+              } else if (block.kind === 'paragraph') {
+                return `<p>${block.text}</p>`;
+              }
+              return '';
+            })
+            .join(''))
         });
+        
+        // Add warning note if content seems incomplete
+        if (hasWarning) {
+          const warningNote = '\n\n<!-- WARNING: possibly incomplete extraction, verify against live URL -->\n';
+          // Insert before the final backmatter
+          const sections = md.split('\n\n');
+          if (sections.length > 3) {
+            sections.splice(sections.length - 2, 0, warningNote.trim());
+            md = sections.join('\n\n');
+          } else {
+            md = md + warningNote;
+          }
+        }
         const filePath = await writeText(tenantId, jobId, `posts/${file}`, md);
-        await upsertItem({ jobId, itemType: 'post', sourceRef: postId, status: 'extracted', filePath });
-        postIndex.push({ date, title: post.title ?? slug, file, status: 'extracted' });
+        await upsertItem({ jobId, itemType: 'post', sourceRef: postId, status: hasWarning ? 'extracted_with_warnings' : 'extracted', filePath });
+        postIndex.push({ date, title: post.title ?? slug, file, status: hasWarning ? 'extracted_with_warnings' : 'extracted' });
       } catch (err) {
         await upsertItem({ jobId, itemType: 'post', sourceRef: postId, status: 'failed', error: err instanceof Error ? err.message : String(err) });
       }
