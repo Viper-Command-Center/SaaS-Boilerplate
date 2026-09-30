@@ -351,6 +351,20 @@ expect('src/libs/mcp/references.ts', 'MAX_REFERENCE_CHARS', 'every reference ans
 expect('src/libs/mcp/stdioCatalog.ts', 'call diviops_reference before building a module', 'guidance tells the agent to look up a module map before writing its JSON');
 forbid('src/libs/mcp/references.ts', "'public'", 'licensed reference files are never served from public/');
 
+// ── Phase 48.1 — stop the guess→refuse→rewrite credit-burn loop on Divi 5
+// authoring (Noah's report: agents know the guard rails but compose JSON by
+// trial and error, then apologise). Two moves: (a) the un-consulted-module
+// refusal INLINES the verified element map so the fix lands in one turn; (b)
+// the guidance leads with a numbered operating procedure (template first,
+// read the map, build from documented paths, validate, write+verify) and the
+// five JSON shapes that silently break.
+expect('src/libs/divi/gate.ts', 'lookupModule', 'the gate can inline a module map into an un-consulted refusal (one-turn fix, not a round trip)');
+expect('src/libs/divi/gate.ts', 'inlined below', 'the self-correcting refusal actually inlines the verified map');
+expect('src/libs/mcp/stdioCatalog.ts', 'loadReferenceLibrary(spec).module(moduleName)', 'diviopsGuard feeds the reference library into the gate so refusals can inline maps');
+expect('src/libs/mcp/stdioCatalog.ts', 'OPERATING PROCEDURE — the ONLY workflow that works', 'DiviOps guidance leads with the ordered template-first workflow');
+expect('src/libs/mcp/stdioCatalog.ts', 'FIVE JSON SHAPES THAT SILENTLY BREAK', 'guidance spells out the exact JSON gotchas (builderVersion placement, element-scoped paths, innerContent, section content arg, numeric ids)');
+expect('src/libs/mcp/stdioCatalog.ts', 'composing a section from scratch is the EXCEPTION', 'template-first is the default, hand-composing is the exception');
+
 // ── Phase 46 — Site Chat: the workspace agent pinned to ONE WordPress site,
 // driven from that site's own wp-admin (artivio-site-chat plugin). The scope
 // boundary is the product: a church admin must never reach WHMCS, Postgres,

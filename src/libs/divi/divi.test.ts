@@ -199,6 +199,27 @@ describe('write gate', () => {
     expect(r2.note).toMatch(/\[validated\] 8 blocks/);
   });
 
+  it('inlines the module map into an un-consulted refusal when a lookup is provided (Phase 48.1)', async () => {
+    const lookupCtx = {
+      ...ctx,
+      lookupModule: (name: string) => `MAP for ${name}: title.innerContent.desktop.value`,
+    };
+    const r = await inTurn('operator', () => diviWriteGate('diviops_page_create', { content: GOOD_PAGE }, lookupCtx));
+
+    expect(r.refuse).toMatch(/has not read the reference map for: /);
+    // The verified map(s) are inlined so the model fixes it in ONE turn.
+    expect(r.refuse).toMatch(/inlined below/);
+    expect(r.refuse).toMatch(/MAP for Heading: title\.innerContent\.desktop\.value/);
+    expect(r.refuse).toContain('(from diviops_reference)');
+  });
+
+  it('without a lookup, the un-consulted refusal still names the maps to read', async () => {
+    const r = await inTurn('operator', () => diviWriteGate('diviops_page_create', { content: GOOD_PAGE }, ctx));
+
+    expect(r.refuse).toMatch(/Read each map \(one call per module\)/);
+    expect(r.refuse).not.toMatch(/inlined below/);
+  });
+
   it('fails closed outside a turn', () => {
     for (const m of ['Heading', 'Blurb', 'Image', 'Button']) {
       recordConsulted('conv', m);

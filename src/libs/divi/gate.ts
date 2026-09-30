@@ -33,6 +33,15 @@ export type GateContext = {
   /** Target site URL (post site-binding). */
   target: string;
   connectionName: string;
+  /**
+   * Optional: return one module's VB-verified element map (the same text
+   * `diviops_reference {module:"X"}` would return). When present, a refusal for
+   * an un-consulted module inlines the map so the model fixes the write in ONE
+   * turn instead of a refuse → look-up → rewrite round trip. Injected by
+   * diviopsGuard (which can load the reference library); left undefined in unit
+   * tests, where the refusal text alone is asserted.
+   */
+  lookupModule?: (moduleName: string) => string | null;
 };
 
 /** Tools whose `content` is whole-page or section block markup. */
@@ -186,9 +195,25 @@ export function diviWriteGate(toolName: string, args: Record<string, unknown>, c
     }
     const missing = unconsulted(turn.conversationId, used);
     if (missing.length > 0) {
+      // Self-correcting refusal (Phase 48.1): when the guard gave us a way to
+      // read the maps, inline them here so the model rebuilds from documented
+      // paths in the SAME turn — instead of burning a refuse → diviops_reference
+      // → rewrite round trip (and often apologising in between).
+      const maps: string[] = [];
+      if (ctx.lookupModule) {
+        for (const m of missing) {
+          const map = ctx.lookupModule(referenceNameFor(m));
+          if (map) {
+            maps.push(`\n\n─── ${referenceNameFor(m)} (from diviops_reference) ───\n${map}`);
+          }
+        }
+      }
+      const inlined = maps.length > 0
+        ? ` The verified element map${maps.length > 1 ? 's are' : ' is'} inlined below — rebuild every ${referenceNameFor(missing[0]!)} from these documented paths (do NOT guess), then call ${toolName} again:${maps.join('')}`
+        : ` Read each map (one call per module), rebuild the markup from the documented element paths, then call ${toolName} again.`;
       return {
         args,
-        refuse: `[refused] ${toolName} was NOT sent — this conversation has not read the reference map for: ${missing.map(m => `${m} → diviops_reference {module:"${referenceNameFor(m)}"}`).join(' · ')}. Read each map (one call per module), rebuild the markup from the documented element paths, then call ${toolName} again. Never write a module from memory.`,
+        refuse: `[refused] ${toolName} was NOT sent — this conversation has not read the reference map for: ${missing.map(m => `${m} → diviops_reference {module:"${referenceNameFor(m)}"}`).join(' · ')}.${inlined} Never write a module from memory.`,
       };
     }
   }
