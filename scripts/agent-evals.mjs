@@ -433,6 +433,21 @@ expect('src/libs/agent/anthropic.ts', 'output_config', 'reasoning depth is contr
 expect('src/libs/agent/anthropic.ts', 'isThinkingModeMismatch', 'a thinking-mode 400 self-heals by flipping shape once instead of failing the turn');
 expect('src/libs/agent/anthropic.test.ts', 'thinking.type.enabled', 'the exact Copetown 400 is pinned in a regression test');
 
+// ── Phase 48.7 — Copetown, two serious platform bugs. (1) The mission executor
+// marked steps [done] on any tool-loop return that didn't throw/exhaust — so a
+// step whose own summary admitted the DiviOps MCP was down was stamped done and
+// the mission marched on, leaving build-3 with ZERO pages behind three [done]
+// steps. The runner must not trust prose: a step is done only if its summary
+// doesn't admit failure AND it ran a productive tool. (2) browse_page read
+// innerText, which drops collapsed accordions/hidden panels — Copetown's
+// 200-year history extracted as "empty"; switched to textContent (full DOM).
+expect('src/libs/agent/loop.ts', 'toolsUsed: [...toolsUsedThisTurn]', 'the tool loop reports which tools actually ran so the mission runner can verify real work happened');
+expect('src/libs/agent/fabricatedCalls.ts', 'detectSelfReportedFailure', 'a step whose own summary admits it did not complete (outage/error) is caught');
+expect('src/libs/agent/fabricatedCalls.ts', 'ranNoProductiveTool', 'a step that ran no write/read-back tool did no verifiable work');
+expect('src/app/api/internal/run-scheduled/route.ts', 'detectSelfReportedFailure(run.text)', 'the mission executor gates [done] on real completion, not on the loop merely returning (Copetown false-done)');
+expect('src/app/api/internal/run-scheduled/route.ts', "'not-completed+paused'", 'a step that reported failure pauses the mission for a human instead of a silent false done');
+expect('src/libs/browser/agentcore.ts', 'textContent', 'browse_page reads the full DOM (textContent), not innerText which drops collapsed/hidden content (Copetown accordion)');
+
 // ── Phase 46 — Site Chat: the workspace agent pinned to ONE WordPress site,
 // driven from that site's own wp-admin (artivio-site-chat plugin). The scope
 // boundary is the product: a church admin must never reach WHMCS, Postgres,

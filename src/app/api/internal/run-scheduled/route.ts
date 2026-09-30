@@ -30,6 +30,7 @@
 
 import { and, asc, eq, lte } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
+import { detectSelfReportedFailure, ranNoProductiveTool } from '@/libs/agent/fabricatedCalls';
 import { runToolLoop } from '@/libs/agent/loop';
 import { buildMissionTools } from '@/libs/agent/missionTools';
 import { resolveAgentForTenant } from '@/libs/agent/persona';
@@ -408,19 +409,64 @@ ${step.instructions}`;
           missionResults.push({ missionId: mission.id, stepId: step.id, outcome: `continuing (${continuations}/${MAX_STEP_CONTINUATIONS})` });
         }
       } else {
-        await db
-          .update(missionSteps)
-          .set({ status: 'done', result: run.text.slice(0, 4_000), updatedAt: new Date() })
-          .where(eq(missionSteps.id, step.id));
-        const openSteps = steps.filter(s => s.id !== step.id && (s.status === 'pending' || s.status === 'running'));
-        if (openSteps.length === 0) {
-          await db
-            .update(missions)
-            .set({ status: 'done', updatedAt: new Date() })
-            .where(eq(missions.id, mission.id));
-          missionResults.push({ missionId: mission.id, stepId: step.id, outcome: 'done+mission-done' });
+        // 🔴 DO NOT TRUST THE PROSE (Phase 48.7, Copetown). The loop returned
+        // without throwing or exhausting — but "returned normally" is NOT the
+        // same as "the work succeeded". If the MCP was down, the model tried,
+        // got an error back, and wrote an honest "I couldn't do this" summary;
+        // the old code stamped that [done] and marched on, leaving build-3 with
+        // zero pages while steps 2–4 read [done]. Verify before recording done:
+        //   (a) the step's own summary must not admit failure/outage, and
+        //   (b) it must have run at least one productive tool (a real write or
+        //       read-back) — a step that "built a page" but called no tool did
+        //       nothing.
+        // A step that fails either check is treated exactly like a thrown
+        // error: attempts+1, retry once, pause the mission on the second strike
+        // so a human sees it — never a silent false [done].
+        const admitted = detectSelfReportedFailure(run.text);
+        const noWork = ranNoProductiveTool(run.toolsUsed);
+        if (admitted || noWork) {
+          const why = admitted
+            ? `step summary reports it did not complete ("${admitted}")`
+            : 'step ran no productive tool (no write or read-back) — nothing was actually built or verified';
+          const attempts = step.attempts + 1;
+          if (attempts >= MAX_STEP_ATTEMPTS) {
+            await db
+              .update(missionSteps)
+              .set({ status: 'failed', attempts, result: `Not completed (${why}) after ${attempts} attempts. Last summary: ${run.text}`.slice(0, 4_000), updatedAt: new Date() })
+              .where(eq(missionSteps.id, step.id));
+            await db
+              .update(missions)
+              .set({ status: 'paused', updatedAt: new Date() })
+              .where(eq(missions.id, mission.id));
+            await captureIssue({
+              tenantId: mission.tenantId,
+              source: `mission-step not completed: ${mission.title} / ${step.title}`.slice(0, 160),
+              error: new Error(`Step reported done by the loop but ${why}.`),
+              detail: { missionId: mission.id, stepId: step.id, attempts, toolsUsed: run.toolsUsed.slice(0, 20) },
+            }).catch(() => {});
+            missionResults.push({ missionId: mission.id, stepId: step.id, outcome: 'not-completed+paused' });
+          } else {
+            await db
+              .update(missionSteps)
+              .set({ status: 'pending', attempts, result: `Attempt ${attempts} not completed (${why}): ${run.text}`.slice(0, 4_000), updatedAt: new Date() })
+              .where(eq(missionSteps.id, step.id));
+            missionResults.push({ missionId: mission.id, stepId: step.id, outcome: 'not-completed-retry-queued' });
+          }
         } else {
-          missionResults.push({ missionId: mission.id, stepId: step.id, outcome: 'done' });
+          await db
+            .update(missionSteps)
+            .set({ status: 'done', result: run.text.slice(0, 4_000), updatedAt: new Date() })
+            .where(eq(missionSteps.id, step.id));
+          const openSteps = steps.filter(s => s.id !== step.id && (s.status === 'pending' || s.status === 'running'));
+          if (openSteps.length === 0) {
+            await db
+              .update(missions)
+              .set({ status: 'done', updatedAt: new Date() })
+              .where(eq(missions.id, mission.id));
+            missionResults.push({ missionId: mission.id, stepId: step.id, outcome: 'done+mission-done' });
+          } else {
+            missionResults.push({ missionId: mission.id, stepId: step.id, outcome: 'done' });
+          }
         }
       }
     } catch (err) {

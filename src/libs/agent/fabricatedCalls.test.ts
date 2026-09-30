@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { detectFabricatedCalls, detectUnverifiedCompletion, fabricationNudge } from '@/libs/agent/fabricatedCalls';
+import { detectFabricatedCalls, detectSelfReportedFailure, detectUnverifiedCompletion, fabricationNudge, ranNoProductiveTool } from '@/libs/agent/fabricatedCalls';
 
 describe('fabricated tool calls (Phase 42 — Theo, BBI)', () => {
   it('catches the transcript marker written as text and strips it', () => {
@@ -71,5 +71,39 @@ describe('unverified completion claims (Phase 48.3 — Noah, Copetown)', () => {
     expect(detectUnverifiedCompletion('Successfully built the home page.', ['diviops_render_preview'])).toBeNull();
     // …and not tripped by ordinary sentences that merely contain the words.
     expect(detectUnverifiedCompletion('I will review the content and build the page next.', [])).toBeNull();
+  });
+});
+
+// Phase 48.7 (2026-09-30, Copetown): the mission executor marked steps 2–4
+// [done] while build-3 had ZERO pages, because the tool loop returned normally
+// even when the step's own summary admitted the DiviOps MCP was down. These
+// guard the two executor-level checks that now gate a step from being marked
+// done: does the summary admit failure, and did any productive tool run.
+describe('self-reported failure (Phase 48.7 — Copetown mission executor)', () => {
+  it('catches the exact admissions the Copetown steps wrote while marked done', () => {
+    expect(detectSelfReportedFailure('the DiviOps connection has stopped responding: server is not running')).not.toBeNull();
+    expect(detectSelfReportedFailure('three consecutive calls all returned the same platform error, not something fixable from here')).not.toBeNull();
+    expect(detectSelfReportedFailure('not completed this run; dry run, only source content retrieved, no actual write')).not.toBeNull();
+    expect(detectSelfReportedFailure('I was unable to complete the build and am escalating this now.')).not.toBeNull();
+    expect(detectSelfReportedFailure('No pages were created because the server is down.')).not.toBeNull();
+  });
+
+  it('stays silent on a genuine completion summary', () => {
+    expect(detectSelfReportedFailure('Built the Home page: hero, services and contact sections appended; render preview confirms it renders.')).toBeNull();
+    expect(detectSelfReportedFailure('Created 4 pages and verified each with diviops_render_preview.')).toBeNull();
+  });
+});
+
+describe('productive-tool check (Phase 48.7)', () => {
+  it('a step that ran a real write or read-back did productive work', () => {
+    expect(ranNoProductiveTool(['diviops_page_create', 'diviops_render_preview'])).toBe(false);
+    expect(ranNoProductiveTool(['migration_read'])).toBe(false);
+    expect(ranNoProductiveTool(['wp_upload_media'])).toBe(false);
+    expect(ranNoProductiveTool(['scrape_page'])).toBe(false);
+  });
+
+  it('a step that ran only chatter/planning tools (or nothing) did NOT do verifiable work', () => {
+    expect(ranNoProductiveTool([])).toBe(true);
+    expect(ranNoProductiveTool(['get_mission', 'update_memory'])).toBe(true);
   });
 });

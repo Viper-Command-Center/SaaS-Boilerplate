@@ -636,11 +636,18 @@ export async function renderPage(a: {
     // alternative (waiting on lifecycle events) is far more code for little gain.
     await new Promise(r => setTimeout(r, Math.min(Math.max(a.waitMs ?? 3000, 500), 15_000)));
 
+    // Plain-text mode: prefer textContent over innerText. innerText returns
+    // only what is VISUALLY rendered, so it silently DROPS collapsed/hidden
+    // content — Duda accordions (Copetown's 200-year history), tabs, off-canvas
+    // menus. That made browse_page report a page as "empty" when the content
+    // was right there in the DOM (2026-09-30). textContent walks the full node
+    // tree regardless of display, so nothing is missed; we normalise runaway
+    // whitespace since textContent keeps layout newlines innerText would fold.
     const expression = a.selectors?.length
       ? `JSON.stringify(${JSON.stringify(a.selectors)}.map(function(s){
-           return { selector: s, matches: Array.from(document.querySelectorAll(s)).slice(0, 50).map(function(e){ return (e.innerText || e.textContent || '').trim(); }) };
+           return { selector: s, matches: Array.from(document.querySelectorAll(s)).slice(0, 50).map(function(e){ return (e.textContent || e.innerText || '').trim(); }) };
          }))`
-      : 'document.body ? (document.body.innerText || "") : ""';
+      : 'document.body ? ((document.body.textContent || document.body.innerText || "").replace(/[ \\t]+/g, " ").replace(/\\n[ \\t\\n]*\\n[ \\t\\n]*/g, "\\n\\n").trim()) : ""';
 
     const [{ result: textResult }, { result: titleResult }, { result: urlResult }] = await Promise.all([
       cdp.send('Runtime.evaluate', { expression, returnByValue: true }, pageSession),

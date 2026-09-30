@@ -67,6 +67,14 @@ export type ToolLoopResult = {
    * that can continue later (scheduled missions) should requeue soon.
    */
   exhausted: boolean;
+  /**
+   * Every distinct tool the model actually invoked this turn (tool_use blocks
+   * that ran — NOT names it merely wrote as text). The mission runner uses this
+   * to tell a step that DID real work from one that only narrated an outcome,
+   * so a step whose model prose claims success but ran no mutating/verifying
+   * tool is never silently marked done. Empty when the turn called no tools.
+   */
+  toolsUsed: string[];
 };
 
 type ToolLoopArgs = Parameters<typeof runToolLoopInner>[0];
@@ -571,7 +579,7 @@ async function runToolLoopInner(a: {
     });
   }
 
-  return { text: finalText, exhausted };
+  return { text: finalText, exhausted, toolsUsed: [...toolsUsedThisTurn] };
 }
 
 /**

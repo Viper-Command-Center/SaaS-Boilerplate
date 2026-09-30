@@ -32,7 +32,7 @@ export const agentcoreBrowserProvider: BuiltinProvider = {
   tools: [
     {
       name: 'browse_page',
-      description: 'Load a page in a REAL browser (JavaScript executed) and return its rendered text. Use this when fetch_url comes back empty or looks like a shell — i.e. the site is client-rendered. Slower and costs money, so prefer fetch_url first.',
+      description: 'Load a page in a REAL browser (JavaScript executed) and return its full text content — including text inside collapsed accordions, tabs and hidden panels (reads the DOM, not only what is visually on screen). Use this when fetch_url comes back empty or looks like a shell — i.e. the site is client-rendered. Slower and costs money, so prefer fetch_url first.',
       input_schema: {
         type: 'object',
         properties: {
