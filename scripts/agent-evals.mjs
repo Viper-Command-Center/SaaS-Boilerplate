@@ -375,6 +375,7 @@ expect('src/libs/migration/migrationTools.ts', "executors.set('migration_read'",
 expect('src/libs/migration/migrationTools.ts', "executors.set('migration_list'", 'migration_list finds a job and lists its extracted files');
 expect('src/libs/agent/platformTools.ts', 'buildMigrationTools(tenantId)', 'the migration tools are wired into the platform toolset (available in every surface)');
 expect('src/libs/migration/store.ts', 'listRecentJobs', 'the store can list recent migration jobs for migration_list');
+expect('src/libs/sitechat/toolset.ts', "'migration_read'", 'the migration read-back tools are reachable from SITE CHAT — the surface the migration build actually runs in (they were invisible there in the first cut)');
 
 // ── Phase 46 — Site Chat: the workspace agent pinned to ONE WordPress site,
 // driven from that site's own wp-admin (artivio-site-chat plugin). The scope

@@ -11,6 +11,10 @@ describe('site chat allow-list (Phase 46)', () => {
     expect(isSiteChatToolAllowed('mcp__diviops-build-9__diviops-page-list', bound)).toBe(true);
     expect(isSiteChatToolAllowed('diviops_reference', bound)).toBe(true);
     expect(isSiteChatToolAllowed('search_stock_photos', bound)).toBe(true);
+    // Phase 48.2: the migration build runs in site chat, so it must be able to
+    // read its own job's extracted content here.
+    expect(isSiteChatToolAllowed('migration_list', bound)).toBe(true);
+    expect(isSiteChatToolAllowed('migration_read', bound)).toBe(true);
   });
 
   it('refuses account-wide, other-site and other-system tools', () => {

@@ -54,6 +54,12 @@ export const SITE_CHAT_PLATFORM_TOOLS = new Set([
   'save_file_from_url',
   'view_image',
   'report_issue',
+  // Duda→WordPress migration read-back (Phase 48.2): the migration build runs
+  // in a site's chat (see the migration design — Phase 3 reuses buildSiteChatToolset),
+  // so the agent must be able to read its OWN job's extracted content here.
+  // Read-only and scoped to the workspace's own migration jobs.
+  'migration_list',
+  'migration_read',
 ]);
 
 /** Bare meta-tools the registry adds (not namespaced). */
