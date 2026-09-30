@@ -394,6 +394,18 @@ expect('src/app/api/agent/chat/route.ts', 'canSeeImages', 'a screenshot to a tex
 expect('migrations/0031_model_supports_images.sql', 'supports_images', 'model_catalog tracks vision capability');
 expect('migrations/0032_verify_before_claim_playbook.sql', 'Verify before you claim', 'the playbook forbids reporting done without a tool proving it (Ryan\'s explicit ask)');
 
+// ── Incident guard (2026-09-29): 0031/0032/0033 shipped as .sql files but were
+// NEVER journaled, so the journal-driven pre-deploy `drizzle-kit migrate`
+// skipped them. Prod's model_catalog never got `supports_images`, so every
+// `db.select().from(modelCatalog)` (Schema declares the column) threw
+// "column does not exist" — Platform Admin overview + models both 500'd and the
+// UI's .catch(()=>{}) blanked workspaces, models, revenue and spend. Same class
+// as the 0028 landmine in CLAUDE.md. A .sql file is not "done" until it is in
+// _journal.json — assert every hand-written migration is journaled.
+expect('migrations/meta/_journal.json', '0031_model_supports_images', 'the supports_images migration is journaled or db:migrate silently skips it (Platform Admin goes blank)');
+expect('migrations/meta/_journal.json', '0032_verify_before_claim_playbook', 'the verify-before-claim playbook migration is journaled');
+expect('migrations/meta/_journal.json', '0033_duda_migration_procedure_playbook', 'the migration-procedure playbook migration is journaled');
+
 // ── Phase 48.4 — overnight autonomous pass (2026-09-30): tie the migration
 // tools + rules into one ordered procedure so the agent stops going in circles,
 // and broaden the false-"done" guard to softer phrasings.

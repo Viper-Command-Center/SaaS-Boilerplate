@@ -218,6 +218,27 @@
       "when": 1790500000000,
       "tag": "0030_divi_only_policy",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1790600000000,
+      "tag": "0031_model_supports_images",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1790700000000,
+      "tag": "0032_verify_before_claim_playbook",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1790800000000,
+      "tag": "0033_duda_migration_procedure_playbook",
+      "breakpoints": true
     }
   ]
 }
