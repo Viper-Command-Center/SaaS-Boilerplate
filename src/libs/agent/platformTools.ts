@@ -10,6 +10,7 @@ import { and, asc, desc, eq } from 'drizzle-orm';
 import JSZip from 'jszip';
 import sharp from 'sharp';
 import { buildBookTools } from '@/libs/agent/bookTools';
+import { buildMigrationTools } from '@/libs/migration/migrationTools';
 import { assertPublicUrl, buildWebTools } from '@/libs/agent/webTools';
 import { db } from '@/libs/DB';
 import { extractOfficeImages, MAX_IMAGES } from '@/libs/docs/officeImages';
@@ -1541,6 +1542,15 @@ export function buildPlatformTools(tenantId: string): {
   const bookTools = buildBookTools(tenantId);
   anthropicTools.push(...bookTools.anthropicTools);
   for (const [name, exec] of bookTools.executors) {
+    executors.set(name, exec);
+  }
+
+  // Duda→WordPress migration read-back (Phase 48.2) — list a job's extracted
+  // files and read one from R2. Without this the agent cannot reach migration
+  // output at all (read_file only sees the file library).
+  const migrationTools = buildMigrationTools(tenantId);
+  anthropicTools.push(...migrationTools.anthropicTools);
+  for (const [name, exec] of migrationTools.executors) {
     executors.set(name, exec);
   }
 

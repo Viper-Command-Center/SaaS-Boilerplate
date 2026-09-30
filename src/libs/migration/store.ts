@@ -5,7 +5,7 @@
  * in one place.
  */
 
-import { and, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import { db } from '@/libs/DB';
 import { migrationItems, migrationJobs } from '@/models/Schema';
 
@@ -106,4 +106,17 @@ export async function upsertItem(input: {
 
 export async function listItems(jobId: string): Promise<MigrationItem[]> {
   return db.select().from(migrationItems).where(eq(migrationItems.jobId, jobId));
+}
+
+/**
+ * The tenant's migration jobs, newest first — for the agent's `migration_list`
+ * tool so it can find a job id without the operator pasting one.
+ */
+export async function listRecentJobs(tenantId: string, limit = 20): Promise<MigrationJob[]> {
+  return db
+    .select()
+    .from(migrationJobs)
+    .where(eq(migrationJobs.tenantId, tenantId))
+    .orderBy(desc(migrationJobs.createdAt))
+    .limit(Math.min(Math.max(limit, 1), 100));
 }

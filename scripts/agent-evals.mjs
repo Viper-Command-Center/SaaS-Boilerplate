@@ -365,6 +365,17 @@ expect('src/libs/mcp/stdioCatalog.ts', 'OPERATING PROCEDURE — the ONLY workflo
 expect('src/libs/mcp/stdioCatalog.ts', 'FIVE JSON SHAPES THAT SILENTLY BREAK', 'guidance spells out the exact JSON gotchas (builderVersion placement, element-scoped paths, innerContent, section content arg, numeric ids)');
 expect('src/libs/mcp/stdioCatalog.ts', 'composing a section from scratch is the EXCEPTION', 'template-first is the default, hand-composing is the exception');
 
+// ── Phase 48.2 — migration read-back (2026-09-30). Noah's report: the agent
+// tried to read a Duda extraction to populate a template, got a file-not-found
+// (read_file only sees the file LIBRARY, not the migration R2 prefix), and
+// fabricated a "platform file-system bug" + fake tool calls. Root cause: no
+// tool existed to read migration output back. These two tools close the gap.
+expect('src/libs/migration/migrationTools.ts', 'buildMigrationTools', 'the migration read-back tools module exists');
+expect('src/libs/migration/migrationTools.ts', "executors.set('migration_read'", 'migration_read reads one extracted file from R2');
+expect('src/libs/migration/migrationTools.ts', "executors.set('migration_list'", 'migration_list finds a job and lists its extracted files');
+expect('src/libs/agent/platformTools.ts', 'buildMigrationTools(tenantId)', 'the migration tools are wired into the platform toolset (available in every surface)');
+expect('src/libs/migration/store.ts', 'listRecentJobs', 'the store can list recent migration jobs for migration_list');
+
 // ── Phase 46 — Site Chat: the workspace agent pinned to ONE WordPress site,
 // driven from that site's own wp-admin (artivio-site-chat plugin). The scope
 // boundary is the product: a church admin must never reach WHMCS, Postgres,
