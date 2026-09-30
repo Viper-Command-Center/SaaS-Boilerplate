@@ -624,6 +624,11 @@ export const modelCatalog = pgTable(
     contextWindow: integer('context_window'),
     maxOutputTokens: integer('max_output_tokens'),
     supportsReasoning: boolean('supports_reasoning').notNull().default(false),
+    // Phase 48.3: whether this model can accept image blocks. A text-only model
+    // 400s the whole turn on a pasted screenshot ("does not support image
+    // modality"); the chat route reads this and drops images with a note when
+    // false. Claude families are multimodal (seeded true in migration 0031).
+    supportsImages: boolean('supports_images').notNull().default(false),
     toolUseVerified: boolean('tool_use_verified').notNull().default(false),
     notes: text('notes'),
     active: boolean('active').notNull().default(true),

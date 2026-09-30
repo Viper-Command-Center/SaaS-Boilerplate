@@ -22,6 +22,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { beginTurn, endTurn, isStopRequested, noteProgress } from '@/libs/agent/activeTurns';
 import { runToolLoop } from '@/libs/agent/loop';
+import { modelSupportsImages } from '@/libs/agent/modelConfig';
 import { buildMissionTools } from '@/libs/agent/missionTools';
 import { resolveAgentForTenant } from '@/libs/agent/persona';
 import { buildPlatformTools } from '@/libs/agent/platformTools';
@@ -33,6 +34,7 @@ import {
   loadImageBlocks,
   MAX_IMAGES_PER_MESSAGE,
   selectImagesForContext,
+  textOnlyModelImageNote,
 } from '@/libs/agent/vision';
 import { getCurrentUser } from '@/libs/auth/session';
 import { db } from '@/libs/DB';
@@ -157,9 +159,16 @@ export async function POST(request: Request) {
   // confidently as though it never did.
   const { keep } = selectImagesForContext([...history, { attachments }]);
 
+  // Phase 48.3: if this workspace's CHAT model is text-only, sending image
+  // blocks 400s the whole turn ("does not support image modality") and the user
+  // can't even communicate. Detect it up front and drop images with an honest
+  // note instead. (Chat context — interactive turns are where pasted
+  // screenshots happen.)
+  const canSeeImages = await modelSupportsImages(tenant.id, 'chat');
+
   const hydrated = await Promise.all(
     history.map(async (m) => {
-      const ids = (m.attachments ?? []).filter(id => keep.has(id));
+      const ids = canSeeImages ? (m.attachments ?? []).filter(id => keep.has(id)) : [];
       const dropped = (m.attachments ?? []).length - ids.length;
       if (ids.length === 0 && dropped === 0) {
         return { role: m.role as 'user' | 'assistant', content: m.content as unknown };
@@ -177,9 +186,13 @@ export async function POST(request: Request) {
   );
 
   // This turn's images. Placed before the user's text by runToolLoop.
-  const userBlocks = attachments.length > 0
+  const userBlocks = canSeeImages && attachments.length > 0
     ? await loadImageBlocks(tenant.id, attachments.filter(id => keep.has(id)))
     : [];
+  // Told once, plainly, when a screenshot was dropped because the model is blind.
+  if (!canSeeImages && attachments.length > 0) {
+    userBlocks.push(textOnlyModelImageNote());
+  }
 
   const anyImages = userBlocks.length > 0 || hydrated.some(m => Array.isArray(m.content));
 

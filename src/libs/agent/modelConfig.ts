@@ -19,7 +19,7 @@ import type { ReasoningEffort } from '@/libs/agent/anthropic';
 import { eq } from 'drizzle-orm';
 import { DEFAULT_MANTLE_MODEL } from '@/libs/agent/anthropic';
 import { db } from '@/libs/DB';
-import { tenants } from '@/models/Schema';
+import { modelCatalog, tenants } from '@/models/Schema';
 
 export type ModelContext = 'chat' | 'build';
 
@@ -66,5 +66,34 @@ export async function resolveModelConfig(tenantId: string, context: ModelContext
     return fallback;
   } catch {
     return fallback;
+  }
+}
+
+/**
+ * Phase 48.3: can the model that WILL serve this turn accept image blocks?
+ *
+ * A text-only Mantle model 400s the entire turn on a pasted screenshot ("does
+ * not support image modality"), so the chat route calls this and drops images
+ * with an honest note rather than failing the turn. Fails SAFE: any lookup
+ * problem, an unknown model, or a model with no catalog row → false (drop the
+ * image with a note, never risk the 400). The platform-default Claude models
+ * are multimodal, so an unconfigured workspace returns true.
+ */
+export async function modelSupportsImages(tenantId: string, context: ModelContext): Promise<boolean> {
+  try {
+    const { modelId } = await resolveModelConfig(tenantId, context);
+    // Claude families are multimodal; this also covers the platform default
+    // before any catalog row exists.
+    if (/claude/i.test(modelId)) {
+      return true;
+    }
+    const [row] = await db
+      .select({ supportsImages: modelCatalog.supportsImages })
+      .from(modelCatalog)
+      .where(eq(modelCatalog.id, modelId))
+      .limit(1);
+    return Boolean(row?.supportsImages);
+  } catch {
+    return false;
   }
 }

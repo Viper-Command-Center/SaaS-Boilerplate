@@ -170,6 +170,20 @@ export function droppedImageNote(): TextBlock {
 }
 
 /**
+ * Phase 48.3: shown when a screenshot was dropped because this workspace's model
+ * is text-only (a vision model would 400 the whole turn otherwise). The model
+ * must NOT pretend it saw the image — it should tell the user plainly and ask
+ * for the content in words, or that an admin switch the workspace to a
+ * vision-capable model.
+ */
+export function textOnlyModelImageNote(): TextBlock {
+  return {
+    type: 'text',
+    text: '[the user attached an image, but this workspace\'s current AI model cannot see images, so it was not loaded. Do NOT guess what it showed or pretend to have seen it. Tell the user plainly that this model is text-only and ask them to describe what the image shows in words — or ask the workspace admin to assign a vision-capable model (Admin → Workspaces) so screenshots work.]',
+  };
+}
+
+/**
  * Appended to the system prompt only when images are actually present, so it
  * costs nothing on text-only turns.
  *

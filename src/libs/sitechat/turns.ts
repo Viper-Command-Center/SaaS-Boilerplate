@@ -21,11 +21,17 @@ import { buildSiteChatToolset } from '@/libs/sitechat/toolset';
 import { conversations, messages } from '@/models/Schema';
 
 const HISTORY_LIMIT = 30;
-/** Site chats are for edits, not overnight builds. */
-// Phase 47.1: a gated page build is ~4 reference reads + validate + write +
-// render before any images; 16 ran out mid-build on the first live test.
-const SITE_TURN_MAX_ITERATIONS = 28;
-const SITE_TURN_WALL_CLOCK_MS = 6 * 60_000;
+/**
+ * Site chats do real build work (the Duda→Divi migration authors whole pages of
+ * exact Divi 5 block JSON here), not just quick edits. Phase 48.3 raised this
+ * from 28 — a 4-page migration with media uploads blew straight through 28 and
+ * stopped mid-build. The daily spend cap (checkSpend, every iteration) is the
+ * money guardrail, so a higher step budget cannot overspend; it just lets a
+ * build finish in one flow instead of stop-start thrash. Wall clock raised to
+ * match (still bounded so a turn hands off cleanly rather than running forever).
+ */
+const SITE_TURN_MAX_ITERATIONS = 50;
+const SITE_TURN_WALL_CLOCK_MS = 10 * 60_000;
 
 /** Partial reply text of a running turn, keyed by conversation id. */
 const liveText = new Map<string, string>();
@@ -169,6 +175,10 @@ export async function runSiteTurn(ctx: SiteChatContext, user: SiteChatUser, conv
       },
       maxIterations: SITE_TURN_MAX_ITERATIONS,
       wallClockMs: SITE_TURN_WALL_CLOCK_MS,
+      // Phase 48.3: site chat is where the Duda→Divi build runs — real build
+      // work, so serve it with the high-reasoning 'build' model, not the cheap
+      // 'chat' default that made it thrash and burn credits on hard Divi JSON.
+      modelContext: 'build',
       shouldStop: () => isStopRequested(conversationId),
       onProgress: (i, t) => noteProgress(conversationId, i, t),
     });

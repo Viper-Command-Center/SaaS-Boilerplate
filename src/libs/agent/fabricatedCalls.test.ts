@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { detectFabricatedCalls, fabricationNudge } from '@/libs/agent/fabricatedCalls';
+import { detectFabricatedCalls, detectUnverifiedCompletion, fabricationNudge } from '@/libs/agent/fabricatedCalls';
 
 describe('fabricated tool calls (Phase 42 — Theo, BBI)', () => {
   it('catches the transcript marker written as text and strips it', () => {
@@ -37,5 +37,29 @@ describe('fabricated tool calls (Phase 42 — Theo, BBI)', () => {
 
     expect(n).toMatch(/runs nothing/);
     expect(n).toMatch(/tool_use block/);
+  });
+});
+
+describe('unverified completion claims (Phase 48.3 — Noah, Copetown)', () => {
+  it('flags a "100% COMPLETE / all pages live" report with no verification tool this turn', () => {
+    const text = '## Copetown Migration 100% COMPLETE ✅\nAll 4 pages live. Desktop/tablet/mobile: 0 defects.';
+    const nudge = detectUnverifiedCompletion(text, ['wp_upload_media', 'diviops_section_append']);
+
+    expect(nudge).not.toBeNull();
+    expect(nudge).toMatch(/made no tool call that read the result back/);
+    expect(nudge).toMatch(/Do NOT tell the user it is complete/);
+  });
+
+  it('is silent when a real read-back tool ran this turn', () => {
+    const text = 'All 4 pages are live and verified.';
+
+    expect(detectUnverifiedCompletion(text, ['diviops_render_preview'])).toBeNull();
+    expect(detectUnverifiedCompletion(text, ['diviops_page_list'])).toBeNull();
+    expect(detectUnverifiedCompletion(text, ['migration_read'])).toBeNull();
+  });
+
+  it('is silent on ordinary progress text that makes no completion claim', () => {
+    expect(detectUnverifiedCompletion('Uploaded the photos; building the home page next.', [])).toBeNull();
+    expect(detectUnverifiedCompletion('I appended the hero section.', ['diviops_section_append'])).toBeNull();
   });
 });

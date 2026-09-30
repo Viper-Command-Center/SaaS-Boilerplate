@@ -33,9 +33,10 @@
  */
 
 import type { BlockMessage } from '@/libs/agent/anthropic';
+import type { ModelContext } from '@/libs/agent/modelConfig';
 import type { TenantToolset, ToolResultRich } from '@/libs/mcp/registry';
 import { callClaudeWithTools, TurnStoppedError } from '@/libs/agent/anthropic';
-import { detectFabricatedCalls, fabricationNudge } from '@/libs/agent/fabricatedCalls';
+import { detectFabricatedCalls, detectUnverifiedCompletion, fabricationNudge } from '@/libs/agent/fabricatedCalls';
 import { resolveModelConfig } from '@/libs/agent/modelConfig';
 import { runWithTurnContext, turnAborted } from '@/libs/agent/turnContext';
 import { checkSpend, meterLlm } from '@/libs/billing/meter';
@@ -140,6 +141,15 @@ async function runToolLoopInner(a: {
    * "Working — N tool calls · last: X" indicator instead of looking dead.
    */
   onProgress?: (iteration: number, lastTool: string | null) => void;
+  /**
+   * Phase 48.3: force which model tier serves this turn, overriding the
+   * conversationId-based default. Site chat is where the Duda→Divi build
+   * actually happens (authoring exact Divi 5 block JSON) — real build work that
+   * needs the high-reasoning 'build' model, not the cheap 'chat' default. The
+   * daily spend cap (checkSpend, every iteration) remains the money guardrail,
+   * so higher reasoning cannot exceed the cap — it just fails/loops far less.
+   */
+  modelContext?: ModelContext;
 }): Promise<ToolLoopResult> {
   const maxIterations = a.maxIterations ?? DEFAULT_MAX_ITERATIONS;
   const wallClockMs = a.wallClockMs ?? DEFAULT_WALL_CLOCK_MS;
@@ -149,7 +159,7 @@ async function runToolLoopInner(a: {
   // an interactive chat turn (cheap/fast default); an empty one is a
   // scheduled task or mission step — real build work. Resolved once up front
   // (not re-checked per iteration) so a turn doesn't switch models mid-way.
-  const { modelId, reasoningEffort } = await resolveModelConfig(a.tenantId, a.conversationId ? 'chat' : 'build');
+  const { modelId, reasoningEffort } = await resolveModelConfig(a.tenantId, a.modelContext ?? (a.conversationId ? 'chat' : 'build'));
 
   // The user's turn: [ ...images, { text } ] when there are attachments, or a
   // plain string when there aren't (cheaper to serialise, and the overwhelming
@@ -183,6 +193,12 @@ async function runToolLoopInner(a: {
   let truncations = 0;
   // Consecutive replies that narrated tool calls instead of making them.
   let fabrications = 0;
+  // Every tool the model actually invoked this turn — used to catch a
+  // completion claim ("100% complete") that no verification tool backs up
+  // (Phase 48.3, Noah's false "migration complete" report).
+  const toolsUsedThisTurn = new Set<string>();
+  // How many times we've already sent the model back to verify a done-claim.
+  let unverifiedClaims = 0;
   // The tool executed on the PREVIOUS iteration (null on the first). Surfaced
   // to the activeTurns registry via onProgress so a refreshed page can show
   // what the agent is doing right now.
@@ -322,6 +338,21 @@ async function runToolLoopInner(a: {
 
     const toolUses = response.content.filter(b => b.type === 'tool_use');
     if (response.stop_reason !== 'tool_use' || toolUses.length === 0) {
+      // ── Unverified completion claim (Phase 48.3) ─────────────────────────────
+      // The model is about to end the turn. If its final words claim the work is
+      // COMPLETE / verified but no read-back tool ran this turn, send it back to
+      // verify (once) instead of letting a false "done" reach the user — this is
+      // the exact Noah failure ("Migration 100% COMPLETE" for pages that didn't
+      // exist). Only nudge once; a second claim is let through so the turn can't
+      // loop forever, but the audit records it.
+      const unverified = unverifiedClaims === 0 ? detectUnverifiedCompletion(shownText, toolsUsedThisTurn) : null;
+      if (unverified) {
+        unverifiedClaims += 1;
+        await audit(a.tenantId, 'loop.unverified_completion', 'runToolLoop', { iteration: i });
+        messages.push({ role: 'assistant', content: [{ type: 'text', text: shownText || '(no text)' }] });
+        messages.push({ role: 'user', content: unverified });
+        continue;
+      }
       break;
     }
 
@@ -333,6 +364,7 @@ async function runToolLoopInner(a: {
       const args = use.input ?? {};
       const resolved = a.toolset.resolve(name);
       lastTool = name; // most recent tool the agent chose this turn
+      toolsUsedThisTurn.add(name); // for the unverified-completion check
 
       let resultText: string;
       let resultImages: ToolResultRich['images'] = [];

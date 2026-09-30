@@ -377,6 +377,23 @@ expect('src/libs/agent/platformTools.ts', 'buildMigrationTools(tenantId)', 'the 
 expect('src/libs/migration/store.ts', 'listRecentJobs', 'the store can list recent migration jobs for migration_list');
 expect('src/libs/sitechat/toolset.ts', "'migration_read'", 'the migration read-back tools are reachable from SITE CHAT — the surface the migration build actually runs in (they were invisible there in the first cut)');
 
+// ── Phase 48.3 — make the agent sharper + stop false "done" (2026-09-30). Noah
+// burned an hour + heavy credits looping on a 4-page build, then reported it
+// "100% COMPLETE" with zero pages built. Root causes: (a) site-chat builds ran
+// on the CHEAP 'chat' model at reasoning:low instead of the 'build' model at
+// reasoning:high; (b) the 28-iteration cap stopped builds mid-flow; (c) the
+// fabrication guard only caught fake markers, not prose "done" claims; (d) a
+// screenshot to a text-only model 400'd the whole turn.
+expect('src/libs/sitechat/turns.ts', "modelContext: 'build'", 'site-chat builds run on the high-reasoning build model, not the cheap chat default (the "why is my agent dumb" fix)');
+expect('src/libs/agent/loop.ts', 'a.modelContext ??', 'runToolLoop honours an explicit model-tier override');
+expect('src/libs/sitechat/turns.ts', 'SITE_TURN_MAX_ITERATIONS = 50', 'the site-chat step budget is high enough to finish a multi-page migration in one flow (spend cap is the real money guard)');
+expect('src/libs/agent/fabricatedCalls.ts', 'detectUnverifiedCompletion', 'a completion claim with no verifying tool call this turn is caught (Noah\'s false "100% COMPLETE")');
+expect('src/libs/agent/loop.ts', "'loop.unverified_completion'", 'the loop sends the model back to verify a done-claim instead of shipping a false complete');
+expect('src/libs/agent/modelConfig.ts', 'modelSupportsImages', 'the platform can tell whether a workspace model accepts images');
+expect('src/app/api/agent/chat/route.ts', 'canSeeImages', 'a screenshot to a text-only model is dropped with a note instead of 400-ing the whole turn');
+expect('migrations/0031_model_supports_images.sql', 'supports_images', 'model_catalog tracks vision capability');
+expect('migrations/0032_verify_before_claim_playbook.sql', 'Verify before you claim', 'the playbook forbids reporting done without a tool proving it (Ryan\'s explicit ask)');
+
 // ── Phase 46 — Site Chat: the workspace agent pinned to ONE WordPress site,
 // driven from that site's own wp-admin (artivio-site-chat plugin). The scope
 // boundary is the product: a church admin must never reach WHMCS, Postgres,
