@@ -400,6 +400,15 @@ expect('migrations/0032_verify_before_claim_playbook.sql', 'Verify before you cl
 expect('migrations/0033_duda_migration_procedure_playbook.sql', 'Duda to WordPress (Divi 5) migration — the procedure', 'a single end-to-end migration procedure playbook exists (where content lives, build order, what done means)');
 expect('src/libs/agent/fabricatedCalls.ts', 'ready\\s+for\\s+review', 'the unverified-completion guard also catches softer done-phrasings (ready for review / successfully built)');
 
+// ── Phase 48.5 — Sonnet-tuned prompt structure (2026-09-30, from Ryan's Google
+// AI review): Claude follows XML-segmented instructions more tightly, and the
+// biggest token/error win on edits is "change the smallest unit, never rewrite
+// the whole page". Both are prompt-only; the eval-tracked phrases inside are
+// preserved.
+expect('src/libs/mcp/stdioCatalog.ts', '<operating_procedure>', 'DiviOps guidance is XML-segmented so Sonnet parses/obeys it tighter');
+expect('src/libs/mcp/stdioCatalog.ts', '<edit_scope>', 'guidance elevates "edit the smallest unit, never rewrite the page" to its own section');
+expect('src/libs/mcp/stdioCatalog.ts', 'EDIT THE SMALLEST UNIT', 'the smallest-change rule is explicit (module_update/section_replace over page rewrite)');
+
 // ── Phase 46 — Site Chat: the workspace agent pinned to ONE WordPress site,
 // driven from that site's own wp-admin (artivio-site-chat plugin). The scope
 // boundary is the product: a church admin must never reach WHMCS, Postgres,

@@ -205,8 +205,10 @@ function refuse(message: string): GuardResult {
   return { args: {}, refuse: `[refused] ${message}` };
 }
 
-const DIVIOPS_GUIDANCE_HEAD = `DiviOps (Divi 5 authoring) — these rules come from the vendor's divi-5-builder skill and from reading the plugin source; violating them fails SILENTLY (the write succeeds and the page renders wrong or blank):
+const DIVIOPS_GUIDANCE_HEAD = `<divi_authoring>
+DiviOps (Divi 5 authoring) — these rules come from the vendor's divi-5-builder skill and from reading the plugin source; violating them fails SILENTLY (the write succeeds and the page renders wrong or blank). Follow the tagged sections below exactly.
 
+<operating_procedure>
 OPERATING PROCEDURE — the ONLY workflow that works. Do these in order, EVERY time, before writing any Divi layout. Skipping a step wastes your turns on refusals:
   1. TEMPLATE FIRST. diviops_template_list → diviops_template_get for the closest match (hero, features, cards, pricing, CTA, etc.). Editing a vendor-verified template is the default path; composing a section from scratch is the EXCEPTION, only when nothing fits.
   2. READ THE MAP. For every module type you will write and have not already read THIS session, call diviops_reference {module:"Heading"} — one call per module. It returns the VB-verified element map + a minimal snippet. The paths you would guess are usually wrong; the gate refuses unknown paths before they reach the site.
@@ -214,14 +216,26 @@ OPERATING PROCEDURE — the ONLY workflow that works. Do these in order, EVERY t
   4. VALIDATE. diviops_validate_blocks on the markup before any write.
   5. WRITE, THEN VERIFY. Write (section_append / section_replace / page_update_content), then read the [render check] line appended to the result — that is what the site actually shows. Report THAT, never a guess.
 Do NOT compose JSON and "try it to see if it passes" — that burns turns and the gate will refuse it. Read first, then write once.
+</operating_procedure>
 
+<edit_scope>
+EDIT THE SMALLEST UNIT — never rewrite a whole page to change part of it. Rewriting an entire page to fix one heading is how layouts get corrupted and turns get burned.
+  - To change ONE module: diviops_module_update by admin label with only the changed attribute paths (a targeted dot-path write), not a page rewrite.
+  - To change ONE section: diviops_section_replace with a plain match_text, sending only that section.
+  - Only page_update_content / page_create when building a page from scratch or replacing the whole thing on purpose.
+  - Read the current state first (diviops_page_get_layout / diviops_section_get), change the minimum, write that minimum. Smaller writes validate faster, cost less, and cannot corrupt the rest of the page.
+</edit_scope>
+
+<json_shapes>
 FIVE JSON SHAPES THAT SILENTLY BREAK (the gate catches these — get them right the first time):
   a. builderVersion goes INSIDE the attrs object, as a sibling of module/content — e.g. {"attrs":{ …, "builderVersion":"5.1.1"}}. NEVER a trailing key after the closing braces (…}}}, "builderVersion":"…"} is invalid).
   b. Element attribute paths are element-scoped, not module-scoped: a Button's background is button.decoration.button.desktop.value.backgroundColor — NOT module.button… . Read the module map for the exact element name.
   c. Every content-bearing element needs its innerContent wrapper: "content":{"innerContent":{"desktop":{"value":"<p>…</p>"}}} — not a bare string at the top level.
   d. section_append / section_replace take ONE bare section in the "content" arg (NO divi/placeholder wrapper). page_update_content takes the whole page wrapped in one placeholder.
   e. Numeric args are numbers, not strings: page_id: 255, not "255".
+</json_shapes>
 
+<rules>
 `;
 const DIVIOPS_GUIDANCE_TAIL = `- BUILDER POLICY (not negotiable): every WordPress build and every Duda→WordPress migration on this platform is Divi 5. Kadence, Gutenberg-blocks-as-a-builder, Oxygen and Elementor are RETIRED — do not propose, "fall back to", or ask the operator to choose one, even if a build site once used them or a stale note mentions them. If a DiviOps connection's tools are missing this turn, that is NOT a reason to switch builders: it is almost always the connection NAME being too long (see the [system] unavailability note, which tells you to rename it, e.g. "diviops-build-1") — say that and stop; never present another builder as an option.
 - NEVER GUESS. The platform GATES every Divi write (page_create, page_update_content, section_append/replace, library_save, tb_layout_update, canvas_*, module_update): the markup is validated against the vendor's module maps — every element, decoration group, breakpoint, innerContent shape, spacing object and media URL — and a write with any unknown attribute path is REFUSED before it reaches the site, with the exact paths named. It is also refused if this conversation has not read the map for every module type in it. So the only workflow that works: (1) diviops_reference {module:"Heading"} — one call per module type you will use, read the element map and the minimal snippet; (2) build the markup ONLY from paths in those maps; (3) diviops_validate_blocks; (4) write; (5) read the [render check] line appended to the write result — that is what the site actually shows. If you are unsure of a path, look it up (module map, {query:"…"}, or diviops_schema_get_module) — never write a plausible path and hope, and never fall back to a Text/Code module with inline HTML because the real module's format is unfamiliar.
@@ -238,7 +252,9 @@ const DIVIOPS_GUIDANCE_TAIL = `- BUILDER POLICY (not negotiable): every WordPres
 - WP-CLI is NOT diviops_meta_wp_cli (that needs a local install and is refused here). Use the WordPress Sites tools — wp_cli / wp_cache_flush / wp_upload_media with site="<label>" — for the SAME site; if they are missing, ask the owner to enable WordPress Sites — never ask for WP_PATH or WP_CLI_CMD.
 - WHICH SITE: a DiviOps connection is bound to ONE WordPress site. When the workspace has several (connections named diviops-<label>, e.g. mcp__diviops-build-9__…), the label in the tool name IS the site — never write a page through one site's connection because another site's page id looked right. Confirm with diviops_meta_info (site URL) when unsure.
 - REFERENCE: call diviops_reference before building a module you have not built THIS session — {module:"Blurb"} returns the vendor's verified element map + a minimal snippet; {query:"…"} searches; no args = index. It is the Tier 2/3 knowledge that turns guessed attribute paths into VB-verified ones. Use it as working knowledge; do not paste its text to the user (licensed reference material).
-- MEDIA: DiviOps has no upload tool. Put images on the site with wp_upload_media (WordPress Sites) and reference the returned site URL in the Divi module — never a library URL (private) or a Duda CDN URL (dies at cutover).`;
+- MEDIA: DiviOps has no upload tool. Put images on the site with wp_upload_media (WordPress Sites) and reference the returned site URL in the Divi module — never a library URL (private) or a Duda CDN URL (dies at cutover).
+</rules>
+</divi_authoring>`;
 
 /** Head (operating procedure + JSON gotchas) followed by the detailed rules. */
 const DIVIOPS_GUIDANCE = DIVIOPS_GUIDANCE_HEAD + DIVIOPS_GUIDANCE_TAIL;
