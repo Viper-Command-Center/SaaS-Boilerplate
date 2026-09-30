@@ -270,18 +270,16 @@ export async function runExtraction(job: MigrationJob, client: DudaClient): Prom
         
         // Fetch the live URL and parse with headless browser for full content
         // Blog posts often load content dynamically via JS/AJAX
-        const postUrl = `${details.canonical_url?.replace(/\/+$/, '') || details.site_domain ?? ''}/${post.slug}`;
+        const postUrl = `${details.canonical_url?.replace(/\/+$/, '') || (details.site_domain ?? '')}/${post.slug}`;
         let parsedPage;
-         let parsedPage;
-         let playwrightFallback = false;
+        let playwrightFallback = false;
         try {
           parsedPage = await parseBlogPostHtmlWithPlaywright(postUrl);
         } catch (playwrightError) {
           // Fallback to API content if headless browser fails
-          console.warn(`Headless browser failed for blog post ${postId}, falling back to API content:`, playwrightError.message);
+          console.warn(`Headless browser failed for blog post ${postId}, falling back to API content:`, playwrightError instanceof Error ? playwrightError.message : String(playwrightError));
           parsedPage = parsePageHtml(post.content || post.html || '', postUrl);
-           parsedPage = parsePageHtml(post.content || post.html || '', postUrl);
-           playwrightFallback = true;
+          playwrightFallback = true;
         }
         
         // Sanity check: if extracted body is suspiciously short, add warning
@@ -291,12 +289,10 @@ export async function runExtraction(job: MigrationJob, client: DudaClient): Prom
           .join(' ')
           .trim();
         
-         const wordCount = bodyText.split(/\\s+/).filter(word => word.length > 0).length;
-         const hasWarning = wordCount < 50 || playwrightFallback; // Arbitrary threshold - adjust as needed
         const wordCount = bodyText.split(/\s+/).filter(word => word.length > 0).length;
-        const hasWarning = wordCount < 50; // Arbitrary threshold - adjust as needed
+        const hasWarning = wordCount < 50 || playwrightFallback; // Arbitrary threshold - adjust as needed
         
-        const md = buildPostMarkdown({
+        let md = buildPostMarkdown({
           date,
           author: post.author ?? '',
           tags: post.tags ?? post.categories ?? [],

@@ -247,7 +247,7 @@ export async function parseBlogPostHtmlWithPlaywright(url: string): Promise<Pars
     }
   } catch (error) {
     // Fallback to regular parsing if Playwright is not available
-    console.warn('Playwright not available, falling back to regular HTML parsing:', error.message);
+    console.warn('Playwright not available, falling back to regular HTML parsing:', error instanceof Error ? error.message : String(error));
     // We'll fetch the URL and parse it regularly as fallback
     const response = await fetch(url);
     if (!response.ok) {
