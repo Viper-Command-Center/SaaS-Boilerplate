@@ -288,6 +288,40 @@ function sanitize(name: string): string {
  */
 const MAX_TOOL_NAME = 64;
 
+/** Fixed cost of the `mcp__<conn>__<tool>` wrapper: `mcp__` (5) + `__` (2). */
+export const NAMESPACE_OVERHEAD = 'mcp__'.length + '__'.length;
+
+/** Sanitize a tool name the same way namespacedToolName does, and report its length. */
+function sanitizedToolLen(toolName: string): number {
+  return toolName.replace(/[^a-z0-9-]/gi, '-').length;
+}
+
+/**
+ * The longest a CONNECTION name may be while still letting a tool whose
+ * sanitized name is `toolNameLen` characters fit under Anthropic's 64-char
+ * limit. Negative means the tool itself is too long regardless of the
+ * connection name (a genuine vendor problem, not a rename-able one).
+ *
+ * Worked example that this whole machinery exists for: DiviOps' longest tool is
+ * `diviops_variable_create_fluid_system` (36 chars), so a DiviOps connection
+ * name must be ≤ 64 − 7 − 36 = 21 chars. `diviops-build-1` (15) fits;
+ * `diviops-build-churchwebglobal-com` (33) does NOT — its longest tools drop,
+ * Anthropic 400s the request, and the whole server looks "down".
+ */
+export function maxConnectionNameFor(toolNameLen: number): number {
+  return MAX_TOOL_NAME - NAMESPACE_OVERHEAD - toolNameLen;
+}
+
+/**
+ * Would every tool exposed by a server whose longest tool name is
+ * `longestToolNameLen` chars fit under a connection called `connectionName`?
+ * Used at CREATION time (the /api/plugins + /api/mcp/connections routes) to
+ * refuse an over-long name up front, so the drop can never happen live.
+ */
+export function connectionNameFitsTools(connectionName: string, longestToolNameLen: number): boolean {
+  return sanitize(connectionName).length <= maxConnectionNameFor(longestToolNameLen);
+}
+
 export function namespacedToolName(connectionName: string, toolName: string): string | null {
   const conn = sanitize(connectionName);
   // Underscores are legal for Anthropic but are our namespace separator, so a
@@ -300,6 +334,31 @@ export function namespacedToolName(connectionName: string, toolName: string): st
   // Truncating would risk two tools colliding on the same key, which is the
   // duplicate-name 400 in a different costume. Refuse instead, and report it.
   return full.length <= MAX_TOOL_NAME ? full : null;
+}
+
+/**
+ * Turn a list of tools that `namespacedToolName` refused into ONE honest,
+ * actionable failedConnections line.
+ *
+ * 🔴 THIS MESSAGE IS LOAD-BEARING. The old string — "N tool(s) unavailable —
+ * names are too long or use unsupported characters" — blamed the vendor's tool
+ * names, so an agent reading it concluded the DiviOps SERVER was down /
+ * infrastructure-broken and (fatally) offered to switch the client to a
+ * different page builder. The real cause is almost always the opposite: OUR
+ * connection name is too long and eats the 64-char budget. We can tell the two
+ * apart deterministically — if the tool would fit under a shorter connection
+ * name, the name is the problem and it is a one-click rename, not an outage.
+ */
+export function describeSkippedTools(connectionName: string, skipped: string[]): string {
+  const sample = skipped.slice(0, 5).join(', ') + (skipped.length > 5 ? ', …' : '');
+  const connLen = sanitize(connectionName).length;
+  const longestTool = Math.max(...skipped.map(sanitizedToolLen));
+  const budget = maxConnectionNameFor(longestTool);
+  // budget ≥ 1 AND our name exceeds it ⇒ the NAME is the cause (rename fixes it).
+  if (budget >= 1 && connLen > budget) {
+    return `${connectionName} — ${skipped.length} tool(s) could not be registered because the connection NAME is ${connLen} characters long, which pushes their full names past the ${MAX_TOOL_NAME}-character limit the model API enforces. This is NOT an outage and NOT a vendor problem: rename this connection to ${budget} characters or fewer in the Tools panel and its tools will load. For a DiviOps site, name it after the site label — e.g. "diviops-build-1". Affected: ${sample}.`;
+  }
+  return `${connectionName} (${skipped.length} tool(s) unavailable — the vendor's tool names are too long or use unsupported characters: ${sample})`;
 }
 
 async function resolveHeaders(
@@ -815,9 +874,7 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
         }
         commitConnectionTools(conn.name, prepared);
         if (skipped.length > 0) {
-          failedConnections.push(
-            `${conn.name} (${skipped.length} tool(s) unavailable — names are too long or use unsupported characters: ${skipped.slice(0, 5).join(', ')})`,
-          );
+          failedConnections.push(describeSkippedTools(conn.name, skipped));
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'unreachable';
@@ -920,9 +977,7 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
         // Honest and specific: the agent is told which capabilities it does NOT
         // have and why, instead of silently missing them (or, worse, the whole
         // request 400ing with no attribution).
-        failedConnections.push(
-          `${conn.name} (${skipped.length} tool(s) unavailable — names are too long or use unsupported characters: ${skipped.slice(0, 5).join(', ')})`,
-        );
+        failedConnections.push(describeSkippedTools(conn.name, skipped));
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'unreachable';

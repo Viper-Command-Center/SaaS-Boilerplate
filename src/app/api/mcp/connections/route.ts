@@ -102,7 +102,7 @@ export async function GET(request: Request) {
 
 const CreateSchema = z.object({
   tenantSlug: z.string().min(1).max(80),
-  name: z.string().min(1).max(80).regex(/^[a-z0-9-]+$/i, 'Letters, numbers and dashes only'),
+  name: z.string().min(1).max(40).regex(/^[a-z0-9-]+$/i, 'Letters, numbers and dashes only'),
   url: z.string().url().max(2000),
   // header name → secret value (e.g. { "Authorization": "Bearer sk_..." }).
   // Values are sealed into the vault; only credential IDs are stored on the

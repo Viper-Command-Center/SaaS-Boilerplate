@@ -44,7 +44,7 @@ async function loadManaged(userId: string, isAdmin: boolean, connectionId: strin
 const PatchSchema = z.object({
   enabled: z.boolean().optional(),
   toolPolicy: z.record(z.string(), z.enum(['auto', 'approval', 'deny'])).optional(),
-  name: z.string().min(1).max(60).optional(),
+  name: z.string().min(1).max(40).regex(/^[a-z0-9-]+$/i, 'Letters, numbers and dashes only').optional(),
   // NOT z.string().url(): a per-connection built-in's target may be a numeric
   // GA4 property ID rather than an address. HTTP/stdio connections are still
   // URL-checked below, where the transport is known (Phase 30.1).
@@ -128,7 +128,7 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
     .set({
       ...(body.enabled !== undefined ? { enabled: body.enabled } : {}),
       ...(body.toolPolicy !== undefined ? { toolPolicy: body.toolPolicy } : {}),
-      ...(body.name !== undefined ? { name: body.name } : {}),
+      ...(body.name !== undefined ? { name: body.name.toLowerCase() } : {}),
       ...(body.url !== undefined ? { url: body.url } : {}),
       ...(headerCredentials !== undefined ? { headerCredentials } : {}),
     })

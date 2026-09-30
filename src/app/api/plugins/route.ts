@@ -14,6 +14,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getCurrentUser } from '@/libs/auth/session';
 import { db } from '@/libs/DB';
+import { connectionNameFitsTools, maxConnectionNameFor } from '@/libs/mcp/registry';
 import { getStdioServer, WP_SITE_TARGET_PREFIX, wpSiteLabelOf } from '@/libs/mcp/stdioCatalog';
 import { getBuiltinProvider } from '@/libs/plugins';
 import { getUserTenants } from '@/libs/tenants';
@@ -202,6 +203,18 @@ export async function POST(request: Request) {
     .from(mcpConnections)
     .where(and(eq(mcpConnections.tenantId, tenant.id), eq(mcpConnections.catalogId, plugin.id)));
   const connectionName = boundLabel ? `${plugin.slug}-${boundLabel}`.slice(0, 40) : plugin.slug;
+  // 🔴 A per-site stdio connection's NAME becomes the `mcp__<name>__<tool>`
+  // prefix. If it eats the model API's 64-char budget, this server's longest
+  // tools silently drop and the request 400s — the connection then looks
+  // "down" while it is actually just misnamed. Refuse up front with the exact
+  // fix, so the drop can never reach a live turn (the failure that had Noah
+  // reporting DiviOps as an outage and reaching for a retired builder).
+  if (boundLabel && stdioSpec?.maxToolNameLen && !connectionNameFitsTools(connectionName, stdioSpec.maxToolNameLen)) {
+    const budget = maxConnectionNameFor(stdioSpec.maxToolNameLen);
+    return NextResponse.json({
+      error: `The connection name "${connectionName}" (${connectionName.length} chars) is too long for ${plugin.name}: its longest tool would exceed the 64-character limit the model API enforces, so its tools would silently fail to load. Use a shorter WordPress Sites label (≤ ${Math.max(0, budget - plugin.slug.length - 1)} chars after the "${plugin.slug}-" prefix) — e.g. "build-1" → "${plugin.slug}-build-1".`,
+    }, { status: 400 });
+  }
   if (boundLabel) {
     if (existing.some(e => wpSiteLabelOf(e.url) === boundLabel)) {
       return NextResponse.json({ error: `${plugin.name} is already connected to site "${boundLabel}".` }, { status: 409 });

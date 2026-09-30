@@ -73,6 +73,16 @@ export type StdioServerSpec = {
    * server key however many connections use it. See references.ts.
    */
   references?: ReferenceSpec;
+  /**
+   * The length of THIS server's longest tool name (sanitized). Used at
+   * connection-creation time to reject a connection name so long that the
+   * `mcp__<name>__<tool>` wrapper would push the longest tool past the model
+   * API's 64-char limit — the failure that made a whole DiviOps connection
+   * look "down" (its longest tools silently dropped, then the request 400d).
+   * Set it once here so the routes don't have to spawn the server to find out.
+   * DiviOps' longest is `diviops_variable_create_fluid_system` (36).
+   */
+  maxToolNameLen?: number;
 };
 
 export type GuardContext = { target: string; connectionName: string };
@@ -179,6 +189,7 @@ function refuse(message: string): GuardResult {
 }
 
 const DIVIOPS_GUIDANCE = `DiviOps (Divi 5 authoring) — these rules come from the vendor's divi-5-builder skill and from reading the plugin source; violating them fails SILENTLY (the write succeeds and the page renders wrong or blank):
+- BUILDER POLICY (not negotiable): every WordPress build and every Duda→WordPress migration on this platform is Divi 5. Kadence, Gutenberg-blocks-as-a-builder, Oxygen and Elementor are RETIRED — do not propose, "fall back to", or ask the operator to choose one, even if a build site once used them or a stale note mentions them. If a DiviOps connection's tools are missing this turn, that is NOT a reason to switch builders: it is almost always the connection NAME being too long (see the [system] unavailability note, which tells you to rename it, e.g. "diviops-build-1") — say that and stop; never present another builder as an option.
 - NEVER GUESS. The platform GATES every Divi write (page_create, page_update_content, section_append/replace, library_save, tb_layout_update, canvas_*, module_update): the markup is validated against the vendor's module maps — every element, decoration group, breakpoint, innerContent shape, spacing object and media URL — and a write with any unknown attribute path is REFUSED before it reaches the site, with the exact paths named. It is also refused if this conversation has not read the map for every module type in it. So the only workflow that works: (1) diviops_reference {module:"Heading"} — one call per module type you will use, read the element map and the minimal snippet; (2) build the markup ONLY from paths in those maps; (3) diviops_validate_blocks; (4) write; (5) read the [render check] line appended to the write result — that is what the site actually shows. If you are unsure of a path, look it up (module map, {query:"…"}, or diviops_schema_get_module) — never write a plausible path and hope, and never fall back to a Text/Code module with inline HTML because the real module's format is unfamiliar.
 - Media: every image/video URL in Divi markup must be on THIS site (upload with wp_upload_media / wp_media_upload first, use the returned site URL). Workspace-library URLs (s.artivio.ai, /api/files/…) and hot-links to other hosts are refused by the gate.
 - Drafts have no public URL: fetch_url on an unpublished page returns the 404 page and says so. Verify drafts with diviops_render_preview {page_id} (the gate runs it for you after each write) and give the owner the wp-admin preview link. Never describe a page as rendered or published on the strength of anything but a render check or a browser screenshot.
@@ -236,6 +247,9 @@ export const STDIO_SERVERS: Record<string, StdioServerSpec> = {
     guidance: DIVIOPS_GUIDANCE,
     guardCall: diviopsGuard,
     afterCall: diviRenderCheck,
+    // `diviops_variable_create_fluid_system` (36) is the longest tool name this
+    // server exposes → a DiviOps connection name must be ≤ 21 chars (64−7−36).
+    maxToolNameLen: 36,
     references: {
       dir: 'vendor/diviops-skill',
       toolName: 'diviops_reference',
