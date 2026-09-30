@@ -75,7 +75,7 @@ export function fabricationNudge(names: string[]): string {
  * tool history: a "done"-class claim is only trustworthy if THIS turn actually
  * read the result back (a render/preview/get/list style verification tool ran).
  */
-const COMPLETION_CLAIM_RE = /\b(?:100%\s*complete|migration\s+complete|fully\s+complete|all\s+(?:\d+\s+)?pages?\s+(?:are\s+)?(?:live|built|complete|published)|everything\s+is\s+(?:done|complete|live)|site[- ]wide\s+verification\s+complete|0\s+(?:layout\s+)?defects)\b/i;
+const COMPLETION_CLAIM_RE = /\b(?:100%\s*complete|migration\s+complete|fully\s+complete|all\s+(?:\d+\s+)?pages?\s+(?:are\s+)?(?:live|built|complete|published)|everything\s+is\s+(?:done|complete|live)|site[- ]wide\s+verification\s+complete|0\s+(?:layout\s+)?defects|ready\s+for\s+review|successfully\s+(?:built|migrated|created|deployed|published|completed)|(?:build|site|page)\s+is\s+(?:now\s+)?(?:complete|done|live))\b/i;
 /** Tool-name fragments that count as real verification (a read-back of state). */
 const VERIFY_TOOL_RE = /(?:render[_-]?preview|page[_-]?get|page[_-]?list|get[_-]?layout|section[_-]?get|validate[_-]?blocks|migration[_-]?read|migration[_-]?list|render[_-]?check|content[_-]?get|wp[_-]?rest|fetch[_-]?url)/i;
 

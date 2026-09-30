@@ -394,6 +394,12 @@ expect('src/app/api/agent/chat/route.ts', 'canSeeImages', 'a screenshot to a tex
 expect('migrations/0031_model_supports_images.sql', 'supports_images', 'model_catalog tracks vision capability');
 expect('migrations/0032_verify_before_claim_playbook.sql', 'Verify before you claim', 'the playbook forbids reporting done without a tool proving it (Ryan\'s explicit ask)');
 
+// ── Phase 48.4 — overnight autonomous pass (2026-09-30): tie the migration
+// tools + rules into one ordered procedure so the agent stops going in circles,
+// and broaden the false-"done" guard to softer phrasings.
+expect('migrations/0033_duda_migration_procedure_playbook.sql', 'Duda to WordPress (Divi 5) migration — the procedure', 'a single end-to-end migration procedure playbook exists (where content lives, build order, what done means)');
+expect('src/libs/agent/fabricatedCalls.ts', 'ready\\s+for\\s+review', 'the unverified-completion guard also catches softer done-phrasings (ready for review / successfully built)');
+
 // ── Phase 46 — Site Chat: the workspace agent pinned to ONE WordPress site,
 // driven from that site's own wp-admin (artivio-site-chat plugin). The scope
 // boundary is the product: a church admin must never reach WHMCS, Postgres,

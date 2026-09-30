@@ -62,4 +62,14 @@ describe('unverified completion claims (Phase 48.3 — Noah, Copetown)', () => {
     expect(detectUnverifiedCompletion('Uploaded the photos; building the home page next.', [])).toBeNull();
     expect(detectUnverifiedCompletion('I appended the hero section.', ['diviops_section_append'])).toBeNull();
   });
+
+  it('also catches softer done-phrasings (ready for review / successfully built)', () => {
+    expect(detectUnverifiedCompletion('The Copetown site is ready for review.', ['diviops_section_append'])).not.toBeNull();
+    expect(detectUnverifiedCompletion('Successfully migrated all pages.', [])).not.toBeNull();
+    expect(detectUnverifiedCompletion('The build is now complete.', [])).not.toBeNull();
+    // …but still verified when a read-back tool ran.
+    expect(detectUnverifiedCompletion('Successfully built the home page.', ['diviops_render_preview'])).toBeNull();
+    // …and not tripped by ordinary sentences that merely contain the words.
+    expect(detectUnverifiedCompletion('I will review the content and build the page next.', [])).toBeNull();
+  });
 });
