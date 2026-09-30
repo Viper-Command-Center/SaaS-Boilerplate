@@ -421,6 +421,18 @@ expect('src/libs/mcp/stdioCatalog.ts', '<operating_procedure>', 'DiviOps guidanc
 expect('src/libs/mcp/stdioCatalog.ts', '<edit_scope>', 'guidance elevates "edit the smallest unit, never rewrite the page" to its own section');
 expect('src/libs/mcp/stdioCatalog.ts', 'EDIT THE SMALLEST UNIT', 'the smallest-change rule is explicit (module_update/section_replace over page rewrite)');
 
+// ── Phase 48.6 — the Copetown mission paused twice on a REAL backend 400:
+// Sonnet 5 (Claude 4.7+) rejects thinking:{type:'enabled',budget_tokens} and
+// requires thinking:{type:'adaptive'} + output_config:{effort}. The build model
+// carries high reasoning, so EVERY build/mission call hit this — the whole
+// migration path was dead until fixed. Send the adaptive shape first and
+// self-heal once on the mode-mismatch 400 (symmetric, so an older Claude that
+// only takes the legacy shape still recovers).
+expect('src/libs/agent/anthropic.ts', "type: 'adaptive'", 'Claude 4.7+/Sonnet 5 thinking uses the adaptive shape (legacy enabled+budget_tokens 400s and paused the Copetown mission)');
+expect('src/libs/agent/anthropic.ts', 'output_config', 'reasoning depth is controlled by output_config.effort on the adaptive shape');
+expect('src/libs/agent/anthropic.ts', 'isThinkingModeMismatch', 'a thinking-mode 400 self-heals by flipping shape once instead of failing the turn');
+expect('src/libs/agent/anthropic.test.ts', 'thinking.type.enabled', 'the exact Copetown 400 is pinned in a regression test');
+
 // ── Phase 46 — Site Chat: the workspace agent pinned to ONE WordPress site,
 // driven from that site's own wp-admin (artivio-site-chat plugin). The scope
 // boundary is the product: a church admin must never reach WHMCS, Postgres,

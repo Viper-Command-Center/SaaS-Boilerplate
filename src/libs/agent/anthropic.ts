@@ -282,8 +282,10 @@ function cachedSystem(system: string) {
 
 /**
  * Extended-thinking budget for a Claude call on the Anthropic-shaped Mantle
- * endpoint. undefined/'minimal'/'low' → no thinking block at all (fastest,
- * cheapest — the right default for chat). 'medium'/'high' turn it on.
+ * endpoint. undefined/'minimal'/'low' → no thinking at all (fastest, cheapest —
+ * the right default for chat). 'medium'/'high' turn it on. Used by the LEGACY
+ * `thinking:{type:'enabled',budget_tokens}` shape (older Claude models) and to
+ * decide whether ANY thinking config is sent at all.
  */
 function claudeThinkingBudget(effort: ReasoningEffort | undefined): number | undefined {
   if (effort === 'high') {
@@ -294,6 +296,73 @@ function claudeThinkingBudget(effort: ReasoningEffort | undefined): number | und
   }
   return undefined;
 }
+
+/**
+ * The `output_config.effort` level for the ADAPTIVE thinking shape (Claude 4.7+
+ * / Sonnet 5 and later). Only meaningful when thinking is on (medium/high) —
+ * low/undefined sends no thinking block, so it returns undefined there too.
+ */
+function adaptiveEffort(effort: ReasoningEffort | undefined): 'medium' | 'high' | undefined {
+  if (effort === 'high') {
+    return 'high';
+  }
+  if (effort === 'medium') {
+    return 'medium';
+  }
+  return undefined;
+}
+
+// Two thinking request shapes exist on the Anthropic-shaped Mantle endpoint and
+// a given model accepts exactly ONE of them (confirmed against Anthropic's docs
+// + a live 400 from Mantle, 2026-09-30):
+//   - 'adaptive': thinking:{type:'adaptive'} + output_config:{effort} — required
+//     by Claude 4.7+ models (Sonnet 5, Opus 5.5, …). These 400 on 'enabled'.
+//   - 'legacy':   thinking:{type:'enabled',budget_tokens} — the only mode on
+//     Claude 4.5/Haiku 4.5 and earlier. These 400 on 'adaptive'.
+// There is no clean version signal in a bare Mantle model id, so we send the
+// modern shape first (our default is Sonnet 5) and self-heal once on the
+// specific mode-mismatch 400 — see callMantleAnthropic.
+export type ThinkingMode = 'adaptive' | 'legacy';
+
+/**
+ * Build the thinking-related request fields + the minimum max_tokens for a
+ * given mode/effort. Returns empty extras (no thinking block) for low/undefined
+ * effort regardless of mode. Exported for unit tests — this is the shape that a
+ * live Mantle 400 pivots on.
+ */
+export function thinkingRequestFields(
+  mode: ThinkingMode,
+  effort: ReasoningEffort | undefined,
+): { extra: Record<string, unknown>; minMaxTokens: number } {
+  const budget = claudeThinkingBudget(effort);
+  if (budget === undefined) {
+    return { extra: {}, minMaxTokens: 0 };
+  }
+  if (mode === 'adaptive') {
+    return {
+      // Adaptive lets the model choose depth per request; no token budget, so
+      // no max_tokens floor beyond the caller's own request.
+      extra: { thinking: { type: 'adaptive' }, output_config: { effort: adaptiveEffort(effort) } },
+      minMaxTokens: 0,
+    };
+  }
+  // Legacy: Anthropic requires max_tokens to exceed the thinking budget.
+  return {
+    extra: { thinking: { type: 'enabled', budget_tokens: budget } },
+    minMaxTokens: budget + 1_024,
+  };
+}
+
+/**
+ * A 400 that means "this model wants the OTHER thinking shape" — the trigger to
+ * self-heal by flipping modes. Matches both directions:
+ *   "thinking.type.enabled" is not supported for this model …
+ *   "thinking.type.adaptive" is not supported for this model …
+ */
+export function isThinkingModeMismatch(status: number, body: string): boolean {
+  return status === 400 && /thinking\.type\.(enabled|adaptive)/i.test(body) && /not supported/i.test(body);
+}
+
 
 // Mantle validates headers STRICTLY per API format — sending the OTHER
 // format's project header on a request gets a 400 ("openai-project header
@@ -328,21 +397,43 @@ async function callMantleAnthropic(a: {
   reasoningEffort?: ReasoningEffort;
 }): Promise<RawModelResponse> {
   const key = process.env.BEDROCK_MANTLE_API_KEY!;
-  const budgetTokens = claudeThinkingBudget(a.reasoningEffort);
-  // Anthropic requires max_tokens to exceed the thinking budget.
-  const maxTokens = budgetTokens ? Math.max(a.maxTokens, budgetTokens + 1_024) : a.maxTokens;
 
-  const resp = await postWithRetry(`${mantleBaseUrl()}/anthropic/v1/messages`, mantleAnthropicHeaders(key), JSON.stringify({
-    model: a.modelId,
-    max_tokens: maxTokens,
-    system: cachedSystem(a.system),
-    messages: a.messages,
-    ...(a.tools.length > 0 ? { tools: a.tools } : {}),
-    ...(budgetTokens ? { thinking: { type: 'enabled', budget_tokens: budgetTokens } } : {}),
-  }), 'Bedrock Mantle (Anthropic)');
+  // Send ONE request in the given thinking mode. Returns the response so the
+  // caller can inspect a non-OK status and decide whether to flip modes.
+  const attempt = async (mode: ThinkingMode): Promise<Response> => {
+    const { extra, minMaxTokens } = thinkingRequestFields(mode, a.reasoningEffort);
+    const maxTokens = minMaxTokens ? Math.max(a.maxTokens, minMaxTokens) : a.maxTokens;
+    return postWithRetry(`${mantleBaseUrl()}/anthropic/v1/messages`, mantleAnthropicHeaders(key), JSON.stringify({
+      model: a.modelId,
+      max_tokens: maxTokens,
+      system: cachedSystem(a.system),
+      messages: a.messages,
+      ...(a.tools.length > 0 ? { tools: a.tools } : {}),
+      ...extra,
+    }), 'Bedrock Mantle (Anthropic)');
+  };
+
+  // Modern shape first — our default (Sonnet 5) and every Claude 4.7+ model
+  // requires it. When thinking is off (low/undefined effort) both modes emit
+  // the SAME body (no thinking block), so the mismatch never fires and there is
+  // no second call.
+  let resp = await attempt('adaptive');
   if (!resp.ok) {
     const detail = (await resp.text().catch(() => '')).slice(0, 300);
-    throw new Error(`Bedrock Mantle ${resp.status}: ${detail}`);
+    // Self-heal: an older Claude model (4.5/Haiku 4.5) rejects 'adaptive' and
+    // wants the legacy budget shape. Flip once. (The reverse — a new model
+    // rejecting 'enabled' — is the exact 400 that paused Copetown; sending
+    // 'adaptive' first means we no longer hit it, but the guard is symmetric so
+    // a future model-swap in either direction still recovers.)
+    if (isThinkingModeMismatch(resp.status, detail)) {
+      resp = await attempt('legacy');
+      if (!resp.ok) {
+        const d2 = (await resp.text().catch(() => '')).slice(0, 300);
+        throw new Error(`Bedrock Mantle ${resp.status}: ${d2}`);
+      }
+    } else {
+      throw new Error(`Bedrock Mantle ${resp.status}: ${detail}`);
+    }
   }
   const data = await resp.json() as RawModelResponse;
   data._modelId = a.modelId;
