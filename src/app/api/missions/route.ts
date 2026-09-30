@@ -63,6 +63,9 @@ export async function GET(request: Request) {
         result: missionSteps.result,
         attempts: missionSteps.attempts,
         updatedAt: missionSteps.updatedAt,
+        progressIterations: missionSteps.progressIterations,
+        progressMax: missionSteps.progressMax,
+        progressNote: missionSteps.progressNote,
       })
       .from(missionSteps)
       .where(eq(missionSteps.missionId, m.id))
@@ -74,7 +77,26 @@ export async function GET(request: Request) {
       status: m.status,
       createdAt: m.createdAt,
       updatedAt: m.updatedAt,
-      steps: steps.map(s => ({ ...s, result: s.result ? s.result.slice(0, 600) : null })),
+      steps: steps.map((s) => {
+        // Live sub-step fraction (Phase 48.8) — only meaningful WHILE a step is
+        // running. For any other status the numbers are stale (from the last
+        // time it ran), so surface null and let the UI fall back to the
+        // step-level state. Clamp to <1 so an in-flight step never reads 100%.
+        const live = s.status === 'running' && s.progressMax && s.progressMax > 0
+          ? Math.min(0.99, Math.max(0, (s.progressIterations ?? 0) / s.progressMax))
+          : null;
+        return {
+          id: s.id,
+          position: s.position,
+          title: s.title,
+          status: s.status,
+          result: s.result ? s.result.slice(0, 600) : null,
+          attempts: s.attempts,
+          updatedAt: s.updatedAt,
+          liveFraction: live,
+          progressNote: s.status === 'running' ? s.progressNote : null,
+        };
+      }),
     };
   }));
 

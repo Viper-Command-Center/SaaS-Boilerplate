@@ -11,6 +11,10 @@ type MissionStep = {
   result: string | null;
   attempts: number;
   updatedAt: string;
+  /** 0..0.99 while this step runs (within-step progress); null otherwise. */
+  liveFraction: number | null;
+  /** "Running: <tool>" while active; null otherwise. */
+  progressNote: string | null;
 };
 
 type Mission = {
@@ -80,9 +84,12 @@ export const MissionsPanel = (props: { tenantSlug: string; canControl: boolean }
 
   useEffect(() => {
     reload();
-    const interval = setInterval(reload, POLL_MS);
+    // Poll faster (8s) while any mission is actively running so the live meter
+    // visibly creeps; back off to 20s when everything is idle/done.
+    const anyRunning = missions.some(m => m.status === 'running' || m.status === 'waiting_approval');
+    const interval = setInterval(reload, anyRunning ? 8_000 : POLL_MS);
     return () => clearInterval(interval);
-  }, [reload]);
+  }, [reload, missions]);
 
   const control = async (id: string, action: 'pause' | 'resume' | 'cancel') => {
     if (action === 'cancel' && !window.confirm('Cancel this mission? Remaining steps are skipped and it will not run again. There is no undo.')) {
@@ -148,8 +155,14 @@ export const MissionsPanel = (props: { tenantSlug: string; canControl: boolean }
         {missions.map((m) => {
           const total = m.steps.length;
           const complete = m.steps.filter(s => s.status === 'done' || s.status === 'skipped').length;
-          const pct = total > 0 ? Math.round((complete / total) * 100) : 0;
           const runningStep = m.steps.find(s => s.status === 'running');
+          // Granular meter (Phase 48.8): completed steps each count as 1 whole
+          // step; the currently-running step adds its within-step fraction
+          // (0..0.99) so the bar CREEPS while a long background step works,
+          // instead of only jumping when a whole step finishes (which read as
+          // "stuck"). Falls back to the plain step count when nothing is live.
+          const liveAdd = runningStep?.liveFraction ?? 0;
+          const pct = total > 0 ? Math.min(100, Math.round(((complete + liveAdd) / total) * 100)) : 0;
           const canPause = m.status === 'running' || m.status === 'waiting_approval';
           const canResume = m.status === 'paused';
           const canCancel = m.status !== 'done';
@@ -187,9 +200,13 @@ export const MissionsPanel = (props: { tenantSlug: string; canControl: boolean }
                   {total}
                   {' '}
                   steps
+                  {' · '}
+                  {pct}
+                  %
                 </span>
                 <span>
                   updated
+                  {' '}
                   {agoLabel(m.updatedAt)}
                 </span>
               </div>
@@ -199,6 +216,7 @@ export const MissionsPanel = (props: { tenantSlug: string; canControl: boolean }
                   Running:
                   {' '}
                   {runningStep.title}
+                  {runningStep.progressNote ? ` — ${runningStep.progressNote.replace(/^Running:\s*/, '')}` : ''}
                 </p>
               )}
 

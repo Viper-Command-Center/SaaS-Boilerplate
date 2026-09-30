@@ -799,6 +799,19 @@ export const missionSteps = pgTable(
      * 1/9 steps" was.
      */
     continuations: integer('continuations').notNull().default(0),
+    /**
+     * Live, sub-step progress for the UI meter (Phase 48.8). Steps run in the
+     * BACKGROUND for minutes at a time; a bar that only moves when a whole step
+     * finishes looks frozen and reads as "stuck". The runner writes the current
+     * tool-loop iteration here on every onProgress ping, so the panel can show a
+     * real within-step fraction that advances while the agent works. Nullable:
+     * a step that has never run has no live progress. Reset when the step ends.
+     */
+    progressIterations: integer('progress_iterations'),
+    /** Denominator for the live meter — the iteration budget the run was given. */
+    progressMax: integer('progress_max'),
+    /** Human-readable "what it's doing right now", e.g. the last tool name. */
+    progressNote: text('progress_note'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },

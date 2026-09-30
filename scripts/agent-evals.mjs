@@ -489,6 +489,22 @@ expect('src/libs/divi/gate.ts', 'serializeDiviBlocks(tree.roots)', 'validated ma
 expect('src/libs/divi/blocks.ts', '⟪HERE⟫', 'JSON syntax errors quote the offending spot');
 expect('src/libs/agent/loop.ts', "a.surface !== 'site'", 'no library handoff note on the site surface');
 
+// ── Phase 48.8 — missions that re-did all their prep every tick and never
+// converged (Copetown 4-page migration "taking forever"). Continuations were
+// stateless (history: []) and the only carried state was a 2-4 sentence prose
+// wrap-up, so every tick re-scraped/re-read the source and exhausted before a
+// single write. Plus a LIVE progress meter so a long background step no longer
+// looks frozen. ──────────────────────────────────────────────────────────────
+expect('src/app/api/internal/run-scheduled/route.ts', 'This is a CONTINUATION, not a restart', 'a resumed step must be told to continue from saved work, not restart cold');
+expect('src/app/api/internal/run-scheduled/route.ts', 'Do NOT repeat work that is already done', 'the continuation prompt must forbid re-doing completed extraction/reads — the "never converges" bug');
+expect('src/app/api/internal/run-scheduled/route.ts', 'onProgress:', 'the mission runner must feed the live progress meter from the tool-loop iteration ping');
+expect('src/app/api/internal/run-scheduled/route.ts', 'progressIterations:', 'the runner must persist within-step progress so the UI meter advances mid-step');
+expect('src/models/Schema.ts', 'progress_iterations', 'mission_steps needs the live-progress columns for the meter');
+expect('migrations/meta/_journal.json', '0034_mission_step_live_progress', 'the live-progress migration must be journaled or db:migrate skips it (the 0028/0031-33 landmine)');
+expect('src/app/api/missions/route.ts', 'liveFraction', 'the missions API must expose the within-step live fraction to the panel');
+expect('src/features/agent/MissionsPanel.tsx', 'liveFraction', 'the missions panel meter must include the running step live fraction, not only whole-step counts');
+expect('src/libs/agent/missionTools.ts', 'SEPARATE THE PHASES', 'start_mission must steer the model to phase-separated steps that read saved output instead of re-doing it');
+
 // ── Report ──────────────────────────────────────────────────────────────────
 if (failures.length > 0) {
   console.error(`\n✗ agent-evals: ${failures.length} of ${checks} tripwires FAILED\n`);

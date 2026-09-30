@@ -328,14 +328,27 @@ platform will continue this step on the next run.`;
 
 ${step.instructions}
 
-[system] A previous run of THIS STEP ran out of tool budget. Its closing status:
+[system] A previous run of THIS STEP ran out of tool budget before finishing. This is a CONTINUATION, not a restart. Its closing status was:
 ${(step.result ?? '').slice(0, 3_000)}
 
-Check the current workspace state with your read tools (list_views, list_panels, query_dataset, list_files) before creating anything, then CONTINUE from where it stopped. Do not redo completed work.`
+CONTINUE — do not start over. Rules for a continuation:
+1. FIRST, read what the earlier run already produced instead of re-deriving it: check the file library (list_files / read_file) for any progress/extraction note this mission saved, and check the actual target of this step (e.g. the pages/records/files it is meant to create) to see what already exists. One or two cheap reads to orient — not a full re-scrape.
+2. Do NOT repeat work that is already done. Re-reading source material you already extracted, re-confirming media you already confirmed, or re-fetching a page whose content you already saved is wasted budget and is the main reason a step never finishes. If the prior status says something was extracted/uploaded/built, trust it and verify cheaply rather than redoing it.
+3. Then make real forward progress — the next concrete WRITE this step needs (create/update the page, record, or file). Reaching an actual write is the point of the step; prep alone is not progress.
+4. As you go, append what you produce (extracted content, media URLs, IDs of what you created) to a single library note so the NEXT continuation can read it in one step instead of re-doing your work.`
         : `Step ${step.position + 1}: ${step.title}
 
-${step.instructions}`;
+${step.instructions}
 
+[system] FIRST run of this step. Before heavy read/extraction work, save what you gather to a library note (save_file) as you go, and reach a concrete WRITE — do not spend the whole budget on preparation. If you extract content or collect media URLs/IDs, persist them so a later continuation never has to re-extract.`;
+
+      // Live progress meter (Phase 48.8): the loop pings onProgress at the top
+      // of every iteration. Persist it (throttled) so the missions panel can
+      // show a real within-step fraction that ADVANCES while this background
+      // run works — instead of a bar that only jumps when a whole step ends and
+      // otherwise looks frozen/"stuck". Throttled to ~1 write / 6s so a fast
+      // loop doesn't hammer the DB; fire-and-forget so it never blocks the turn.
+      let lastProgressWrite = 0;
       const run = await runToolLoop({
         tenantId: tenant.id,
         conversationId: '',
@@ -344,6 +357,23 @@ ${step.instructions}`;
         userText,
         toolset,
         onDelta: () => {},
+        onProgress: (iteration, lastTool) => {
+          const now = Date.now();
+          if (now - lastProgressWrite < 6_000) {
+            return;
+          }
+          lastProgressWrite = now;
+          void db
+            .update(missionSteps)
+            .set({
+              progressIterations: iteration,
+              progressMax: MISSION_MAX_ITERATIONS,
+              progressNote: lastTool ? `Running: ${lastTool}` : 'Working…',
+              updatedAt: new Date(),
+            })
+            .where(eq(missionSteps.id, step.id))
+            .catch(() => {});
+        },
         maxIterations: MISSION_MAX_ITERATIONS,
         wallClockMs: MISSION_WALL_CLOCK_MS,
       });

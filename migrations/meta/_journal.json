@@ -239,6 +239,13 @@
       "when": 1790800000000,
       "tag": "0033_duda_migration_procedure_playbook",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1790900000000,
+      "tag": "0034_mission_step_live_progress",
+      "breakpoints": true
     }
   ]
 }
