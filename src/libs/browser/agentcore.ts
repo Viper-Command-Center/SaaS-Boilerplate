@@ -621,6 +621,14 @@ export async function renderPage(a: {
   url: string;
   waitMs?: number;
   selectors?: string[];
+  /**
+   * 'text' (default) returns normalised plain text — good for "what does it
+   * say". 'html' returns the raw rendered markup (outerHTML) so structure —
+   * heading levels, image placement, links, the order of a text block sitting
+   * between two images — survives. The migration path wants 'html' so the
+   * Duda→Divi rebuild can reconstruct layout, not just words.
+   */
+  mode?: 'text' | 'html';
 }): Promise<PageResult> {
   const started = Date.now();
   const session = await startSession(300);
@@ -636,6 +644,35 @@ export async function renderPage(a: {
     // alternative (waiting on lifecycle events) is far more code for little gain.
     await new Promise(r => setTimeout(r, Math.min(Math.max(a.waitMs ?? 3000, 500), 15_000)));
 
+    // Scroll the whole page before reading. Duda (and most page builders) gate
+    // sections behind scroll-reveal animations and lazy-load images/blocks only
+    // when they enter the viewport — a load-wait-read pass never triggers any of
+    // it, so visible mid-page content (Copetown's "About Us / Our Mission / Who
+    // We Are" block, flanked by two images) came back MISSING even though a user
+    // sees it. This drives the page top→bottom in viewport-sized steps to fire
+    // every IntersectionObserver / lazy-loader, waits briefly for injected
+    // content to settle, then returns to the top. Best-effort: a failure here
+    // must not lose the read, so it is caught and ignored.
+    try {
+      await cdp.send('Runtime.evaluate', {
+        awaitPromise: true,
+        expression: `(async function(){
+          var step = Math.max(200, window.innerHeight || 600);
+          var last = -1;
+          for (var y = 0; y < (document.body ? document.body.scrollHeight : 0) && y !== last; y += step) {
+            last = y;
+            window.scrollTo(0, y);
+            await new Promise(function(r){ setTimeout(r, 250); });
+          }
+          window.scrollTo(0, document.body ? document.body.scrollHeight : 0);
+          await new Promise(function(r){ setTimeout(r, 500); });
+          window.scrollTo(0, 0);
+        })()`,
+      }, pageSession);
+    } catch {
+      // Scrolling is an enhancement; if it fails, still read what rendered.
+    }
+
     // Plain-text mode: prefer textContent over innerText. innerText returns
     // only what is VISUALLY rendered, so it silently DROPS collapsed/hidden
     // content — Duda accordions (Copetown's 200-year history), tabs, off-canvas
@@ -643,9 +680,39 @@ export async function renderPage(a: {
     // was right there in the DOM (2026-09-30). textContent walks the full node
     // tree regardless of display, so nothing is missed; we normalise runaway
     // whitespace since textContent keeps layout newlines innerText would fold.
-    const expression = a.selectors?.length
+    //
+    // HTML mode: return the raw rendered markup instead. Plain text flattens
+    // structure — a paragraph sitting between two images collapses to a bare
+    // string with no hint of the images or their order, which is exactly the
+    // layout a Duda→Divi rebuild must preserve. outerHTML keeps heading levels,
+    // <img src>, links and block order. It is post-render (JS has run, scroll
+    // reveals fired), so it is the DOM as the visitor sees it, not the empty
+    // shell a plain fetch returns.
+    const expression = a.mode === 'html'
+      ? 'document.documentElement ? document.documentElement.outerHTML : ""'
+      : a.selectors?.length
       ? `JSON.stringify(${JSON.stringify(a.selectors)}.map(function(s){
-           return { selector: s, matches: Array.from(document.querySelectorAll(s)).slice(0, 50).map(function(e){ return (e.textContent || e.innerText || '').trim(); }) };
+           return { selector: s, matches: Array.from(document.querySelectorAll(s)).slice(0, 50).map(function(e){
+             var text = (e.textContent || e.innerText || '').trim();
+             // Also surface media/link URLs. An <img> has no text, so scraping
+             // "img" used to return empty strings — image src URLs (the two
+             // photos flanking Copetown's About text) were unreachable. Include
+             // resolved src/href/alt when the element carries them, so a scrape
+             // for images/links actually yields their URLs.
+             var out = { text: text };
+             var src = e.currentSrc || e.src || (e.getAttribute && e.getAttribute('src')) || '';
+             var href = (e.href && String(e.href)) || (e.getAttribute && e.getAttribute('href')) || '';
+             var alt = (e.getAttribute && e.getAttribute('alt')) || '';
+             var bg = '';
+             try { var b = getComputedStyle(e).backgroundImage; if (b && b !== 'none') { bg = b; } } catch (err) {}
+             if (src) { out.src = String(src); }
+             if (href) { out.href = String(href); }
+             if (alt) { out.alt = String(alt); }
+             if (bg) { out.backgroundImage = bg; }
+             // Back-compat: when the element is plain text with no URL, collapse
+             // to the bare string the previous shape returned.
+             return (out.src || out.href || out.alt || out.backgroundImage) ? out : text;
+           }) };
          }))`
       : 'document.body ? ((document.body.textContent || document.body.innerText || "").replace(/[ \\t]+/g, " ").replace(/\\n[ \\t\\n]*\\n[ \\t\\n]*/g, "\\n\\n").trim()) : ""';
 
@@ -662,7 +729,10 @@ export async function renderPage(a: {
     return {
       url: String(urlResult?.value ?? a.url),
       title: String(titleResult?.value ?? ''),
-      text: String(textResult?.value ?? '').slice(0, 40_000),
+      // Raw HTML is far bulkier than plain text, so give it a larger cap; text
+      // stays at 40k. Both are still bounded so a giant page can't blow up the
+      // tool-result payload sent back to the model.
+      text: String(textResult?.value ?? '').slice(0, a.mode === 'html' ? 200_000 : 40_000),
       sessionSeconds: Math.max(1, Math.round((Date.now() - started) / 1000)),
     };
   } finally {

@@ -32,19 +32,20 @@ export const agentcoreBrowserProvider: BuiltinProvider = {
   tools: [
     {
       name: 'browse_page',
-      description: 'Load a page in a REAL browser (JavaScript executed) and return its full text content — including text inside collapsed accordions, tabs and hidden panels (reads the DOM, not only what is visually on screen). Use this when fetch_url comes back empty or looks like a shell — i.e. the site is client-rendered. Slower and costs money, so prefer fetch_url first.',
+      description: 'Load a page in a REAL browser (JavaScript executed), scroll it top-to-bottom to trigger lazy-loaded and scroll-revealed sections, and return its content — including text inside collapsed accordions, tabs and hidden panels (reads the DOM, not only what is visually on screen). Default returns clean text ("what does it say"). Pass format:"html" to get the raw rendered markup instead, which preserves structure — heading levels, image src/placement, links, and the order of a text block sitting between two images — the right choice when you need to faithfully rebuild a page (e.g. a Duda→Divi migration), not just read it. Use this when fetch_url comes back empty or looks like a shell — i.e. the site is client-rendered. Slower and costs money, so prefer fetch_url first.',
       input_schema: {
         type: 'object',
         properties: {
           url: { type: 'string' },
           wait_ms: { type: 'number', description: 'How long to let the page render before reading it (default 3000, max 15000).' },
+          format: { type: 'string', enum: ['text', 'html'], description: 'text (default) = clean readable text. html = raw rendered markup, preserving structure/images/links for faithful rebuilds.' },
         },
         required: ['url'],
       },
     },
     {
       name: 'scrape_page',
-      description: 'Extract structured data from a JavaScript-rendered page by CSS selector, using a real browser. Returns the matched elements\' text. Use for price lists, product grids, dashboards.',
+      description: 'Extract structured data from a JavaScript-rendered page by CSS selector, using a real browser. Returns each matched element\'s text AND, when present, its resolved image src / link href / alt / CSS background-image URL — so scraping "img" gives you the picture URLs, not empty strings. Use for price lists, product grids, dashboards, and pulling the real image URLs off a page. The page is scrolled fully before reading so lazy-loaded and scroll-revealed content is included.',
       input_schema: {
         type: 'object',
         properties: {
@@ -94,11 +95,13 @@ export const agentcoreBrowserProvider: BuiltinProvider = {
     }
 
     if (tool === 'browse_page') {
-      const page = await renderPage({ url, waitMs: Number(args.wait_ms) || undefined });
+      const mode = String(args.format ?? 'text') === 'html' ? 'html' as const : 'text' as const;
+      const page = await renderPage({ url, waitMs: Number(args.wait_ms) || undefined, mode });
       return {
         output: JSON.stringify({
           url: page.url,
           title: page.title,
+          format: mode,
           content: page.text,
           renderedWith: 'AgentCore browser (JavaScript executed)',
         }),
