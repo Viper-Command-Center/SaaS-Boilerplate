@@ -844,7 +844,20 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
                   await auditRefusal(tenantId, conn.name, tool.name, guarded.refuse);
                   return guarded.refuse;
                 }
-                const result = await client.callTool(tool.name, guarded.args);
+                // 🔴 Re-acquire on every call rather than closing over the
+                // `client` captured when this toolset was built. acquireStdioClient
+                // already checks liveness and respawns a dead pooled process —
+                // but only if it is actually called again. A closure that reuses
+                // one captured client bypasses that respawn entirely: once the
+                // spawned process dies mid-mission, every later call in that same
+                // mission hit the dead object's own guard and threw a bare
+                // "server is not running" (stdioClient.ts) with no detail, on
+                // every tool including read-only ones — because no one was ever
+                // asking the pool for a fresh client again. Re-acquiring here is
+                // a cheap map lookup when the process is alive, and a real
+                // respawn when it is not.
+                const liveClient = acquireStdioClient(conn.id, spec.resolveEntry(), env, conn.name);
+                const result = await liveClient.callTool(tool.name, guarded.args);
                 const raw = flattenMcpContent(result.content);
                 if (result.isError) {
                   // Errors stay verbatim and short — never spill one to a file the
@@ -856,7 +869,7 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
                 let after: string | undefined;
                 if (spec.afterCall) {
                   after = await spec
-                    .afterCall(tool.name, guarded.args, raw, async (n, a) => flattenMcpContent((await client.callTool(n, a)).content), guardCtx)
+                    .afterCall(tool.name, guarded.args, raw, async (n, a) => flattenMcpContent((await liveClient.callTool(n, a)).content), guardCtx)
                     .catch((e: unknown) => `[render check] skipped: ${e instanceof Error ? e.message.slice(0, 120) : 'error'}`);
                 }
                 const text = await capToolOutput({
