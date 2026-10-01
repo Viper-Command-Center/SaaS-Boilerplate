@@ -108,7 +108,7 @@ const tools: BuiltinTool[] = [
   },
   {
     name: 'wp_rest',
-    description: 'Call the site\'s REST API. route is relative to /wp-json — e.g. "/wp/v2/pages?per_page=20&search=about", "/wp/v2/posts/12", "/artivio/v1/site", "/wp/v2/media". GET is a read; POST/PUT/PATCH/DELETE are writes and follow the site\'s REST policy. body is JSON. Prefer the typed wp_content_* tools for posts and pages; use this for taxonomies, menus, users, plugin routes, and anything they do not cover.',
+    description: 'Call the site\'s REST API. The ONLY required argument is "route" (not path/query/url) — relative to /wp-json, e.g. "/wp/v2/pages?per_page=20&search=about", "/wp/v2/posts/12", "/artivio/v1/site", "/wp/v2/media?per_page=20&_fields=id,source_url". GET is a read; POST/PUT/PATCH/DELETE are writes and follow the site\'s REST policy. body is JSON. Always scope list reads with per_page and _fields so the result does not flood context. Prefer the typed wp_content_* tools for posts and pages; use this for taxonomies, menus, users, plugin routes, and anything they do not cover.',
     input_schema: {
       type: 'object',
       properties: {
@@ -469,6 +469,27 @@ function collection(args: Record<string, unknown>): 'posts' | 'pages' {
   return String(args.type ?? 'post').toLowerCase() === 'page' ? 'pages' : 'posts';
 }
 
+/**
+ * Validate the wp_rest `route` BEFORE it reaches the server. An empty route
+ * resolves to the bare /wp-json index — a 300–500 KB REST discovery document
+ * that dumps into context and burns a large slice of the turn for nothing. The
+ * usual cause is the wrong parameter name (path/query/endpoint/url instead of
+ * route); name the right one so the model self-corrects in the SAME turn
+ * instead of refetching the index. Returns the trimmed route, or throws the
+ * refusal the model should read. (Copetown build-3, 2026-10-01.)
+ */
+export function requireRestRoute(args: Record<string, unknown>): string {
+  const route = String(args.route ?? '').trim();
+  if (route) {
+    return route;
+  }
+  const misnamed = ['path', 'query', 'endpoint', 'url', 'uri'].find(k => args[k] !== undefined && String(args[k]).trim());
+  const hint = misnamed
+    ? ` You passed "${misnamed}" — this tool wants "route" (e.g. route: "/wp/v2/media?per_page=20&_fields=id,source_url").`
+    : ' Pass route, e.g. route: "/wp/v2/media?per_page=20&_fields=id,source_url".';
+  throw new Error(`WordPress Sites: wp_rest needs a non-empty "route" relative to /wp-json.${hint} An empty route would fetch the entire REST discovery index — refused so it does not flood the context.`);
+}
+
 // ─── Execution ───────────────────────────────────────────────────────────────
 
 async function execute(tool: string, args: Record<string, unknown>, tenantId: string, site: ResolvedSite | null): Promise<string> {
@@ -505,9 +526,12 @@ async function execute(tool: string, args: Record<string, unknown>, tenantId: st
       if (!['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD'].includes(method)) {
         throw new Error(`WordPress Sites: method ${method} is not allowed.`);
       }
-      const r = await restRequest(site, method, String(args.route ?? ''), args.body);
+      // Guard an empty route BEFORE it reaches the server (see requireRestRoute):
+      // an empty route resolves to the bare /wp-json index and floods the turn.
+      const route = requireRestRoute(args);
+      const r = await restRequest(site, method, route, args.body);
       if (!r.ok) {
-        throw new Error(explainRestFailure(site, r, String(args.route ?? '')));
+        throw new Error(explainRestFailure(site, r, route));
       }
       const text = typeof r.body === 'string' ? r.body : JSON.stringify(r.body);
       return text.length > MAX_BODY ? `${text.slice(0, MAX_BODY)}\n…[truncated at ${MAX_BODY} chars — narrow the query with per_page/_fields]` : text;

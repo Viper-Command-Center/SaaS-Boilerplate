@@ -5,7 +5,7 @@
 
 import JSZip from 'jszip';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mcpArgs, normaliseArgv, normaliseWpDate, wpSitesProvider } from '@/libs/plugins/wpSites';
+import { mcpArgs, normaliseArgv, normaliseWpDate, requireRestRoute, wpSitesProvider } from '@/libs/plugins/wpSites';
 import { buildAuthHeader, LABEL_RE, maskSecret, normaliseLabel, normaliseSecret, normaliseSiteUrl } from '@/libs/wpsites/auth';
 import { MAX_REST_BODY, resolveRoute, restRequest } from '@/libs/wpsites/channels';
 import { compareVersions, detectBuilder, findMcpRoute, httpsUpgradeOf, mcpMissingHint } from '@/libs/wpsites/discovery';
@@ -136,6 +136,23 @@ describe('routes', () => {
   });
 });
 
+describe('requireRestRoute (Copetown build-3 — empty route no longer dumps the /wp-json index)', () => {
+  it('returns the trimmed route when present', () => {
+    expect(requireRestRoute({ route: '/wp/v2/media?per_page=20' })).toBe('/wp/v2/media?per_page=20');
+    expect(requireRestRoute({ route: '  /wp/v2/posts/12  ' })).toBe('/wp/v2/posts/12');
+  });
+
+  it('refuses a missing or blank route instead of fetching the whole REST index', () => {
+    expect(() => requireRestRoute({})).toThrow(/non-empty "route"/);
+    expect(() => requireRestRoute({ route: '   ' })).toThrow(/REST discovery index/);
+  });
+
+  it('names the wrong parameter the model actually sent (the exact mistake that burned the turn twice)', () => {
+    expect(() => requireRestRoute({ path: '/wp/v2/media' })).toThrow(/You passed "path"/);
+    expect(() => requireRestRoute({ query: 'per_page=20' })).toThrow(/You passed "query"/);
+    expect(() => requireRestRoute({ endpoint: '/wp/v2/media', url: 'x' })).toThrow(/You passed "endpoint"/);
+  });
+});
 describe('restRequest', () => {
   afterEach(() => vi.unstubAllGlobals());
 
