@@ -17,6 +17,7 @@
 import type { ReferenceSpec } from '@/libs/mcp/references';
 import { createRequire } from 'node:module';
 import { diviWriteGate } from '@/libs/divi/gate';
+import { DIVI_BUILD_GUIDANCE } from '@/libs/divi/guidance';
 import { diviRenderCheck } from '@/libs/divi/renderCheck';
 import { loadReferenceLibrary } from '@/libs/mcp/references';
 
@@ -180,7 +181,7 @@ export function diviopsGuard(toolName: string, args: Record<string, unknown>, ct
   const gateCtx = {
     ...ctx,
     lookupModule: (moduleName: string): string | null => {
-      const spec = STDIO_SERVERS.diviops?.references;
+      const spec = getStdioServer('diviops')?.references;
       if (!spec) {
         return null;
       }
@@ -209,13 +210,7 @@ const DIVIOPS_GUIDANCE_HEAD = `<divi_authoring>
 DiviOps (Divi 5 authoring) — these rules come from the vendor's divi-5-builder skill and from reading the plugin source; violating them fails SILENTLY (the write succeeds and the page renders wrong or blank). Follow the tagged sections below exactly.
 
 <operating_procedure>
-OPERATING PROCEDURE — the ONLY workflow that works. Do these in order, EVERY time, before writing any Divi layout. Skipping a step wastes your turns on refusals:
-  1. TEMPLATE FIRST. diviops_template_list → diviops_template_get for the closest match (hero, features, cards, pricing, CTA, etc.). Editing a vendor-verified template is the default path; composing a section from scratch is the EXCEPTION, only when nothing fits.
-  2. READ THE MAP. For every module type you will write and have not already read THIS session, call diviops_reference {module:"Heading"} — one call per module. It returns the VB-verified element map + a minimal snippet. The paths you would guess are usually wrong; the gate refuses unknown paths before they reach the site.
-  3. BUILD ONLY FROM DOCUMENTED PATHS. When starting from a template, replace only the {{variables}} / text; do not restructure it. When composing, use only paths from the maps you just read.
-  4. VALIDATE. diviops_validate_blocks on the markup before any write.
-  5. WRITE, THEN VERIFY. Write (section_append / section_replace / page_update_content), then read the [render check] line appended to the result — that is what the site actually shows. Report THAT, never a guess.
-Do NOT compose JSON and "try it to see if it passes" — that burns turns and the gate will refuse it. Read first, then write once.
+Use native reusable patterns and a compact page plan for agency builds. For custom edits, consult unfamiliar paths once, make the smallest change, and let automatic validation run. References and separate validate_blocks calls are not required for already-validated pattern output. Verify at a page/batch checkpoint; structure evidence is not visual approval.
 </operating_procedure>
 
 <edit_scope>
@@ -238,11 +233,10 @@ FIVE JSON SHAPES THAT SILENTLY BREAK (the gate catches these — get them right 
 <rules>
 `;
 const DIVIOPS_GUIDANCE_TAIL = `- BUILDER POLICY (not negotiable): every WordPress build and every Duda→WordPress migration on this platform is Divi 5. Kadence, Gutenberg-blocks-as-a-builder, Oxygen and Elementor are RETIRED — do not propose, "fall back to", or ask the operator to choose one, even if a build site once used them or a stale note mentions them. If a DiviOps connection's tools are missing this turn, that is NOT a reason to switch builders: it is almost always the connection NAME being too long (see the [system] unavailability note, which tells you to rename it, e.g. "diviops-build-1") — say that and stop; never present another builder as an option.
-- NEVER GUESS. The platform GATES every Divi write (page_create, page_update_content, section_append/replace, library_save, tb_layout_update, canvas_*, module_update): the markup is validated against the vendor's module maps — every element, decoration group, breakpoint, innerContent shape, spacing object and media URL — and a write with any unknown attribute path is REFUSED before it reaches the site, with the exact paths named. It is also refused if this conversation has not read the map for every module type in it. So the only workflow that works: (1) diviops_reference {module:"Heading"} — one call per module type you will use, read the element map and the minimal snippet; (2) build the markup ONLY from paths in those maps; (3) diviops_validate_blocks; (4) write; (5) read the [render check] line appended to the write result — that is what the site actually shows. If you are unsure of a path, look it up (module map, {query:"…"}, or diviops_schema_get_module) — never write a plausible path and hope, and never fall back to a Text/Code module with inline HTML because the real module's format is unfamiliar.
+- NEVER GUESS unfamiliar attribute paths. Automatic markup validation catches known errors before dispatch. Use diviops_reference or the live schema for custom paths; never use a Code/Text HTML layout as a substitute for native modules.
 - Media: every image/video URL in Divi markup must be on THIS site (upload with wp_upload_media / wp_media_upload first, use the returned site URL). Workspace-library URLs (s.artivio.ai, /api/files/…) and hot-links to other hosts are refused by the gate.
-- Drafts have no public URL: fetch_url on an unpublished page returns the 404 page and says so. Verify drafts with diviops_render_preview {page_id} (the gate runs it for you after each write) and give the owner the wp-admin preview link. Never describe a page as rendered or published on the strength of anything but a render check or a browser screenshot.
-- Workflow: diviops_page_get_layout / diviops_section_get to read → build block markup → diviops_validate_blocks on the markup → write (section_append / section_replace / page_update_content) → diviops_render_preview to confirm. Never skip validate_blocks before a write; never declare a page fixed without render_preview or a browser check.
-- BEFORE composing any section by hand, call diviops_template_list (and diviops_template_get for a match) — hero, features, cards, CTA and other common shapes ship as vendor-verified starter sections. Start from one and edit it; only build module JSON from scratch when nothing there fits.
+- Drafts have no public URL. diviops_render_preview confirms HTML structure, not visual quality. Give the owner the wp-admin preview; use authenticated browser inspection when available.
+- Reuse already-discovered patterns/templates across the job. Do not rediscover templates for every section. Automatic validation runs on writes; render once after a substantial batch.
 - THE FAILURE MODE THIS GUIDANCE EXISTS TO PREVENT: never reach for a Code module, or any "insert raw HTML" content mode, as a stand-in for a native module you don't know how to build. Prior page-builder work on this platform — before agents had this guidance — filled pages with walls of raw HTML exactly when the agent didn't know the real module set. Divi 5 has a native module for nearly every ordinary shape (heading, text, button, blurb, icon list, pricing table, testimonial, image, gallery, accordion, tabs, form, counter…) — check diviops_template_list and an existing section on the site before writing a Code module. Legitimate Code-module use is narrow: a genuine third-party embed script, or a snippet the human supplied verbatim — never headings, text, buttons, or anything else with a dedicated module. Before calling a page done, re-check its content for a wp:divi/code block you can't justify that way.
 - Every block needs "builderVersion" in its attrs. Leaf modules are self-closing (<!-- wp:divi/text {...} /-->). Section, Row, Column and Group containers need module.decoration.layout.desktop.value.display set. Always use section → row → column → module nesting; wrapperless modules lose styling.
 - Write attrs as PLAIN JSON with ordinary HTML strings ("<p>Hello</p>") — the platform re-serialises every block with WordPress's escaping (\\u003c…) before the write, so do NOT hand-escape; hand-escaping is what produced unparseable JSON. A JSON syntax error is reported with the exact spot quoted (⟪HERE⟫) — fix that spot, don't rewrite the whole page. Button content is an OBJECT at button.innerContent.desktop.value {text, linkUrl}. Blurb title is an OBJECT {text}. Heading level lives at title.decoration.font.font.desktop.value.headingLevel. Hover styles are desktop.hover, a sibling of desktop.value. Don't guess icon codes — use diviops_meta_find_icon.
@@ -258,7 +252,7 @@ const DIVIOPS_GUIDANCE_TAIL = `- BUILDER POLICY (not negotiable): every WordPres
 </divi_authoring>`;
 
 /** Head (operating procedure + JSON gotchas) followed by the detailed rules. */
-const DIVIOPS_GUIDANCE = DIVIOPS_GUIDANCE_HEAD + DIVIOPS_GUIDANCE_TAIL;
+const DIVIOPS_GUIDANCE = DIVIOPS_GUIDANCE_HEAD + DIVIOPS_GUIDANCE_TAIL + DIVI_BUILD_GUIDANCE;
 
 // Resolve from the APP's node_modules at runtime (not from whatever module
 // graph the bundler built) — Next.js never needs to know these packages exist.

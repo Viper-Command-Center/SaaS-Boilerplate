@@ -18,6 +18,7 @@
 
 import { Buffer } from 'node:buffer';
 import WebSocket from 'ws';
+import { assertPublicUrl } from '@/libs/agent/webTools';
 import { awsCreds, awsRegion, signRequest } from '@/libs/aws/sigv4';
 
 const SERVICE = 'bedrock-agentcore';
@@ -239,7 +240,7 @@ export type PageResult = {
 };
 
 export type LayoutIssue = {
-  type: 'horizontal-overflow' | 'widow' | 'text-overflow' | 'tiny-text';
+  type: 'horizontal-overflow' | 'widow' | 'text-overflow' | 'tiny-text' | 'broken-image' | 'inspection-unavailable';
   tag?: string;
   text?: string;
   detail: string;
@@ -263,6 +264,7 @@ export type LayoutResult = {
   title: string;
   viewports: ViewportReport[];
   sessionSeconds: number;
+  screenshots?: Array<{ width: number; base64: string }>;
 };
 
 export const DEFAULT_LAYOUT_SELECTORS = [
@@ -271,7 +273,11 @@ export const DEFAULT_LAYOUT_SELECTORS = [
   'h3',
   '.elementor-heading-title',
   '.elementor-button-text',
+  '.et_pb_button',
 ];
+
+/** Browser DOM measurement; exported so broken-image detection can be tested offline. */
+export const IMAGE_CHECK_SCRIPT = `JSON.stringify(Array.from(document.images).filter(i => i.getClientRects().length && (!i.complete || i.naturalWidth === 0)).slice(0,20).map(i => ({type:'broken-image', tag:'img', detail:'Image did not load: '+(i.currentSrc || i.src)})))`;
 
 /**
  * The in-page measurement pass.
@@ -405,7 +411,9 @@ export async function inspectLayout(a: {
   selectors?: string[];
   widths?: number[];
   waitMs?: number;
+  screenshots?: boolean;
 }): Promise<LayoutResult> {
+  assertPublicUrl(a.url);
   const started = Date.now();
   const selectors = (a.selectors?.length ? a.selectors : DEFAULT_LAYOUT_SELECTORS).slice(0, 10);
   const widths = (a.widths?.length ? a.widths : [1440, 768, 390])
@@ -429,6 +437,7 @@ export async function inspectLayout(a: {
 
     const expression = LAYOUT_SCRIPT.replace('SELECTORS', JSON.stringify(selectors));
     const viewports: ViewportReport[] = [];
+    const screenshots: Array<{ width: number; base64: string }> = [];
 
     for (const width of widths) {
       await cdp.send('Emulation.setDeviceMetricsOverride', {
@@ -441,6 +450,13 @@ export async function inspectLayout(a: {
       // Reflow plus any width-driven JS needs a beat to settle. Responsive CSS
       // alone is instant; carousels and sticky headers are not.
       await new Promise(r => setTimeout(r, 600));
+      // Trigger lazy images, then wait for decoding, with a bounded deadline.
+      await cdp.send('Runtime.evaluate', { expression: `(async () => {
+        const height = Math.min(document.documentElement.scrollHeight, 30000);
+        for (let y = 0; y < height; y += 800) { window.scrollTo(0,y); await new Promise(r => setTimeout(r,40)); }
+        window.scrollTo(0,0);
+        await Promise.race([Promise.all(Array.from(document.images).map(i => i.decode().catch(() => {}))), new Promise(r => setTimeout(r,4000))]);
+      })()`, awaitPromise: true }, pageSession);
 
       const { result } = await cdp.send(
         'Runtime.evaluate',
@@ -449,16 +465,31 @@ export async function inspectLayout(a: {
       ) as { result: { value?: string } };
 
       let parsed: { issues?: LayoutIssue[]; elements?: ViewportReport['elements'] } = {};
+      let measured = false;
       try {
         parsed = JSON.parse(String(result?.value ?? '{}')) as typeof parsed;
+        measured = Array.isArray(parsed.issues) && Array.isArray(parsed.elements);
       } catch {
         // A page that breaks the measurement script must not break the whole
         // report — the other widths are still worth having.
       }
+      const imageResult = await cdp.send('Runtime.evaluate', { expression: IMAGE_CHECK_SCRIPT, returnByValue: true }, pageSession) as { result?: { value?: string } };
+      const imageIssues = JSON.parse(imageResult.result?.value ?? '[]') as LayoutIssue[];
+      if (!measured || !imageResult.result?.value) {
+        imageIssues.push({ type: 'inspection-unavailable', detail: 'Layout measurement returned no data; not a passing check.' });
+      }
+      const identity = await cdp.send('Runtime.evaluate', { expression: `Boolean(document.querySelector('#loginform') || /page not found|404 not found/i.test(document.title))`, returnByValue: true }, pageSession) as { result?: { value?: boolean } };
+      if (identity.result?.value) {
+        imageIssues.push({ type: 'inspection-unavailable', detail: 'A login/not-found page was inspected, not the requested draft. Do not publish; use an authenticated preview.' });
+      }
+      if (a.screenshots) {
+        const shot = await cdp.send('Page.captureScreenshot', { format: 'jpeg', quality: 65, captureBeyondViewport: true }, pageSession) as { data: string };
+        screenshots.push({ width, base64: shot.data });
+      }
 
       viewports.push({
         width,
-        issues: parsed.issues ?? [],
+        issues: [...(parsed.issues ?? []), ...imageIssues],
         elements: parsed.elements ?? [],
       });
     }
@@ -468,6 +499,7 @@ export async function inspectLayout(a: {
       title: String(titleResult?.value ?? ''),
       viewports,
       sessionSeconds: Math.max(1, Math.round((Date.now() - started) / 1000)),
+      screenshots,
     };
   } finally {
     cdp?.close();
@@ -691,7 +723,7 @@ export async function renderPage(a: {
     const expression = a.mode === 'html'
       ? 'document.documentElement ? document.documentElement.outerHTML : ""'
       : a.selectors?.length
-      ? `JSON.stringify(${JSON.stringify(a.selectors)}.map(function(s){
+        ? `JSON.stringify(${JSON.stringify(a.selectors)}.map(function(s){
            return { selector: s, matches: Array.from(document.querySelectorAll(s)).slice(0, 50).map(function(e){
              var text = (e.textContent || e.innerText || '').trim();
              // Also surface media/link URLs. An <img> has no text, so scraping
@@ -714,7 +746,7 @@ export async function renderPage(a: {
              return (out.src || out.href || out.alt || out.backgroundImage) ? out : text;
            }) };
          }))`
-      : 'document.body ? ((document.body.textContent || document.body.innerText || "").replace(/[ \\t]+/g, " ").replace(/\\n[ \\t\\n]*\\n[ \\t\\n]*/g, "\\n\\n").trim()) : ""';
+        : 'document.body ? ((document.body.textContent || document.body.innerText || "").replace(/[ \\t]+/g, " ").replace(/\\n[ \\t\\n]*\\n[ \\t\\n]*/g, "\\n\\n").trim()) : ""';
 
     const [{ result: textResult }, { result: titleResult }, { result: urlResult }] = await Promise.all([
       cdp.send('Runtime.evaluate', { expression, returnByValue: true }, pageSession),

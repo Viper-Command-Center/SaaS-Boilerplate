@@ -77,7 +77,7 @@ export function fabricationNudge(names: string[]): string {
  */
 const COMPLETION_CLAIM_RE = /\b(?:100%\s*complete|migration\s+complete|fully\s+complete|all\s+(?:\d+\s+)?pages?\s+(?:are\s+)?(?:live|built|complete|published)|everything\s+is\s+(?:done|complete|live)|site[- ]wide\s+verification\s+complete|0\s+(?:layout\s+)?defects|ready\s+for\s+review|successfully\s+(?:built|migrated|created|deployed|published|completed)|(?:build|site|page)\s+is\s+(?:now\s+)?(?:complete|done|live))\b/i;
 /** Tool-name fragments that count as real verification (a read-back of state). */
-const VERIFY_TOOL_RE = /(?:render[_-]?preview|page[_-]?get|page[_-]?list|get[_-]?layout|section[_-]?get|validate[_-]?blocks|migration[_-]?read|migration[_-]?list|render[_-]?check|content[_-]?get|wp[_-]?rest|fetch[_-]?url)/i;
+const VERIFY_TOOL_RE = /render[_-]?preview|page[_-]?get|page[_-]?list|get[_-]?layout|section[_-]?get|validate[_-]?blocks|migration[_-]?read|migration[_-]?list|render[_-]?check|content[_-]?get|wp[_-]?rest|fetch[_-]?url|divi[_-]build[_-]draft|divi[_-]verify[_-]draft/i;
 
 /**
  * True when `text` makes a completion/verification claim that NO verification
@@ -114,7 +114,7 @@ export function detectUnverifiedCompletion(
  * error it hit, or an explicit "not completed / could not". When the text says
  * the work didn't happen, the step must be treated as failed, not done.
  */
-const SELF_REPORTED_FAILURE_RE = /\b(?:not\s+(?:completed|finished|done|built|created|possible)|could\s+not\s+(?:complete|finish|build|create|be\s+(?:completed|done))|couldn['’]t\s+(?:complete|finish|build|create)|unable\s+to\s+(?:complete|finish|build|create|proceed)|(?:server|connection|service|mcp|diviops|tool)\s+(?:is\s+)?(?:not\s+(?:running|responding|available|reachable)|down|unavailable|unreachable|stopped\s+responding)|platform\s+error|not\s+something\s+(?:fixable|i\s+can\s+fix)|no\s+(?:pages?|content)\s+(?:were|was)\s+(?:created|built|written)|nothing\s+(?:was|has\s+been)\s+(?:built|created|written|persisted)|dry\s+run|escalat(?:e|ing|ed)\b|report_issue)\b/i;
+const SELF_REPORTED_FAILURE_RE = /\b(?:not\s+(?:completed|finished|done|built|created|possible)|could\s+not\s+(?:complete|finish|build|create|be\s+(?:completed|done))|couldn['’]t\s+(?:complete|finish|build|create)|unable\s+to\s+(?:complete|finish|build|create|proceed)|(?:server|connection|service|mcp|diviops|tool)\s+(?:is\s+)?(?:not\s+(?:running|responding|available|reachable)|down|unavailable|unreachable|stopped\s+responding)|platform\s+error|not\s+something\s+(?:fixable|i\s+can\s+fix)|no\s+(?:pages?|content)\s+(?:were|was)\s+(?:created|built|written)|nothing\s+(?:was|has\s+been)\s+(?:built|created|written|persisted)|dry\s+run|escalat(?:e|ing|ed)|report_issue)\b/i;
 
 /**
  * True when a step's own final summary admits the work did NOT complete (an
@@ -134,7 +134,7 @@ export function detectSelfReportedFailure(stepResultText: string): string | null
  * (which is read-back only): a mutating write here is also proof the step
  * actually did something rather than only narrating.
  */
-const PRODUCTIVE_TOOL_RE = /(?:create|update|append|insert|replace|write|upload|save|delete|trash|move|build|render|preview|page[_-]?get|page[_-]?list|get[_-]?layout|validate|migration[_-]?read|scrape|browse|wp[_-]?rest|wp[_-]?cli|content[_-]?get|fetch[_-]?url)/i;
+const PRODUCTIVE_TOOL_RE = /create|update|append|insert|replace|write|upload|save|delete|trash|move|build|render|preview|page[_-]?get|page[_-]?list|get[_-]?layout|validate|migration[_-]?read|scrape|browse|wp[_-]?rest|wp[_-]?cli|content[_-]?get|fetch[_-]?url/i;
 
 /**
  * Bookkeeping / planning tools that are NOT productive build work even though

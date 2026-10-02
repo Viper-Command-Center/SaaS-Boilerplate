@@ -184,11 +184,10 @@ describe('write gate', () => {
     expect(r.refuse).toMatch(/\[refused\] diviops_page_create was NOT sent/);
   });
 
-  it('refuses valid markup whose module maps were not read, then allows once they are', async () => {
+  it('allows valid markup without ceremonial reference calls', async () => {
     const r1 = await inTurn('operator', () => diviWriteGate('diviops_page_create', { content: GOOD_PAGE }, ctx));
 
-    expect(r1.refuse).toMatch(/has not read the reference map for: /);
-    expect(r1.refuse).toMatch(/divi\/blurb → diviops_reference \{module:"Blurb"\}/);
+    expect(r1.refuse).toBeUndefined();
 
     for (const m of ['Heading', 'Blurb', 'Image', 'Button']) {
       recordConsulted('conv', m);
@@ -199,25 +198,25 @@ describe('write gate', () => {
     expect(r2.note).toMatch(/\[validated\] 8 blocks/);
   });
 
-  it('inlines the module map into an un-consulted refusal when a lookup is provided (Phase 48.1)', async () => {
+  it('does not require a lookup for already valid markup', async () => {
     const lookupCtx = {
       ...ctx,
       lookupModule: (name: string) => `MAP for ${name}: title.innerContent.desktop.value`,
     };
     const r = await inTurn('operator', () => diviWriteGate('diviops_page_create', { content: GOOD_PAGE }, lookupCtx));
 
-    expect(r.refuse).toMatch(/has not read the reference map for: /);
-    // The verified map(s) are inlined so the model fixes it in ONE turn.
-    expect(r.refuse).toMatch(/inlined below/);
-    expect(r.refuse).toMatch(/MAP for Heading: title\.innerContent\.desktop\.value/);
-    expect(r.refuse).toContain('(from diviops_reference)');
+    expect(r.refuse).toBeUndefined();
+    expect(r.note).toContain('[validated]');
   });
 
-  it('without a lookup, the un-consulted refusal still names the maps to read', async () => {
-    const r = await inTurn('operator', () => diviWriteGate('diviops_page_create', { content: GOOD_PAGE }, ctx));
+  it('invalid payloads do not consume dispatch budget', async () => {
+    await inTurn('site', () => {
+      for (let i = 0; i < 20; i++) {
+        expect(diviWriteGate('diviops_page_create', { content: outreach }, ctx).refuse).toBeDefined();
+      }
 
-    expect(r.refuse).toMatch(/Read each map \(one call per module\)/);
-    expect(r.refuse).not.toMatch(/inlined below/);
+      expect(diviWriteGate('diviops_page_create', { content: GOOD_PAGE }, ctx).refuse).toBeUndefined();
+    });
   });
 
   it('fails closed outside a turn', () => {

@@ -10,9 +10,11 @@ import { loadPlaybooksFor } from '@/libs/agent/playbooks';
 import { currentTurn } from '@/libs/agent/turnContext';
 import { meterPlugin } from '@/libs/billing/meter';
 import { db } from '@/libs/DB';
+import { BUILD_TOOL_DEFINITIONS, runBuildTool } from '@/libs/divi/buildTools';
 import { recordConsulted } from '@/libs/divi/consulted';
 import { McpHttpClient } from '@/libs/mcp/client';
 import { httpGuardFor } from '@/libs/mcp/httpGuards';
+import { isSafeDiviRead, withRecovery } from '@/libs/mcp/recovery';
 import { loadReferenceLibrary } from '@/libs/mcp/references';
 import { getStdioServer, wpSiteLabelOf } from '@/libs/mcp/stdioCatalog';
 import { acquireStdioClient } from '@/libs/mcp/stdioClient';
@@ -761,6 +763,51 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
         const client = acquireStdioClient(conn.id, spec.resolveEntry(), env, conn.name);
         const tools = await client.listTools();
         const policyMap = (conn.toolPolicy ?? {}) as Record<string, ToolPolicy>;
+        const callDivi = async (name: string, args: Record<string, unknown>): Promise<string> => {
+          const tool = tools.find(t => t.name === name);
+          if (!tool) {
+            throw new Error(`DiviOps tool ${name} is unavailable.`);
+          }
+          const policy = policyMap[name] ?? policyMap['*'] ?? 'approval';
+          // High-level tools must NEVER bypass a constituent's approval/deny policy.
+          if (policy !== 'auto') {
+            throw new Error(`${name} requires ${policy}; automatic agency build cannot bypass that policy.`);
+          }
+          const guardCtx = { target, connectionName: conn.name };
+          const guarded = spec.guardCall?.(name, args, guardCtx) ?? { args };
+          if (guarded.refuse) {
+            throw new Error(guarded.refuse);
+          }
+          const raw = await withRecovery(conn.id, isSafeDiviRead(name), async () => {
+            const live = acquireStdioClient(conn.id, spec.resolveEntry(), env, conn.name);
+            const result = await live.callTool(name, guarded.args);
+            const text = flattenMcpContent(result.content);
+            if (result.isError || /"ok"\s*:\s*false/.test(text)) {
+              throw new Error(explainToolError(text, tool.inputSchema, guarded.args));
+            }
+            return text;
+          });
+          await db.insert(auditLog).values({ tenantId, actor: 'agent', action: 'divi.build.call', target: `${conn.name}:${name}`, detail: { pageId: args.page_id, bytes: typeof args.content === 'string' ? args.content.length : 0 } }).catch(() => {});
+          return raw;
+        };
+        if (spec.key === 'diviops') {
+          for (const def of BUILD_TOOL_DEFINITIONS) {
+            const name = namespacedToolName(conn.name, def.name);
+            if (!name) {
+              continue;
+            }
+            // Reads of the build receipt are safe; draft creation needs all constituent tools auto-authorized.
+            const required = def.name === 'divi_build_draft'
+              ? ['diviops_page_create', 'diviops_page_get', 'diviops_render_preview', 'diviops_meta_flush_cache']
+              : def.name === 'divi_verify_draft' ? ['diviops_page_get', 'diviops_render_preview'] : [];
+            const allowed = required.every(n => tools.some(t => t.name === n) && (policyMap[n] ?? policyMap['*'] ?? 'approval') === 'auto');
+            if (!allowed) {
+              continue;
+            }
+            anthropicTools.push({ ...def, name });
+            executors.set(name, { connectionId: conn.id, connectionName: conn.name, toolName: def.name, policy: 'auto', call: args => runBuildTool({ tenantId, connectionId: conn.id, target, tool: def.name, args, call: callDivi }) });
+          }
+        }
 
         // A bundled server can carry standing guidance (the vendor's
         // client-side skill, condensed) — keyed by allowlist key so two
@@ -856,8 +903,18 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
                 // asking the pool for a fresh client again. Re-acquiring here is
                 // a cheap map lookup when the process is alive, and a real
                 // respawn when it is not.
-                const liveClient = acquireStdioClient(conn.id, spec.resolveEntry(), env, conn.name);
-                const result = await liveClient.callTool(tool.name, guarded.args);
+                const execute = async () => {
+                  const liveClient = acquireStdioClient(conn.id, spec.resolveEntry(), env, conn.name);
+                  const result = await liveClient.callTool(tool.name, guarded.args);
+                  const text = flattenMcpContent(result.content);
+                  if (spec.key === 'diviops' && (result.isError || /"ok"\s*:\s*false/.test(text))) {
+                    throw new Error(explainToolError(text, tool.inputSchema, guarded.args));
+                  }
+                  return result;
+                };
+                const result = spec.key === 'diviops'
+                  ? await withRecovery(conn.id, isSafeDiviRead(tool.name), execute)
+                  : await execute();
                 const raw = flattenMcpContent(result.content);
                 if (result.isError) {
                   // Errors stay verbatim and short — never spill one to a file the
@@ -869,8 +926,8 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
                 let after: string | undefined;
                 if (spec.afterCall) {
                   after = await spec
-                    .afterCall(tool.name, guarded.args, raw, async (n, a) => flattenMcpContent((await liveClient.callTool(n, a)).content), guardCtx)
-                    .catch((e: unknown) => `[render check] skipped: ${e instanceof Error ? e.message.slice(0, 120) : 'error'}`);
+                    .afterCall(tool.name, guarded.args, raw, async (n, a) => flattenMcpContent((await acquireStdioClient(conn.id, spec.resolveEntry(), env, conn.name).callTool(n, a)).content), guardCtx)
+                    .catch((e: unknown) => `[structure check] skipped: ${e instanceof Error ? e.message.slice(0, 120) : 'error'}`);
                 }
                 const text = await capToolOutput({
                   text: raw,

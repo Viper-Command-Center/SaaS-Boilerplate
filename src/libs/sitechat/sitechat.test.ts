@@ -18,6 +18,8 @@ describe('site chat allow-list (Phase 46)', () => {
   });
 
   it('refuses account-wide, other-site and other-system tools', () => {
+    expect(isSiteChatToolAllowed('mcp__diviops-build-9__divi-build-draft', bound)).toBe(false);
+    expect(isSiteChatToolAllowed('mcp__diviops-build-9__divi-build-status', bound)).toBe(false);
     expect(isSiteChatToolAllowed('mcp__wp-sites__wp-cli', bound)).toBe(false);
     expect(isSiteChatToolAllowed('mcp__wp-sites__wp-search-replace', bound)).toBe(false);
     expect(isSiteChatToolAllowed('mcp__wp-sites__wp-write-file', bound)).toBe(false);

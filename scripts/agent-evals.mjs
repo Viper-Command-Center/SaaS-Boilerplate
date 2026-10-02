@@ -328,7 +328,7 @@ expect('src/libs/agent/prompt.ts', 'never write them yourself', 'the system prom
 // vendor guidance now says so explicitly, and steers to the vendor's own
 // verified starter templates before any hand-built module JSON.
 expect('src/libs/mcp/stdioCatalog.ts', 'THE FAILURE MODE THIS GUIDANCE EXISTS TO PREVENT', 'agents must be told not to fall back to a Code/raw-HTML module when they do not know the native one');
-expect('src/libs/mcp/stdioCatalog.ts', 'BEFORE composing any section by hand, call diviops_template_list', 'vendor-verified starter templates must be checked before hand-building module JSON');
+expect('src/libs/divi/guidance.ts', 'compact complete page plan', 'agency builds prefer reusable patterns instead of repeated template discovery');
 
 // ── Phase 44 — DiviOps binds to a WordPress Sites entry (2026-09-21). One
 // DiviOps connection per WORKSPACE was the limit, each holding its own copy of
@@ -359,11 +359,11 @@ forbid('src/libs/mcp/references.ts', "'public'", 'licensed reference files are n
 // read the map, build from documented paths, validate, write+verify) and the
 // five JSON shapes that silently break.
 expect('src/libs/divi/gate.ts', 'lookupModule', 'the gate can inline a module map into an un-consulted refusal (one-turn fix, not a round trip)');
-expect('src/libs/divi/gate.ts', 'inlined below', 'the self-correcting refusal actually inlines the verified map');
+expect('src/libs/divi/gate.ts', 'Correctness, not a ceremonial reference lookup', 'valid patterns are not refused merely for missing reference calls');
 expect('src/libs/mcp/stdioCatalog.ts', 'loadReferenceLibrary(spec).module(moduleName)', 'diviopsGuard feeds the reference library into the gate so refusals can inline maps');
-expect('src/libs/mcp/stdioCatalog.ts', 'OPERATING PROCEDURE — the ONLY workflow that works', 'DiviOps guidance leads with the ordered template-first workflow');
+expect('src/libs/divi/guidance.ts', 'Presets and tokens are OPTIONAL', 'preset bootstrap is not a prerequisite for native page builds');
 expect('src/libs/mcp/stdioCatalog.ts', 'FIVE JSON SHAPES THAT SILENTLY BREAK', 'guidance spells out the exact JSON gotchas (builderVersion placement, element-scoped paths, innerContent, section content arg, numeric ids)');
-expect('src/libs/mcp/stdioCatalog.ts', 'composing a section from scratch is the EXCEPTION', 'template-first is the default, hand-composing is the exception');
+expect('src/libs/mcp/stdioCatalog.ts', 'Reuse already-discovered patterns/templates', 'reuse rather than rediscover patterns per section');
 
 // ── Phase 48.2 — migration read-back (2026-09-30). Noah's report: the agent
 // tried to read a Duda extraction to populate a template, got a file-not-found
@@ -468,7 +468,15 @@ expect('src/libs/sitechat/prompt.ts', 'never write it yourself', 'the site-chat 
 expect('src/libs/divi/validator.ts', 'does not exist on ${b.name}', 'unknown decoration groups are refused per module map');
 expect('src/libs/divi/validator.ts', 'workspace-library URL', 'workspace-library media is refused in Divi markup');
 expect('src/libs/divi/validator.ts', 'must be an object of sides', 'bare "40px" padding is refused (Divi drops it silently)');
-expect('src/libs/divi/gate.ts', 'has not read the reference map for', 'a write is refused until diviops_reference was read for every module type in it');
+expect('src/libs/divi/gate.ts', 'reserveWrite(toolName, args, true)', 'budgets reserve validated markup only, never rejected input');
+expect('src/libs/divi/buildTools.ts', "status: 'draft'", 'high-level builds create unpublished drafts only');
+expect('src/libs/divi/buildTools.ts', "eq(diviBuilds.status, 'planned')", 'compare-and-swap prevents concurrent duplicate creations');
+expect('src/libs/divi/buildTools.ts', 'reconcile_page_id', 'uncertain writes have an exact-readback reconciliation path');
+expect('src/libs/sitechat/toolset.ts', "original.startsWith('divi_')", 'client chat cannot access agency build/receipt tools');
+expect('src/libs/mcp/registry.ts', "policy !== 'auto'", 'agency pipeline never bypasses constituent approvals or denials');
+expect('src/libs/browser/agentcore.ts', 'naturalWidth === 0', 'browser checks real image loading, not just image tags');
+expect('src/libs/mcp/recovery.ts', 'Write was NOT retried', 'uncertain writes are never automatically replayed');
+expect('migrations/meta/_journal.json', '0035_divi_build_pipeline', 'persistent pipeline migration is journaled');
 expect('src/libs/divi/gate.ts', 'no turn context', 'the gate fails CLOSED outside a turn');
 expect('src/libs/divi/gate.ts', "not available from a site's chat", 'a site\'s chat never reaches theme-builder / preset / variable tools');
 expect('src/libs/divi/moduleMap.ts', 'refusing to validate against a partial map', 'a partial or missing module map refuses all writes, never skips validation');

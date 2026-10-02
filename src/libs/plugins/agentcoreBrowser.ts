@@ -13,6 +13,7 @@
 
 import type { BuiltinProvider } from '@/libs/plugins/types';
 import { browserConfigured, inspectLayout, renderPage } from '@/libs/browser/agentcore';
+import { saveFile } from '@/libs/storage/files';
 
 /** $/second. AgentCore bills ~$0.0895/vCPU-hr + $0.00945/GB-hr → ≈$0.11/hr. */
 export const BROWSER_USD_PER_SECOND = 0.11 / 3600;
@@ -78,13 +79,14 @@ export const agentcoreBrowserProvider: BuiltinProvider = {
             description: 'CSS selectors to measure. Defaults to headings and buttons, which is what usually breaks.',
           },
           wait_ms: { type: 'number', description: 'Render wait before measuring (default 3000, max 15000).' },
+          screenshots: { type: 'boolean', description: 'Save desktop/mobile screenshots to the workspace library for visual inspection with view_image. Optional; never claim design approval from measurements alone. Draft URLs require an authenticated preview; this tool does not log in or publish.' },
         },
         required: ['url'],
       },
     },
   ],
 
-  call: async (tool, args) => {
+  call: async (tool, args, _key, _target, ctx) => {
     if (!browserConfigured()) {
       throw new Error('The cloud browser needs AWS credentials (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY) configured on the platform.');
     }
@@ -116,7 +118,13 @@ export const agentcoreBrowserProvider: BuiltinProvider = {
         widths: Array.isArray(args.widths) ? args.widths.map(Number).filter(n => Number.isFinite(n)) : undefined,
         selectors: Array.isArray(args.selectors) ? args.selectors.map(String) : undefined,
         waitMs: Number(args.wait_ms) || undefined,
+        screenshots: args.screenshots === true,
       });
+      const screenshots = [];
+      for (const shot of report.screenshots ?? []) {
+        const saved = ctx ? await saveFile({ tenantId: ctx.tenantId, name: `layout-${shot.width}-${Date.now()}.jpg`, bytes: Buffer.from(shot.base64, 'base64'), mime: 'image/jpeg', kind: 'asset', source: 'agent', meta: { role: 'layout-qa', url, width: shot.width } }).catch(() => null) : null;
+        screenshots.push({ width: shot.width, fileId: saved?.id ?? null, status: saved ? 'saved' : 'storage_unavailable' });
+      }
 
       const issueCount = report.viewports.reduce((n, v) => n + v.issues.length, 0);
 
@@ -126,8 +134,10 @@ export const agentcoreBrowserProvider: BuiltinProvider = {
           title: report.title,
           issueCount,
           viewports: report.viewports,
+          screenshots,
+          verification: 'browser_checked; visual approval still requires screenshot inspection and comparison to the brief',
           verdict: issueCount === 0
-            ? 'No layout defects found at the widths checked.'
+            ? 'No measured layout/image defects found at the widths checked. This is not visual design approval; confirm the requested page, not a login/404 screen, was inspected.'
             : `${issueCount} layout issue(s) found. A "widow" means the element wraps and its final line holds one lonely word — usually fixed by a small font-size reduction, shorter copy, or a non-breaking space joining the last two words (which, unlike a fixed font size, holds at every width).`,
           note: 'Measured in a real browser after layout. These are computed facts about rendered line boxes, not opinions — and they are invisible in the page tree.',
         }),

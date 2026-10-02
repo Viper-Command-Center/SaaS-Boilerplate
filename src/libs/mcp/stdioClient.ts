@@ -160,6 +160,9 @@ export class McpStdioClient {
     return new Promise<unknown>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
+        // A hung process is not reusable. Reads can reacquire a fresh client;
+        // writes remain uncertain and MUST NOT be replayed automatically.
+        this.dispose();
         reject(new Error(`${this.label}: ${method} timed out after ${Math.round(timeoutMs / 1000)}s.`));
       }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer });

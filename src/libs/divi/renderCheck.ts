@@ -7,9 +7,9 @@
  * modules actually rendered, how many images, which images point off-site,
  * which columns came out empty. The model reports that, not what it sent.
  *
- * This is what stops "the page rendered cleanly" being said about a page that
- * fetched as a 404. It is advisory (the write already happened) and it never
- * throws — a failed render is reported as such.
+ * HTML structure evidence only, NOT browser/visual QA. Whole-page writes get a
+ * checkpoint; section/module edits are grouped and verified once by the caller.
+ * Advisory (the write already happened); a failed render is reported honestly.
  */
 
 const PAGE_WRITES = new Set([
@@ -56,7 +56,7 @@ function pageIdFrom(toolName: string, args: Record<string, unknown>, resultText:
   return null;
 }
 
-function htmlFrom(resultText: string): string | null {
+export function htmlFrom(resultText: string): string | null {
   try {
     const j = JSON.parse(resultText) as { ok?: boolean; data?: Record<string, unknown>; error?: { message?: string } };
     if (j.ok === false) {
@@ -122,11 +122,15 @@ export async function diviRenderCheck(
   if (pageId === null) {
     return undefined;
   }
+  // Small edits do not trigger a full-page render. Verify at the batch boundary.
+  if (!['diviops_page_create', 'diviops_page_update_content'].includes(toolName)) {
+    return `[structure check] page ${pageId} changed; batch verification pending. Run diviops_render_preview once after the related edits. Image loading and visual quality are NOT checked.`;
+  }
   try {
     const raw = await callTool('diviops_render_preview', { page_id: pageId });
     const html = htmlFrom(raw);
     if (!html) {
-      return `[render check] page ${pageId} could not be rendered: ${raw.slice(0, 200)}. Do not report the page as verified — call diviops_render_preview {page_id: ${pageId}} yourself, or tell the owner to open the preview.`;
+      return `[structure check] page ${pageId} could not be rendered: ${raw.slice(0, 200)}. Saved is not verified; open the authenticated preview.`;
     }
     let siteHost: string | undefined;
     try {
@@ -134,8 +138,8 @@ export async function diviRenderCheck(
     } catch {
       siteHost = undefined;
     }
-    return `[render check] saved page ${pageId} renders as: ${summariseRender(html, siteHost)}. This is the site's actual output; report it as such (drafts have no public URL — fetch_url on a draft returns the 404 page).`;
+    return `[structure check] saved page ${pageId}: ${summariseRender(html, siteHost)}. HTML structure only: image loading, CSS, responsiveness and visual quality are NOT verified. Drafts require an authenticated preview; never publish to make QA easier.`;
   } catch (err) {
-    return `[render check] page ${pageId}: render failed (${err instanceof Error ? err.message.slice(0, 160) : 'error'}). Do not report the page as verified.`;
+    return `[structure check] page ${pageId}: render failed (${err instanceof Error ? err.message.slice(0, 160) : 'error'}). Do not report the page as verified.`;
   }
 }

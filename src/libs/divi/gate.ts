@@ -6,9 +6,7 @@
  *                          (a site's own chat gets page/section/module tools,
  *                          never theme-builder, presets, variables, canvases)
  *   2. markup validation — validator.ts against the vendor module maps
- *   3. reference ledger  — every module type in the write must have been
- *                          looked up in diviops_reference by this conversation
- *   4. budgets           — writes per turn, blocks per write, bytes per write
+ *   3. budgets           — validated dispatches per turn, blocks/bytes per write
  *   5. module_update     — dot-path writes get the same path rules
  *
  * A refusal is returned as TEXT (never thrown): the model reads it as the
@@ -17,8 +15,7 @@
 
 import { bumpCounter, currentTurn } from '@/libs/agent/turnContext';
 import { parseDiviBlocks, serializeDiviBlocks } from './blocks';
-import { unconsulted } from './consulted';
-import { loadModuleSchema, referenceNameFor, STRUCTURAL } from './moduleMap';
+import { loadModuleSchema } from './moduleMap';
 import { formatValidation, validateDiviMarkup } from './validator';
 
 export type GateResult = {
@@ -33,14 +30,7 @@ export type GateContext = {
   /** Target site URL (post site-binding). */
   target: string;
   connectionName: string;
-  /**
-   * Optional: return one module's VB-verified element map (the same text
-   * `diviops_reference {module:"X"}` would return). When present, a refusal for
-   * an un-consulted module inlines the map so the model fixes the write in ONE
-   * turn instead of a refuse → look-up → rewrite round trip. Injected by
-   * diviopsGuard (which can load the reference library); left undefined in unit
-   * tests, where the refusal text alone is asserted.
-   */
+  /** Optional advisory reference provider; never a write-unlock requirement. */
   lookupModule?: (moduleName: string) => string | null;
 };
 
@@ -119,12 +109,8 @@ export function diviWriteGate(toolName: string, args: Record<string, unknown>, c
     return { args, refuse: '[refused] from a site\'s chat, diviops_meta_flush_cache must name the page: pass post_id. Site-wide flushes (all / after) are an agency operation.' };
   }
 
-  // 4a. Write budget per turn.
-  if (DIVI_WRITE_RE.test(toolName) && !args.dry_run) {
-    const n = bumpCounter('divi.writes');
-    if (n > MAX_WRITES_PER_TURN[surface]) {
-      return { args, refuse: `[refused] this turn has already made ${n - 1} Divi writes (limit ${MAX_WRITES_PER_TURN[surface]}). Stop, report what is done and what is left, and continue on the owner's next message.` };
-    }
+  if (DIVI_WRITE_RE.test(toolName) && !turn) {
+    return { args, refuse: '[refused] Divi writes require a conversation turn (no turn context).' };
   }
 
   // 5. module_update: dot-path writes.
@@ -168,11 +154,20 @@ export function diviWriteGate(toolName: string, args: Record<string, unknown>, c
   // 2–4. Markup writes.
   const spec = DIVI_MARKUP_WRITES[toolName];
   if (!spec) {
+    const refusal = reserveWrite(toolName, args, false);
+    if (refusal) {
+      return { args, refuse: refusal };
+    }
     return { args };
   }
   const markup = args[spec.arg];
   if (typeof markup !== 'string') {
-    return { args }; // the server rejects a missing/non-string content itself
+    // Creating an empty draft is allowed; malformed payloads are not writes.
+    if (toolName === 'diviops_page_create' && markup === undefined) {
+      const refusal = reserveWrite(toolName, args, false);
+      return { args, ...(refusal ? { refuse: refusal } : {}) };
+    }
+    return { args, refuse: '[refused] content must be a string of native Divi blocks.' };
   }
 
   let schema;
@@ -187,42 +182,10 @@ export function diviWriteGate(toolName: string, args: Record<string, unknown>, c
     return { args, refuse: formatValidation(result, toolName) };
   }
 
-  // 3. Reference ledger — no module written without its map having been read.
-  const used = Object.keys(result.stats.modules).filter(m => !STRUCTURAL.has(m));
-  if (used.length > 0) {
-    if (!turn) {
-      return { args, refuse: '[refused] Divi writes can only run inside a conversation turn (no turn context) — this is a platform fault; call report_issue.' };
-    }
-    const missing = unconsulted(turn.conversationId, used);
-    if (missing.length > 0) {
-      // Self-correcting refusal (Phase 48.1): when the guard gave us a way to
-      // read the maps, inline them here so the model rebuilds from documented
-      // paths in the SAME turn — instead of burning a refuse → diviops_reference
-      // → rewrite round trip (and often apologising in between).
-      const maps: string[] = [];
-      if (ctx.lookupModule) {
-        for (const m of missing) {
-          const map = ctx.lookupModule(referenceNameFor(m));
-          if (map) {
-            maps.push(`\n\n─── ${referenceNameFor(m)} (from diviops_reference) ───\n${map}`);
-          }
-        }
-      }
-      const inlined = maps.length > 0
-        ? ` The verified element map${maps.length > 1 ? 's are' : ' is'} inlined below — rebuild every ${referenceNameFor(missing[0]!)} from these documented paths (do NOT guess), then call ${toolName} again:${maps.join('')}`
-        : ` Read each map (one call per module), rebuild the markup from the documented element paths, then call ${toolName} again.`;
-      return {
-        args,
-        refuse: `[refused] ${toolName} was NOT sent — this conversation has not read the reference map for: ${missing.map(m => `${m} → diviops_reference {module:"${referenceNameFor(m)}"}`).join(' · ')}.${inlined} Never write a module from memory.`,
-      };
-    }
-  }
-
-  if (!args.dry_run) {
-    const n = bumpCounter('divi.markupWrites');
-    if (n > MAX_MARKUP_WRITES_PER_TURN[surface]) {
-      return { args, refuse: `[refused] this turn has already written ${n - 1} page/section payloads (limit ${MAX_MARKUP_WRITES_PER_TURN[surface]}). Report progress and continue on the next message.` };
-    }
+  // Correctness, not a ceremonial reference lookup, unlocks the write.
+  const refusal = reserveWrite(toolName, args, true);
+  if (refusal) {
+    return { args, refuse: refusal };
   }
 
   // Canonical form: the model may write plain JSON with ordinary HTML; the
@@ -235,4 +198,26 @@ export function diviWriteGate(toolName: string, args: Record<string, unknown>, c
   const summary = `[validated] ${result.stats.blocks} blocks · ${Object.entries(result.stats.modules).map(([k, v]) => `${k.replace(/^divi\//, '')}×${v}`).join(', ') || 'structure only'}${result.stats.images ? ` · ${result.stats.images} site-hosted image(s)` : ''}`;
   const warnings = result.warnings.length > 0 ? `\n${formatValidation(result, toolName)}` : '';
   return { args: outArgs, note: `${summary}${warnings}` };
+}
+
+/** Reserve only VALIDATED dispatches. These are attempts, not confirmed writes. */
+function reserveWrite(toolName: string, args: Record<string, unknown>, markup: boolean): string | undefined {
+  const turn = currentTurn();
+  if (!turn || args.dry_run || !DIVI_WRITE_RE.test(toolName)) {
+    return undefined;
+  }
+  const surface = turn.surface;
+  const writes = turn.counters['divi.writes'] ?? 0;
+  const payloads = turn.counters['divi.markupWrites'] ?? 0;
+  if (writes >= MAX_WRITES_PER_TURN[surface]) {
+    return `[refused] this turn has already made ${writes} Divi writes (validated dispatch limit ${MAX_WRITES_PER_TURN[surface]}). Save progress and continue next turn.`;
+  }
+  if (markup && payloads >= MAX_MARKUP_WRITES_PER_TURN[surface]) {
+    return `[refused] page/section payload limit ${MAX_MARKUP_WRITES_PER_TURN[surface]} reached. Agency builds should use divi_build_draft, not client edit chat.`;
+  }
+  bumpCounter('divi.writes');
+  if (markup) {
+    bumpCounter('divi.markupWrites');
+  }
+  return undefined;
 }

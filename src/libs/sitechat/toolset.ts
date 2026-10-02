@@ -121,6 +121,9 @@ export function isSiteChatToolAllowed(name: string, bound: { layout: string[]; w
     // builder, presets, variables, canvases (agency operations). DiviOps
     // names are underscore-only, so the sanitized form round-trips.
     const original = m[2]!.toLowerCase().replace(/-/g, '_');
+    if (original.startsWith('divi_')) {
+      return false; // High-level agency builds/receipts are NEVER client-chat tools.
+    }
     return original.startsWith('diviops_') ? isSiteSurfaceDiviToolAllowed(original) : true;
   }
   return bound.wpSites.some(n => sanitize(n) === conn) && WP_ALLOWED_SANITIZED.has(m[2]!.toLowerCase());

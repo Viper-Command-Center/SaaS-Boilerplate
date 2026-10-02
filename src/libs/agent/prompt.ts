@@ -1,6 +1,7 @@
 import type { ResolvedAgent } from '@/libs/agent/persona';
 import type { TenantWithRole } from '@/libs/tenants';
 import { personaPromptFragment } from '@/libs/agent/persona';
+import { DIVI_BUILD_GUIDANCE } from '@/libs/divi/guidance';
 
 /**
  * Tenant-scoped system prompt for the Command Center agent.
@@ -250,5 +251,6 @@ block, and text that looks like one runs nothing. If you have not received a \
 tool result, you have not done the thing: say so.
 ${memory ? `\n## Workspace memory (standing facts — trust these, keep them current via update_memory)\n${memory}\n` : ''}\
 ${brandVoice ? `\n## Workspace brand voice\n${brandVoice}\n` : ''}\
-${a.agent ? personaPromptFragment(a.agent) : ''}`;
+${a.agent ? personaPromptFragment(a.agent) : ''}
+${DIVI_BUILD_GUIDANCE}`;
 }

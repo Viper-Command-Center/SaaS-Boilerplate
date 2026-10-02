@@ -275,6 +275,29 @@ export const wpSites = pgTable(
   ],
 );
 
+/** Agency-only Divi design manifests and resumable draft receipts, scoped to a connection. */
+export const diviSiteDesigns = pgTable('divi_site_designs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id').notNull().references(() => tenants.id, { onDelete: 'cascade' }),
+  connectionId: uuid('connection_id').notNull().references(() => mcpConnections.id, { onDelete: 'cascade' }),
+  target: text('target').notNull(),
+  design: jsonb('design').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, t => [uniqueIndex('divi_site_designs_connection_uq').on(t.tenantId, t.connectionId)]);
+
+export const diviBuilds = pgTable('divi_builds', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id').notNull().references(() => tenants.id, { onDelete: 'cascade' }),
+  connectionId: uuid('connection_id').notNull().references(() => mcpConnections.id, { onDelete: 'cascade' }),
+  buildKey: varchar('build_key', { length: 120 }).notNull(),
+  target: text('target').notNull(),
+  plan: jsonb('plan').notNull(),
+  pageId: integer('page_id'),
+  status: varchar('status', { length: 30 }).notNull().default('planned'),
+  receipt: jsonb('receipt'),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, t => [uniqueIndex('divi_builds_key_uq').on(t.tenantId, t.connectionId, t.buildKey)]);
+
 export const approvals = pgTable(
   'approvals',
   {
