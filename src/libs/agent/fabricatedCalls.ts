@@ -16,7 +16,7 @@
  */
 
 /** Anything that looks like the platform's own call/approval/result markers. */
-const MARKER_RE = /^[ \t]*\[(?:tool|approval|artivio|system|platform)\][^\n]*$/gm;
+const MARKER_RE = /^[ \t]*\[(?:tool|approval|artivio|system|platform|model)\][^\n]*$/gm;
 /** The model's other tell: a line that IS a tool name followed by a result-ish narration. */
 const CALLING_RE = /^[ \t]*(?:calling|running|executing)[ \t]+(mcp__[\w\-]+|[a-z][a-z0-9]*(?:_[a-z0-9]+)+)…?[ \t]*$/gim;
 

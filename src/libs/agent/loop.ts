@@ -38,6 +38,7 @@ import type { TenantToolset, ToolResultRich } from '@/libs/mcp/registry';
 import { callClaudeWithTools, TurnStoppedError } from '@/libs/agent/anthropic';
 import { detectFabricatedCalls, detectUnverifiedCompletion, fabricationNudge } from '@/libs/agent/fabricatedCalls';
 import { resolveModelConfig } from '@/libs/agent/modelConfig';
+import { loadModelIdentity, MODEL_INFO_TOOL, modelIdentityPrompt, modelReceipt, recordModelResponse } from '@/libs/agent/modelIdentity';
 import { runWithTurnContext, turnAborted } from '@/libs/agent/turnContext';
 import { checkSpend, meterLlm } from '@/libs/billing/meter';
 import { db } from '@/libs/DB';
@@ -167,7 +168,16 @@ async function runToolLoopInner(a: {
   // an interactive chat turn (cheap/fast default); an empty one is a
   // scheduled task or mission step — real build work. Resolved once up front
   // (not re-checked per iteration) so a turn doesn't switch models mid-way.
-  const { modelId, reasoningEffort } = await resolveModelConfig(a.tenantId, a.modelContext ?? (a.conversationId ? 'chat' : 'build'));
+  const context = a.modelContext ?? (a.conversationId ? 'chat' : 'build');
+  const config = await resolveModelConfig(a.tenantId, context);
+  const { modelId } = config;
+  const identity = await loadModelIdentity(config, context);
+  const reasoningEffort = identity.sentReasoningEffort ?? undefined;
+  const system = a.system + modelIdentityPrompt(identity);
+  // Keep the original mutable schema sink so deferred tool loading still works.
+  if (!a.toolset.anthropicTools.some(t => t.name === MODEL_INFO_TOOL.name)) {
+    a.toolset.anthropicTools.push(MODEL_INFO_TOOL);
+  }
 
   // The user's turn: [ ...images, { text } ] when there are attachments, or a
   // plain string when there aren't (cheaper to serialise, and the overwhelming
@@ -248,7 +258,7 @@ async function runToolLoopInner(a: {
     let response: Awaited<ReturnType<typeof callClaudeWithTools>>;
     try {
       response = await callClaudeWithTools({
-        system: a.system,
+        system,
         messages,
         tools: a.toolset.anthropicTools,
         modelId,
@@ -264,6 +274,19 @@ async function runToolLoopInner(a: {
         break;
       }
       throw err;
+    }
+
+    recordModelResponse(identity, response);
+    await audit(a.tenantId, 'model.response', identity.requestModelId ?? 'unknown', {
+      conversationId: a.conversationId || null,
+      iteration: i,
+      ...identity,
+      usage: response.usage ?? null,
+    });
+    if (i === 0) {
+      const receipt = modelReceipt(identity);
+      a.onDelta(receipt);
+      finalText += receipt;
     }
 
     // Meter the exact tokens this call used (returned in-band by the provider).
@@ -370,7 +393,9 @@ async function runToolLoopInner(a: {
     for (const use of toolUses) {
       const name = use.name ?? '';
       const args = use.input ?? {};
-      const resolved = a.toolset.resolve(name);
+      const resolved = name === MODEL_INFO_TOOL.name
+        ? { connectionId: '', connectionName: 'platform', toolName: name, policy: 'auto' as const, call: async () => JSON.stringify(identity) }
+        : a.toolset.resolve(name);
       lastTool = name; // most recent tool the agent chose this turn
 
       let resultText: string;
@@ -467,7 +492,7 @@ async function runToolLoopInner(a: {
       // Untrusted-content boundary (2026 MCP security guidance): tool output is
       // attacker-controllable (web pages, emails, repo files). Frame it as data
       // so embedded instructions are not treated as commands.
-      const trustedReference = name === 'diviops_reference';
+      const trustedReference = name === 'diviops_reference' || name === MODEL_INFO_TOOL.name;
       const framed = isError
         ? resultText
         : trustedReference
@@ -519,7 +544,7 @@ async function runToolLoopInner(a: {
     finalText += notice;
     try {
       const wrap = await callClaudeWithTools({
-        system: a.system,
+        system,
         messages: [
           ...messages,
           {
@@ -531,6 +556,8 @@ async function runToolLoopInner(a: {
         modelId,
         reasoningEffort,
       });
+      recordModelResponse(identity, wrap);
+      await audit(a.tenantId, 'model.response', identity.requestModelId ?? 'unknown', { conversationId: a.conversationId || null, phase: 'budget-wrap', ...identity, usage: wrap.usage ?? null });
       if (wrap.usage) {
         await meterLlm({
           tenantId: a.tenantId,

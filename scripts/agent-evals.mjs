@@ -486,6 +486,11 @@ expect('src/libs/mcp/registry.ts', 'spec.afterCall', 'page writes are followed b
 expect('src/libs/agent/webTools.ts', 'PAGE NOT FOUND (404)', 'fetch_url reports a 404 / soft-404 as data the model must act on');
 expect('src/libs/agent/loop.ts', 'runWithTurnContext(', 'every turn runs inside a turn context (gates and abort read it)');
 expect('src/libs/agent/anthropic.ts', 'signal: turnSignal()', 'model requests carry the turn abort signal so Stop ends an in-flight generation');
+expect('src/libs/agent/modelIdentity.ts', "name: 'get_model_info'", 'agents can read current model routing instead of guessing their identity');
+expect('src/libs/agent/loop.ts', 'modelIdentityPrompt(identity)', 'all tool-loop surfaces receive resolved model metadata');
+expect('src/libs/agent/anthropic.ts', 'providerMetadata(data, resp)', 'provider response model and request IDs are preserved separately from requested model');
+expect('src/libs/agent/loop.ts', "'model.response'", 'successful model calls have independent routing audit evidence');
+expect('src/libs/agent/modelIdentity.ts', "identity.providerReportedModelId ?? 'not supplied'", 'missing provider identity is not invented');
 expect('src/libs/sitechat/turns.ts', "surface: 'site'", 'site turns are marked as the site surface for tool tiering');
 expect('src/libs/sitechat/toolset.ts', 'isSiteSurfaceDiviToolAllowed', 'site-chat schemas hide agency-level DiviOps tools');
 expect('src/libs/mcp/stdioCatalog.ts', 'NEVER GUESS', 'the DiviOps guidance tells the model the gate exists and how to satisfy it');

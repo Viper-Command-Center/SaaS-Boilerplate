@@ -26,6 +26,7 @@ export type ModelContext = 'chat' | 'build';
 export type ModelConfig = {
   modelId: string;
   reasoningEffort?: ReasoningEffort;
+  selectionSource?: 'workspace' | 'platform-default' | 'lookup-fallback';
 };
 
 type AiModelsSettings = {
@@ -41,8 +42,8 @@ type AiModelsSettings = {
  * Claude Sonnet 5 today — the same model the platform already used for
  * everything, so an unconfigured workspace behaves exactly as before.
  */
-export const PLATFORM_DEFAULT_CHAT: ModelConfig = { modelId: DEFAULT_MANTLE_MODEL, reasoningEffort: 'low' };
-export const PLATFORM_DEFAULT_BUILD: ModelConfig = { modelId: DEFAULT_MANTLE_MODEL, reasoningEffort: 'high' };
+export const PLATFORM_DEFAULT_CHAT: ModelConfig = { modelId: DEFAULT_MANTLE_MODEL, reasoningEffort: 'low', selectionSource: 'platform-default' };
+export const PLATFORM_DEFAULT_BUILD: ModelConfig = { modelId: DEFAULT_MANTLE_MODEL, reasoningEffort: 'high', selectionSource: 'platform-default' };
 
 /**
  * Resolve which model + reasoning effort a tenant's call should use. Never
@@ -58,14 +59,14 @@ export async function resolveModelConfig(tenantId: string, context: ModelContext
       return fallback;
     }
     if (context === 'chat' && ai.chatModelId) {
-      return { modelId: ai.chatModelId, reasoningEffort: ai.chatReasoningEffort ?? fallback.reasoningEffort };
+      return { modelId: ai.chatModelId, reasoningEffort: ai.chatReasoningEffort ?? fallback.reasoningEffort, selectionSource: 'workspace' };
     }
     if (context === 'build' && ai.buildModelId) {
-      return { modelId: ai.buildModelId, reasoningEffort: ai.buildReasoningEffort ?? fallback.reasoningEffort };
+      return { modelId: ai.buildModelId, reasoningEffort: ai.buildReasoningEffort ?? fallback.reasoningEffort, selectionSource: 'workspace' };
     }
     return fallback;
   } catch {
-    return fallback;
+    return { ...fallback, selectionSource: 'lookup-fallback' };
   }
 }
 

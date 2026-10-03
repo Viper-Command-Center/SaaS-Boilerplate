@@ -64,8 +64,12 @@ export type RawModelResponse = {
     cache_read_input_tokens?: number;
     cache_creation_input_tokens?: number;
   };
-  /** Which model actually served the call (for the ledger). */
+  /** Model ID sent in the request (catalog billing identity, not independent provider proof). */
   _modelId?: string;
+  /** Provider's own response metadata, when supplied. */
+  _providerModelId?: string;
+  _requestId?: string;
+  model?: string;
 };
 
 /**
@@ -83,6 +87,31 @@ const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-5';
 
 /** Platform default when a workspace hasn't picked a model of its own. */
 export const DEFAULT_MANTLE_MODEL = process.env.MANTLE_DEFAULT_MODEL_ID || 'anthropic.claude-sonnet-5';
+
+/** Shared with model diagnostics: same credential precedence as the actual transport. */
+export function resolveModelTransport(modelId: string): {
+  transport: 'bedrock-mantle' | 'bedrock-runtime' | 'anthropic-direct' | 'unconfigured';
+  requestedModelId: string | null;
+  workspaceSelectionApplied: boolean;
+} {
+  if (process.env.BEDROCK_MANTLE_API_KEY) {
+    return { transport: 'bedrock-mantle', requestedModelId: modelId || DEFAULT_MANTLE_MODEL, workspaceSelectionApplied: true };
+  }
+  if (process.env.BEDROCK_API_KEY || process.env.AWS_BEARER_TOKEN_BEDROCK) {
+    return { transport: 'bedrock-runtime', requestedModelId: BEDROCK_MODEL, workspaceSelectionApplied: false };
+  }
+  if (process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_API_KEY) {
+    return { transport: 'anthropic-direct', requestedModelId: ANTHROPIC_MODEL, workspaceSelectionApplied: false };
+  }
+  return { transport: 'unconfigured', requestedModelId: null, workspaceSelectionApplied: false };
+}
+
+function providerMetadata(data: { model?: unknown }, response: Response) {
+  return {
+    _providerModelId: typeof data.model === 'string' && data.model ? data.model : undefined,
+    _requestId: response.headers.get('x-amzn-requestid') ?? response.headers.get('request-id') ?? response.headers.get('x-request-id') ?? undefined,
+  };
+}
 
 function bedrockRegion(): string {
   return process.env.BEDROCK_REGION || process.env.AWS_REGION || 'us-east-1';
@@ -360,9 +389,8 @@ export function thinkingRequestFields(
  *   "thinking.type.adaptive" is not supported for this model …
  */
 export function isThinkingModeMismatch(status: number, body: string): boolean {
-  return status === 400 && /thinking\.type\.(enabled|adaptive)/i.test(body) && /not supported/i.test(body);
+  return status === 400 && /thinking\.type\.(?:enabled|adaptive)/i.test(body) && /not supported/i.test(body);
 }
-
 
 // Mantle validates headers STRICTLY per API format — sending the OTHER
 // format's project header on a request gets a 400 ("openai-project header
@@ -437,6 +465,7 @@ async function callMantleAnthropic(a: {
   }
   const data = await resp.json() as RawModelResponse;
   data._modelId = a.modelId;
+  Object.assign(data, providerMetadata(data, resp));
   return data;
 }
 
@@ -539,6 +568,7 @@ function openAIStopReason(finishReason: string): string {
 }
 
 function openAIResponseToRaw(data: {
+  model?: string;
   choices?: Array<{ message?: { content?: string | null; tool_calls?: Array<{ id: string; function: { name: string; arguments: string } }> }; finish_reason?: string }>;
   usage?: { prompt_tokens?: number; completion_tokens?: number; prompt_tokens_details?: { cached_tokens?: number } };
 }, modelId: string): RawModelResponse {
@@ -565,6 +595,7 @@ function openAIResponseToRaw(data: {
       cache_read_input_tokens: data.usage?.prompt_tokens_details?.cached_tokens ?? 0,
     },
     _modelId: modelId,
+    _providerModelId: typeof data.model === 'string' && data.model ? data.model : undefined,
   };
 }
 
@@ -589,7 +620,7 @@ async function callMantleOpenAI(a: {
     throw new Error(`Bedrock Mantle ${resp.status}: ${detail}`);
   }
   const data = await resp.json();
-  return openAIResponseToRaw(data, a.modelId);
+  return { ...openAIResponseToRaw(data, a.modelId), ...providerMetadata(data, resp) };
 }
 
 /**
@@ -623,18 +654,16 @@ export async function callClaudeWithTools(a: {
   // Sonnet supports far more; the loop also now RECOVERS from max_tokens
   // truncation, but headroom means it almost never has to.
   const maxTokens = a.maxTokens ?? 16_384;
+  const route = resolveModelTransport(a.modelId || DEFAULT_MANTLE_MODEL);
 
-  if (process.env.BEDROCK_MANTLE_API_KEY) {
-    const modelId = a.modelId || DEFAULT_MANTLE_MODEL;
+  if (route.transport === 'bedrock-mantle') {
+    const modelId = route.requestedModelId!;
     return isClaudeModelId(modelId)
       ? callMantleAnthropic({ modelId, system: a.system, messages: a.messages, tools: a.tools, maxTokens, reasoningEffort: a.reasoningEffort })
       : callMantleOpenAI({ modelId, system: a.system, messages: a.messages, tools: a.tools, maxTokens, reasoningEffort: a.reasoningEffort });
   }
 
-  const wantsBedrockBearer = Boolean(process.env.BEDROCK_API_KEY || process.env.AWS_BEARER_TOKEN_BEDROCK);
-  const wantsAnthropic = Boolean(process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_API_KEY);
-
-  if (wantsBedrockBearer) {
+  if (route.transport === 'bedrock-runtime') {
     const key = process.env.BEDROCK_API_KEY || process.env.AWS_BEARER_TOKEN_BEDROCK;
     const url = `https://bedrock-runtime.${bedrockRegion()}.amazonaws.com/model/${encodeURIComponent(BEDROCK_MODEL)}/invoke`;
     const resp = await postWithRetry(url, {
@@ -655,10 +684,11 @@ export async function callClaudeWithTools(a: {
     }
     const data = await resp.json() as RawModelResponse;
     data._modelId = BEDROCK_MODEL;
+    Object.assign(data, providerMetadata(data, resp));
     return data;
   }
 
-  if (wantsAnthropic) {
+  if (route.transport === 'anthropic-direct') {
     const key = process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_API_KEY;
     const resp = await postWithRetry('https://api.anthropic.com/v1/messages', {
       'x-api-key': key || '',
@@ -677,6 +707,7 @@ export async function callClaudeWithTools(a: {
     }
     const data = await resp.json() as RawModelResponse;
     data._modelId = ANTHROPIC_MODEL;
+    Object.assign(data, providerMetadata(data, resp));
     return data;
   }
 

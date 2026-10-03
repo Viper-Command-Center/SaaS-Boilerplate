@@ -49,6 +49,7 @@ export const SITE_CHAT_WP_TOOLS = new Set([
 
 /** Platform tools a site's chat may use. */
 export const SITE_CHAT_PLATFORM_TOOLS = new Set([
+  'get_model_info', // Current-turn metadata only; no cross-site/workspace lookup.
   'fetch_url',
   'search_stock_photos',
   'save_file_from_url',
