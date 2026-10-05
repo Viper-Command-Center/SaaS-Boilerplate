@@ -22,6 +22,8 @@ type Connection = {
   credentialKind?: 'ssh-key' | null;
   /** Built-in provider slug — `wp-sites` renders its own sub-panel (Phase 34). */
   provider?: string | null;
+  /** Tools that ask for approval even on Auto-run (Phase 49). */
+  alwaysAsk?: string[];
 };
 
 type CatalogPlugin = {
@@ -709,6 +711,18 @@ export const ToolsPanel = (props: { tenantSlug: string }) => {
                         })}
                       </div>
                     )}
+                {/* Some providers keep their irreversible tools behind an
+                  approval even on Auto-run (Loops: scheduling a campaign,
+                  sends, contact changes). Say so here, or "Auto-run" followed
+                  by an approval request looks like the switch is broken. */}
+                {conn.provider !== 'wp-sites' && (conn.alwaysAsk?.length ?? 0) > 0 && (
+                  <p
+                    className="mt-1 pl-3.5 text-[10px] text-white/30"
+                    title={(conn.alwaysAsk ?? []).join(', ')}
+                  >
+                    {`${conn.alwaysAsk!.length} ${conn.alwaysAsk!.length === 1 ? 'tool always asks' : 'tools always ask'} first, even on Auto-run (hover for the list).`}
+                  </p>
+                )}
               </div>
               <div className="flex shrink-0 items-center gap-2">
                 {/* A TIER-1 built-in (Kie, AgentCore, HeyGen) keeps its key on

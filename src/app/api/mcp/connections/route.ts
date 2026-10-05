@@ -94,6 +94,10 @@ export async function GET(request: Request) {
       // Phase 34: the Tools panel renders a provider-specific sub-panel
       // (WordPress Sites) under the connection row.
       provider: builtin?.slug ?? stdioSpec?.key ?? null,
+      // Phase 49: tools that still ask for approval when the pill says
+      // Auto-run. Sent so the panel can SAY so — a switch labelled "Auto-run"
+      // that quietly is not, for some tools, reads as a bug.
+      alwaysAsk: builtin?.alwaysAsk ?? [],
     };
   });
 

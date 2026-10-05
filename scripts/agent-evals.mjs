@@ -518,6 +518,22 @@ expect('src/app/api/missions/route.ts', 'liveFraction', 'the missions API must e
 expect('src/features/agent/MissionsPanel.tsx', 'liveFraction', 'the missions panel meter must include the running step live fraction, not only whole-step counts');
 expect('src/libs/agent/missionTools.ts', 'SEPARATE THE PHASES', 'start_mission must steer the model to phase-separated steps that read saved output instead of re-doing it');
 
+// ── Phase 49 — Loops plugin. Every line below is either a wasted call (LMX) or
+// an email in a real inbox that cannot be recalled. ───────────────────────────
+expect('src/libs/plugins/index.ts', '[loopsProvider.slug]: loopsProvider', 'the Loops provider must stay registered or every Loops connection reports "provider missing"');
+expect('src/libs/plugins/loops.ts', 'export function markdownToLmx', 'Loops bodies are LMX, not HTML/Markdown — the converter is what stops the agent failing its first attempt every time');
+expect('src/libs/plugins/loops.ts', 'nothing was saved', 'a bad body must be rejected BEFORE a draft is created, or empty drafts pile up in the client\'s Loops');
+expect('src/libs/plugins/loops.ts', 'Do NOT call create_campaign again', 'a failed content save must say the draft exists, or the agent creates a duplicate campaign');
+expect('src/libs/plugins/loops.ts', 'Previews can only go to the addresses configured on this connection', 'previews go to the connection\'s recipients only — never to an address the model chose');
+expect('src/libs/plugins/loops.ts', 'STILL A DRAFT', 'scheduling must report the real status — never "sent" for a campaign Loops still holds as a draft');
+expect('src/libs/plugins/loops.ts', 'confirmAllContacts', 'a campaign with no list/segment/filter goes to EVERY contact — that needs an explicit confirmation');
+expect('src/libs/plugins/loops.ts', 'confirmResubscribe', 'an unsubscribed contact must not be opted back in by a routine update');
+expect('src/libs/plugins/loops.ts', 'the API key must NOT go', 'the presigned upload URL is third-party storage — the Loops key must never be sent to it');
+expect('src/libs/plugins/loops.ts', "'set_campaign_schedule',", 'scheduling a campaign must stay in alwaysAsk');
+expect('src/libs/plugins/alwaysAsk.ts', "policy === 'auto' && alwaysAsk?.includes(toolName) ? 'approval' : policy", 'alwaysAsk may only TIGHTEN Auto to Ask — it must never loosen Ask or Deny');
+expect('src/libs/mcp/registry.ts', 'applyAlwaysAsk(policyMap[tool.name]', 'the registry must apply a provider\'s alwaysAsk list, or "Auto-run" sends email with nobody looking');
+forbid('src/libs/plugins/loops.ts', "name: 'delete_contact'", 'contact deletion stays a human action in Loops — unsubscribe is the agent\'s tool');
+
 // ── Report ──────────────────────────────────────────────────────────────────
 if (failures.length > 0) {
   console.error(`\n✗ agent-evals: ${failures.length} of ${checks} tripwires FAILED\n`);

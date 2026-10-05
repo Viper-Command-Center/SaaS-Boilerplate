@@ -19,6 +19,7 @@ import { loadReferenceLibrary } from '@/libs/mcp/references';
 import { getStdioServer, wpSiteLabelOf } from '@/libs/mcp/stdioCatalog';
 import { acquireStdioClient } from '@/libs/mcp/stdioClient';
 import { getBuiltinProvider } from '@/libs/plugins';
+import { applyAlwaysAsk } from '@/libs/plugins/alwaysAsk';
 import { archiveGeneratedAssets, saveFile } from '@/libs/storage/files';
 import { storageConfigured } from '@/libs/storage/r2';
 import { captureIssue } from '@/libs/support/issues';
@@ -654,7 +655,12 @@ export async function buildTenantToolset(tenantId: string): Promise<TenantToolse
               // fallback. The wildcard exists because per-tool config is unusable
               // at scale — Zernio alone exposes 51 tools, and nobody is setting 51
               // switches to say "I trust this vendor".
-              policy: policyMap[tool.name] ?? policyMap['*'] ?? 'approval',
+              //
+              // `alwaysAsk` (Phase 49) only ever tightens: a provider can mark
+              // the tools that reach real people, and those stay behind an
+              // approval when the connection-wide switch is Auto. Ask stays Ask
+              // and Deny stays Deny.
+              policy: applyAlwaysAsk(policyMap[tool.name] ?? policyMap['*'] ?? 'approval', provider.alwaysAsk, tool.name),
               ...(provider.policyFor
                 ? {
                     policyFor: async (args: Record<string, unknown>) =>

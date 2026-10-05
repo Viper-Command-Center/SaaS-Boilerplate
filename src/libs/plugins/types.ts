@@ -138,6 +138,23 @@ export type BuiltinProvider = {
    * to fall back to the connection's tool policy.
    */
   policyFor?: (tool: string, args: Record<string, unknown>, ctx: { tenantId: string }) => Promise<ToolPolicy | undefined>;
+  /**
+   * 🔴 PHASE 49 — tools that stop for a human even when the connection is set
+   * to Auto.
+   *
+   * The Tools panel has ONE approval switch per connection (Auto / Ask / Deny).
+   * That is the right amount of UI, but it forces a bad choice on a provider
+   * that mixes harmless reads with irreversible sends: leave it on Ask and the
+   * agent queues an approval to LIST CAMPAIGNS, or set it to Auto and a mass
+   * email goes out with nobody looking. Loops is the provider that forced this
+   * — reading results should be frictionless, scheduling a campaign should not.
+   *
+   * Listing a tool here only ever TIGHTENS: Auto becomes Ask for that tool.
+   * Ask stays Ask and Deny stays Deny, so it can never loosen what a workspace
+   * chose. Use it for tools that reach real people or cannot be undone; do not
+   * use it to paper over a tool that should not exist.
+   */
+  alwaysAsk?: string[];
   tools: BuiltinTool[];
   /**
    * Execute one tool.

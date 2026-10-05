@@ -15,6 +15,7 @@ import { googleAdsProvider } from '@/libs/plugins/googleAds';
 import { googleAnalyticsProvider } from '@/libs/plugins/googleAnalytics';
 import { heygenProvider } from '@/libs/plugins/heygen';
 import { kieProvider } from '@/libs/plugins/kie';
+import { loopsProvider } from '@/libs/plugins/loops';
 import { postgresProvider } from '@/libs/plugins/postgres';
 import { postmarkProvider } from '@/libs/plugins/postmark';
 import { smartermailProvider } from '@/libs/plugins/smartermail';
@@ -36,6 +37,7 @@ export const BUILTIN_PROVIDERS: Record<string, BuiltinProvider> = {
   [whmcsProvider.slug]: whmcsProvider,
   [smartermailProvider.slug]: smartermailProvider,
   [postmarkProvider.slug]: postmarkProvider,
+  [loopsProvider.slug]: loopsProvider,
   [postgresProvider.slug]: postgresProvider,
   [githubProvider.slug]: githubProvider,
   [googleAdsProvider.slug]: googleAdsProvider,
@@ -327,6 +329,25 @@ export const CATALOG_PRESETS = [
       transport: 'builtin' as const,
       provider: 'postmark',
       authHint: 'The Postmark SERVER API Token for the client\'s server (Postmark → Servers → pick the server → API Tokens tab). NOT the Account token and NOT the SMTP password. You will also be asked for a default From address, which must already be a CONFIRMED Sender Signature on that account — an unconfirmed From is the single most common Postmark failure (error 400/401). ⚠️ Postmark has NO scheduled-send API: every send goes immediately. Scheduling is done by Artivio\'s scheduled tasks (startAt + once), not by Postmark. Bulk/marketing mail also needs a BROADCAST message stream — the default outbound stream is transactional-only and rejects it.',
+    },
+  },
+  {
+    key: 'loops',
+    label: 'Loops (campaigns, contacts + lifecycle email)',
+    entry: {
+      slug: 'loops',
+      name: 'Loops',
+      description: 'Email marketing in the client\'s own Loops account — write and preview campaigns, target audiences, manage contacts and events, send transactional mail, and report on results.',
+      category: 'marketing',
+      // Built-in, NOT Loops' hosted MCP (https://mcp.loops.so). That server
+      // authenticates with OAuth to a person's Loops login, which Artivio's MCP
+      // client cannot do (static headers only) — an API key never satisfies it.
+      // The adapter also converts Markdown to Loops' LMX body format, which is
+      // the thing an agent otherwise gets wrong on every first attempt. See the
+      // header of src/libs/plugins/loops.ts.
+      transport: 'builtin' as const,
+      provider: 'loops',
+      authHint: 'A Loops API key for the client\'s team (Loops → Settings → API → Generate key). Each workspace pastes its OWN key in the Tools panel — it is sealed in the vault and never shown again. You will also be asked for PREVIEW RECIPIENTS: the address(es) test emails may be sent to (comma-separated). Previews go only there, never to an address the agent picks. ⚠️ Campaigns the agent creates are DRAFTS; per Loops\' docs a person publishes a campaign in Loops. Scheduling, events, transactional sends and contact changes always stop for approval, even with the connection set to Auto — so Auto is the comfortable setting here: reads and drafting flow, anything that reaches a real inbox still asks. Campaign authoring needs Loops\' Content API on the team; run loops_status after connecting to confirm.',
     },
   },
   {
