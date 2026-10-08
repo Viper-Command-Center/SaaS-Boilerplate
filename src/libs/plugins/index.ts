@@ -8,6 +8,7 @@ import type { BuiltinProvider } from '@/libs/plugins/types';
 import { agentcoreBrowserProvider } from '@/libs/plugins/agentcoreBrowser';
 import { cloudflareAnalyticsProvider } from '@/libs/plugins/cloudflareAnalytics';
 import { cloudflareDnsProvider } from '@/libs/plugins/cloudflareDns';
+import { creatomateProvider } from '@/libs/plugins/creatomate';
 import { dataforseoProvider } from '@/libs/plugins/dataforseo';
 import { elementorProvider } from '@/libs/plugins/elementor';
 import { githubProvider } from '@/libs/plugins/github';
@@ -29,6 +30,7 @@ export const BUILTIN_PROVIDERS: Record<string, BuiltinProvider> = {
   [wordpressProvider.slug]: wordpressProvider,
   [agentcoreBrowserProvider.slug]: agentcoreBrowserProvider,
   [heygenProvider.slug]: heygenProvider,
+  [creatomateProvider.slug]: creatomateProvider,
   [cloudflareAnalyticsProvider.slug]: cloudflareAnalyticsProvider,
   [cloudflareDnsProvider.slug]: cloudflareDnsProvider,
   [googleAnalyticsProvider.slug]: googleAnalyticsProvider,
@@ -226,6 +228,38 @@ export const CATALOG_PRESETS = [
       // stdio server buys nothing and costs a child process. See the header of
       // src/libs/plugins/elementor.ts.
       authHint: 'username:application password — create one in WP Admin → Users → Profile → Application Passwords (use an Editor account). ⚠️ The site must ALSO have the artivio-elementor-agent plugin installed and active — it is in wordpress-plugins/artivio-elementor-agent/ in this repo. Without it every tool returns a 404, because core WordPress REST cannot read Elementor layout data. You will be asked for the site URL when enabling.',
+    },
+  },
+  {
+    key: 'creatomate',
+    label: 'Creatomate (template video + images)',
+    entry: {
+      slug: 'creatomate',
+      name: 'Creatomate',
+      description: 'Render finished vertical video and images from templates — hook text, captions and end cards drawn in real fonts (no AI-misspelled words), with clips and images supplied by HeyGen, Kie.ai or the file library.',
+      category: 'marketing',
+      // Built-in, NOT Creatomate's MCP (OAuth — Artivio's MCP client sends static
+      // headers only). REST with a project API key. See src/libs/plugins/creatomate.ts.
+      transport: 'builtin' as const,
+      provider: 'creatomate',
+      authHint: 'A Creatomate PROJECT API key (Creatomate → Project Settings → API). Paste the raw key; a leading "Bearer " is stripped. Leave it blank to use the platform CREATOMATE_API_KEY from Railway. Renders cost Creatomate credits on the account that owns the key — nothing is metered per call, so set a price rule here if this is ever resold. Build the templates in the Creatomate editor and NAME every element you want the agent to change (Hook, Caption, Clip…): the names are what the agent edits.',
+    },
+  },
+  {
+    key: 'mentio',
+    label: 'Mentio (social listening: Reddit, X, TikTok, app stores…)',
+    entry: {
+      slug: 'mentio',
+      name: 'Mentio',
+      description: 'Find people asking for recommendations or complaining about competitors, across Reddit, X, TikTok, Instagram, YouTube and more. Read mentions with relevance, sentiment and intent scores; the agent drafts replies, a human posts them.',
+      category: 'marketing',
+      // Hosted MCP that DOES accept a static key: `Authorization: Bearer mk_live_…`
+      // (verified from mentio.dev/llms.txt and the server card, Oct 2026) — so,
+      // unlike HeyGen/Creatomate/Loops, no adapter is needed.
+      transport: 'http' as const,
+      url: 'https://mcp.mentio.dev/mcp',
+      authHeader: 'Authorization',
+      authHint: 'Bearer mk_live_… — create the key at app.mentio.dev/api-keys. Keep the "Bearer " prefix. Set the connection to Auto-run only after reading the tool list: reads (search_mentions, get_mention, list_keywords, get_usage…) are safe, but add_keyword / update_keyword start $5/month charges and update_*/delete_* change your Mentio setup — leave writes on Ask first. The agent drafts replies; a person posts them.',
     },
   },
   {

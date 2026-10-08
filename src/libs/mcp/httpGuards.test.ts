@@ -39,6 +39,14 @@ describe('Zernio guard (Phase 38 — BudgetSmart daily failure emails)', () => {
     expect(httpGuardFor({ id: '1', name: 'social', url: 'https://mcp.zernio.com/mcp' })?.guidanceKey).toBe('zernio');
     expect(httpGuardFor({ id: '1', name: 'github', url: 'https://api.githubcopilot.com/mcp' })).toBeNull();
   });
+
+  it('gives Mentio listen-only guidance and passes its calls through untouched', async () => {
+    const g = httpGuardFor({ id: '2', name: 'listening', url: 'https://mcp.mentio.dev/mcp' });
+
+    expect(g?.guidanceKey).toBe('mentio');
+    expect(g?.guidance).toMatch(/never posts/);
+    await expect(g!.guard('search_mentions', { limit: 5 }, async () => '')).resolves.toEqual({ args: { limit: 5 } });
+  });
 });
 
 describe('wp-site bound stdio targets (Phase 44)', async () => {

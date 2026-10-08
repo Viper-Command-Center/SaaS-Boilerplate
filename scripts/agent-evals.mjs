@@ -534,6 +534,14 @@ expect('src/libs/plugins/alwaysAsk.ts', "policy === 'auto' && alwaysAsk?.include
 expect('src/libs/mcp/registry.ts', 'applyAlwaysAsk(policyMap[tool.name]', 'the registry must apply a provider\'s alwaysAsk list, or "Auto-run" sends email with nobody looking');
 forbid('src/libs/plugins/loops.ts', "name: 'delete_contact'", 'contact deletion stays a human action in Loops — unsubscribe is the agent\'s tool');
 
+// ── Social pipeline (Creatomate / Mentio / batch preflight) ─────────────────
+expect('src/libs/plugins/index.ts', '[creatomateProvider.slug]: creatomateProvider', 'the Creatomate provider must stay registered or every Creatomate connection reports "provider missing"');
+expect('src/libs/plugins/creatomate.ts', 'checkModifications', 'render must reject modification keys that match no template element BEFORE posting — Creatomate silently ignores them and renders the template default');
+expect('src/libs/mcp/httpGuards.ts', 'MENTIO_GUIDANCE', 'Mentio guidance (it listens, it never posts; replies are drafted for a human) must stay attached to the Mentio connection');
+expect('src/libs/agent/socialBatch.ts', 'requires media', 'Zernio accepts a media-less Instagram/TikTok/YouTube/Pinterest post and fails it at publish time — the batch preflight must refuse it');
+expect('src/libs/agent/socialBatch.ts', 'DIFFERENT workspace', 'a media URL from another workspace\'s library must be refused, not scheduled');
+expect('src/libs/agent/platformTools.ts', 'buildSocialBatchTools(tenantId)', 'check_social_batch must stay merged into the platform tools');
+
 // ── Report ──────────────────────────────────────────────────────────────────
 if (failures.length > 0) {
   console.error(`\n✗ agent-evals: ${failures.length} of ${checks} tripwires FAILED\n`);

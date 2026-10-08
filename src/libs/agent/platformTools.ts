@@ -10,7 +10,7 @@ import { and, asc, desc, eq } from 'drizzle-orm';
 import JSZip from 'jszip';
 import sharp from 'sharp';
 import { buildBookTools } from '@/libs/agent/bookTools';
-import { buildMigrationTools } from '@/libs/migration/migrationTools';
+import { buildSocialBatchTools } from '@/libs/agent/socialBatch';
 import { assertPublicUrl, buildWebTools } from '@/libs/agent/webTools';
 import { db } from '@/libs/DB';
 import { extractOfficeImages, MAX_IMAGES } from '@/libs/docs/officeImages';
@@ -19,6 +19,7 @@ import { renderDocument } from '@/libs/docs/pdf';
 import { extractPdfImages, MAX_PDF_IMAGES } from '@/libs/docs/pdfImages';
 import { extractPdfText, isPdf } from '@/libs/docs/pdfText';
 import { renderDeck } from '@/libs/docs/pptx';
+import { buildMigrationTools } from '@/libs/migration/migrationTools';
 import { getFile, listFiles, listFolders, moveFiles, removeFile, saveFile, saveRemoteFile, setFileText } from '@/libs/storage/files';
 import { getObject } from '@/libs/storage/r2';
 import { captureIssue } from '@/libs/support/issues';
@@ -1534,6 +1535,13 @@ export function buildPlatformTools(tenantId: string): {
   const web = buildWebTools();
   anthropicTools.push(...web.anthropicTools);
   for (const [name, executor] of web.executors) {
+    executors.set(name, executor);
+  }
+
+  // ── Social batch preflight (read-only; checks a week of posts before scheduling) ─
+  const socialBatch = buildSocialBatchTools(tenantId);
+  anthropicTools.push(...socialBatch.anthropicTools);
+  for (const [name, executor] of socialBatch.executors) {
     executors.set(name, executor);
   }
 
